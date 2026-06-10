@@ -1,0 +1,17 @@
+export { auditSnapshot, defaultPolicy } from "./audit.js";
+export { CONFIG_FILE_NAME, loadConfig, mergePolicy, resolveConfiguredRules, } from "./config.js";
+export { applyPatchPlan } from "./connector.js";
+export { createHubspotConnector } from "./connectors/hubspot.js";
+export { DEFAULT_LOOPBACK_PORT, DEFAULT_OAUTH_SCOPES, exchangeHubspotCode, refreshHubspotToken, runHubspotLoopbackLogin, validateHubspotToken, } from "./connectors/hubspotAuth.js";
+export { createSalesforceConnector, } from "./connectors/salesforce.js";
+export { pollSalesforceDeviceLogin, refreshSalesforceToken, startSalesforceDeviceLogin, validateSalesforceToken, } from "./connectors/salesforceAuth.js";
+export { createStripeConnector } from "./connectors/stripe.js";
+export { credentialsDir, credentialsPath, deleteCredential, getCredential, resolveHubspotAccessToken, resolveHubspotConnection, storeCredential, } from "./credentials.js";
+export { generateDemoSnapshot } from "./demo.js";
+export { diffFindings, diffSnapshots, diffToMarkdown, } from "./diff.js";
+export { mergeSnapshots, } from "./merge.js";
+export { createFilePlanStore } from "./planStore.js";
+export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
+export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, normalizeFieldMappings, readMappedValue, } from "./mappings.js";
+export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, requiresHumanInput, staleDealRule, } from "./rules.js";
+export { sampleSnapshot } from "./sampleData.js";

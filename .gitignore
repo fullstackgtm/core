@@ -1,4 +1,6 @@
+# dist/ is committed here deliberately: this mirror is a published artifact,
+# and shipping the build lets `npm install github:fullstackgtm/core` work
+# without a prepare step (npm's git-dep prepare is unreliable with devDeps).
 node_modules/
-dist/
 *.tgz
 .DS_Store
