@@ -13,8 +13,11 @@ Licensed under [Apache-2.0](./LICENSE). The boundary is deliberate and stable: t
 ```bash
 npm install fullstackgtm                    # library + CLI in a project
 npx fullstackgtm audit --demo               # or zero-install via npx
-npm install -g github:fullstackgtm/core     # or straight from the repo
+npm install github:fullstackgtm/core        # or straight from this repo (project-local)
+npx github:fullstackgtm/core audit --demo   # zero-install from the repo
 ```
+
+(Global `npm install -g` from a git URL is unreliable on npm 11 — it symlinks into npm's temp cache. Use the registry for global installs, or the project-local/npx forms above.)
 
 Requires Node 20+. The core has zero runtime dependencies; only the MCP server entrypoint uses the optional peers `@modelcontextprotocol/sdk` and `zod`.
 
