@@ -1,0 +1,25 @@
+# fullstackgtm
+
+> Plan/apply for your GTM stack: canonical CRM/GTM data model, deterministic
+> hygiene audits, reviewable dry-run patch plans, and approval-gated
+> write-back to HubSpot, Salesforce, and Stripe (read-only). Think
+> `terraform plan` for your CRM. Apache-2.0.
+
+CLI quick check: `fullstackgtm doctor --json`. Zero-credential demo:
+`fullstackgtm audit --demo --json`. Audits are read-only; `apply` writes only
+explicitly approved operation ids. Exit codes: 0 success, 1 error, 2 findings
+at/above `--fail-on`.
+
+## Docs
+
+- [README](https://github.com/fullstackgtm/core/blob/main/README.md): install, five-minute loop, auth ladder, MCP setup, programmatic use
+- [INSTALL_FOR_AGENTS](https://github.com/fullstackgtm/core/blob/main/INSTALL_FOR_AGENTS.md): deterministic install-and-verify steps with expected outputs
+- [API reference](https://github.com/fullstackgtm/core/blob/main/docs/api.md): semver-covered surfaces — canonical model, rule interface, plan/apply contract, connector contract, config, CLI, MCP tools
+- [CHANGELOG](https://github.com/fullstackgtm/core/blob/main/CHANGELOG.md): release history
+
+## Key invariants
+
+- Reads are safe by default; nothing is written without explicit `--approve`
+- `requires_human_*` placeholder values are refused without a `--value` override
+- Finding/operation ids are stable hashes of rule + record (diffable across runs)
+- Secrets are never accepted as argv flags; stdin or env only

@@ -1,0 +1,77 @@
+{
+  "name": "fullstackgtm",
+  "version": "1.2.1",
+  "description": "Open-source agentic GTM ops framework: canonical GTM data model, pluggable deterministic audits, reviewable dry-run patch plans, approval-gated write-back with conflict detection, and cross-system entity resolution. HubSpot, Salesforce, and Stripe connectors included.",
+  "license": "Apache-2.0",
+  "author": "Full Stack GTM",
+  "homepage": "https://github.com/fullstackgtm/core#readme",
+  "bugs": {
+    "url": "https://github.com/fullstackgtm/core/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "fullstackgtm": "./dist/bin.js",
+    "fullstackgtm-mcp": "./dist/mcp-bin.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "INSTALL_FOR_AGENTS.md",
+    "llms.txt",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0",
+    "zod": "^4.4.2"
+  },
+  "keywords": [
+    "gtm",
+    "revops",
+    "crm",
+    "salesforce",
+    "hubspot",
+    "audit",
+    "agent",
+    "mcp",
+    "patch-plan"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fullstackgtm/core.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.2"
+  },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  }
+}
