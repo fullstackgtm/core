@@ -185,6 +185,8 @@ async function connectorFor(provider, args) {
         return createHubspotConnector({
             getAccessToken: () => connection.accessToken,
             fieldMappings: connection.fieldMappings ?? undefined,
+            // Point at a mock/proxy HubSpot (tests, evals, request-recording).
+            apiBaseUrl: process.env.HUBSPOT_API_BASE_URL,
         });
     }
     if (provider === "salesforce") {

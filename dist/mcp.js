@@ -63,7 +63,10 @@ async function connectorFor(provider) {
         if (!token) {
             throw new Error("No HubSpot credentials. Run `fullstackgtm login hubspot` or set HUBSPOT_ACCESS_TOKEN in the MCP server environment.");
         }
-        return createHubspotConnector({ getAccessToken: () => token });
+        return createHubspotConnector({
+            getAccessToken: () => token,
+            apiBaseUrl: process.env.HUBSPOT_API_BASE_URL,
+        });
     }
     if (provider === "salesforce") {
         const connection = process.env.SALESFORCE_ACCESS_TOKEN && process.env.SALESFORCE_INSTANCE_URL

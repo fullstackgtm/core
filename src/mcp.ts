@@ -69,7 +69,10 @@ async function connectorFor(provider: string): Promise<GtmConnector> {
         "No HubSpot credentials. Run `fullstackgtm login hubspot` or set HUBSPOT_ACCESS_TOKEN in the MCP server environment.",
       );
     }
-    return createHubspotConnector({ getAccessToken: () => token });
+    return createHubspotConnector({
+      getAccessToken: () => token,
+      apiBaseUrl: process.env.HUBSPOT_API_BASE_URL,
+    });
   }
   if (provider === "salesforce") {
     const connection =

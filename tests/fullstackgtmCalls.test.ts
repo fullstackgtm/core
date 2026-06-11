@@ -55,6 +55,16 @@ test("normalizeTranscript converts Granola utterance JSON to [Me]/[Them] lines",
   assert.equal(normalizeTranscript(SPEAKER_TRANSCRIPT), SPEAKER_TRANSCRIPT);
 });
 
+test("normalizeTranscript handles Granola's colon-less '[Speaker] text' export format", () => {
+  const granolaText = "# Abhisek / Ryan\nDate: 2026-04-03\n\n[Them] We're struggling with manual reporting.\n[Me] I'll send over the proposal next week.";
+  const parsed = parseCall(granolaText);
+  const bracketSegments = parsed.segments.filter((s) => s.speaker === "Them" || s.speaker === "Me");
+  assert.equal(bracketSegments.length, 2);
+  const types = new Set(parsed.insights.map((i) => i.type));
+  assert.ok(types.has("pain_point"));
+  assert.ok(types.has("next_step"));
+});
+
 test("parseCall is deterministic and yields insights plus GtmEvidence", () => {
   const first = parseCall(SPEAKER_TRANSCRIPT, { title: "Disco", sourceSystem: "fathom" });
   const second = parseCall(SPEAKER_TRANSCRIPT, { title: "Disco", sourceSystem: "fathom" });

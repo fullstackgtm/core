@@ -5,6 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.13.1] — 2026-06-11
+
+### Fixed
+
+- **Granola's formatted text export parses correctly**: it writes
+  `[Speaker] text` with no colon, which the transcript parser missed
+  entirely (found running the published 0.13.0 against a real export).
+  `normalizeTranscript` now rewrites those lines to the canonical
+  `[Speaker]: text` form.
+
 ## [0.13.0] — 2026-06-11
 
 Calls become evidence: the deterministic skeleton of every call workflow —

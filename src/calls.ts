@@ -299,7 +299,17 @@ export function normalizeTranscript(raw: string): string {
       // not JSON — fall through and treat as plain text
     }
   }
-  return raw;
+  // Granola's formatted text export writes "[Speaker] text" with no colon;
+  // rewrite those lines to the canonical "[Speaker]: text" form.
+  return raw
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = /^(\[[^\]]{1,60}\])\s+(\S.*)$/.exec(line);
+      return match && !line.slice(match[1].length).trimStart().startsWith(":")
+        ? `${match[1]}: ${match[2]}`
+        : line;
+    })
+    .join("\n");
 }
 
 /**
