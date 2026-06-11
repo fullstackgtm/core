@@ -109,6 +109,23 @@ npx fullstackgtm report --provider hubspot --client "Acme" --out acme-health.htm
 
 `report` renders the same audit as a deliverable — severity counts up front, a prose summary, per-rule detail with example records, and next steps — as markdown or self-contained HTML (printable, emailable, no external assets).
 
+## The market map: the category, observed
+
+Your CRM records what happened in your own deals; nothing records the shape of the category you sell into. The **market map** does: vendors and a claim taxonomy live in a reviewable `market.config.json`, vendor pages are captured into a content-addressed cache, every vendor × claim cell gets a messaging-intensity reading (LOUD / QUIET / ABSENT — with UNOBSERVABLE for failed captures, never a fake absence), and deterministic front states fall out per claim: open, contested, owned, saturated.
+
+```bash
+fullstackgtm market init --category creative-intelligence   # seed vendors + claims, edit by hand
+fullstackgtm market capture                                 # fetch pages → content-addressed captures
+fullstackgtm market classify                                # LLM readings (BYO key), every quote verified
+fullstackgtm market fronts --diff run-1                     # what changed since last run
+fullstackgtm market report --format html --out map.html     # the client-ready field report
+fullstackgtm market refresh                                 # all of the above, weekly, one command
+```
+
+The discipline matches the rest of the tool. Intensity readings are *proposals* — from the LLM (`classify`, same bring-your-own-key seam as `call parse`, provenance-marked) or from any agent/human (`market worksheet` → `market observe`) — and **every quoted evidence span is verified character-for-character against the stored capture it cites** before an observation is accepted. Quotes that aren't on the page bounce. Everything downstream of the store is deterministic: same observations, same map.
+
+`market axes` is for earning a strategic 2×2 instead of asserting one: PCA over the intensity matrix (PC1 = the category's own primary axis, PC2 = the most differentiating direction orthogonal to it), triangulation of your configured axes against the data, and an orthogonality screen that flags two axes that are secretly one. Axes are claim-scoring rubrics in the config; the report renders the primary pair as the strategic map. Captures and observations are profile-scoped (`~/.fullstackgtm/market/<category>`), so one client's category intel never bleeds into another's.
+
 ### Working across organizations
 
 Consultants and fractional operators hold credentials for several CRMs at once. A profile scopes stored logins *and* stored plans to one organization:

@@ -31,6 +31,22 @@ coaching scorecards; `call link` suggests the deal with confidence + reason;
 `call plan` proposes governed next-step writes through the standard
 approve/apply lifecycle.
 
+## Key invariants (market map)
+
+`fullstackgtm market` models the competitive category: vendors + claim
+taxonomy in `market.config.json`; `capture` stores vendor pages
+content-addressed; `classify` (BYO key, same ladder as calls) or
+`worksheet` + `observe` (agent/human channel) propose LOUD/QUIET/ABSENT
+intensity readings per vendor × claim. Every quoted evidence span is
+mechanically verified verbatim against the stored capture it cites;
+unverifiable quotes are rejected (`--unverified` only when captures live
+elsewhere). Failed captures read UNOBSERVABLE, never ABSENT. `fronts --diff`
+= deterministic front states + drift between runs; `axes` = PCA axis
+discovery + orthogonality screen; `report` = self-contained HTML field
+report; `refresh` = capture → classify → drift → report in one command.
+Storage is profile-scoped under `<home>/market/<category>`. MCP:
+`fullstackgtm_market_worksheet`, `fullstackgtm_market_observe`.
+
 ## Key invariants
 
 - Reads are safe by default; nothing is written without explicit `--approve`
