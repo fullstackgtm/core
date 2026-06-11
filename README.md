@@ -1,5 +1,7 @@
 # fullstackgtm
 
+[![CI](https://github.com/fullstackgtm/core/actions/workflows/ci.yml/badge.svg)](https://github.com/fullstackgtm/core/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/fullstackgtm)](https://www.npmjs.com/package/fullstackgtm) [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
+
 **Plan/apply for your GTM stack.** An open-source framework for managing disparate go-to-market data spread across third-party systems: a canonical CRM/GTM data model, deterministic hygiene audits, reviewable dry-run patch plans, and approval-gated write-back to providers.
 
 Think `terraform plan` for your CRM: agents and scripts may *read* everything, but every proposed change becomes a typed patch operation — object, field, before, after, reason, risk — that a human approves before any provider write happens.
