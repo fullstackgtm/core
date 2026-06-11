@@ -19,8 +19,8 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "fullstackgtm": "./dist/bin.js",
-    "fullstackgtm-mcp": "./dist/mcp-bin.js"
+    "fullstackgtm": "dist/bin.js",
+    "fullstackgtm-mcp": "dist/mcp-bin.js"
   },
   "files": [
     "dist",
