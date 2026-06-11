@@ -91,6 +91,10 @@ export function createFsgtmExecutor(opts: {
           timeout: 120_000,
           maxBuffer: 16 * 1024 * 1024,
           env: {
+            // Next.js's global types make NODE_ENV a required ProcessEnv
+            // member repo-wide; the eval sandbox is hermetic, so set it
+            // explicitly rather than spreading the host environment in.
+            NODE_ENV: "test",
             PATH: process.env.PATH ?? "",
             HOME: opts.home,
             HUBSPOT_ACCESS_TOKEN: "eval-cli-token",
