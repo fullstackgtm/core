@@ -40,7 +40,7 @@ release.
 - `GtmConnector` — `{ provider, fetchSnapshot(), applyOperation?, readField?, fetchChanges? }`.
   - Connectors never silently drop unresolvable records; audits surface them.
   - `fetchChanges(sinceIso)` returns a partial snapshot; change feeds may omit associations.
-- `createHubspotConnector(options)` — read/write/readField/fetchChanges. `applyOperation` implements every `PatchOperationType`: `set_field`, `clear_field`, `link_record`, `create_task`, `archive_record`.
+- `createHubspotConnector(options)` — read/write/readField/fetchChanges. `applyOperation` implements every `PatchOperationType`: `set_field`, `clear_field`, `link_record`, `create_task`, `archive_record`, `merge_records` (HubSpot v3 merge — pairwise, irreversible; survivor must belong to the duplicate group). The Salesforce connector skips `merge_records` honestly (SOAP/Apex-only on that platform).
 - `createSalesforceConnector(options)` — read/write/readField/fetchChanges; probabilities normalized to 0..1; `applyOperation` implements every operation type.
 - `createStripeConnector(options)` — read-only billing by design (`applyOperation` returns `skipped`); email domains are the cross-system merge keys. Implements `fetchChanges` (incremental via `created[gte]`).
 

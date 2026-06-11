@@ -333,13 +333,14 @@ export const duplicateAccountDomainRule = {
                 id: patchOperationId("duplicate-account-domain", anchor.id),
                 objectType: "account",
                 objectId: anchor.id,
-                operation: "create_task",
-                field: "merge_review_task",
-                beforeValue: null,
-                afterValue: `Review ${accounts.length} accounts sharing ${domain} and merge duplicates`,
-                reason: "Duplicate accounts split pipeline, attribution, and ownership.",
-                riskLevel: "medium",
+                operation: "merge_records",
+                field: "merge",
+                beforeValue: accounts.map((account) => account.id),
+                afterValue: "requires_human_survivor_selection",
+                reason: `Duplicate accounts split pipeline, attribution, and ownership. Merge the ${accounts.length} accounts sharing ${domain} into one survivor.`,
+                riskLevel: "high",
                 approvalRequired: true,
+                rollback: "IRREVERSIBLE: provider merges cannot be unmerged. The pre-apply snapshot retains every record's field values; recreate a record manually from it if a merge was wrong.",
             });
         }
         return { findings, operations };
@@ -369,13 +370,14 @@ export const duplicateContactEmailRule = {
                 id: patchOperationId("duplicate-contact-email", anchor.id),
                 objectType: "contact",
                 objectId: anchor.id,
-                operation: "create_task",
-                field: "merge_review_task",
-                beforeValue: null,
-                afterValue: `Review ${contacts.length} contacts sharing ${email} and merge duplicates`,
-                reason: "Duplicate contacts fragment engagement history and double-route outreach.",
-                riskLevel: "low",
+                operation: "merge_records",
+                field: "merge",
+                beforeValue: contacts.map((contact) => contact.id),
+                afterValue: "requires_human_survivor_selection",
+                reason: `Duplicate contacts fragment engagement history and double-route outreach. Merge the ${contacts.length} contacts sharing ${email} into one survivor.`,
+                riskLevel: "high",
                 approvalRequired: true,
+                rollback: "IRREVERSIBLE: provider merges cannot be unmerged. The pre-apply snapshot retains every record's field values; recreate a record manually from it if a merge was wrong.",
             });
         }
         return { findings, operations };
@@ -415,13 +417,14 @@ export const duplicateOpenDealRule = {
                 id: patchOperationId("duplicate-open-deal", anchor.id),
                 objectType: "deal",
                 objectId: anchor.id,
-                operation: "create_task",
-                field: "merge_review_task",
-                beforeValue: null,
-                afterValue: `Review ${deals.length} duplicate open deals named "${anchor.name}" — keep one, archive ${deals.length - 1}`,
-                reason: "Duplicate open deals inflate pipeline and forecast the same revenue more than once.",
-                riskLevel: "medium",
+                operation: "merge_records",
+                field: "merge",
+                beforeValue: deals.map((deal) => deal.id),
+                afterValue: "requires_human_survivor_selection",
+                reason: `Duplicate open deals inflate pipeline and forecast the same revenue more than once. Merge the ${deals.length} deals named "${anchor.name}" into one survivor.`,
+                riskLevel: "high",
                 approvalRequired: true,
+                rollback: "IRREVERSIBLE: provider merges cannot be unmerged. The pre-apply snapshot retains every record's field values; recreate a record manually from it if a merge was wrong.",
             });
         }
         return { findings, operations };

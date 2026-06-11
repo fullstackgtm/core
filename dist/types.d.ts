@@ -10,7 +10,7 @@ export type RiskLevel = "low" | "medium" | "high";
 export type ApprovalStatus = "draft" | "needs_approval" | "approved" | "rejected" | "applied";
 export type GtmObjectType = "account" | "contact" | "deal" | "user" | "activity";
 export type GtmEvidenceSourceSystem = "salesforce" | "hubspot" | "gong" | "chorus" | "fathom" | "manual" | "csv" | "mock" | "unknown";
-export type PatchOperationType = "set_field" | "clear_field" | "link_record" | "archive_record" | "create_task";
+export type PatchOperationType = "set_field" | "clear_field" | "link_record" | "archive_record" | "create_task" | "merge_records";
 export type AuditFindingSeverity = "info" | "warning" | "critical";
 /**
  * One claim that a canonical record exists in an external system. A record

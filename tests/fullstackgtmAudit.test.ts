@@ -122,6 +122,10 @@ test("duplicate open deals are flagged once per group, scoped by account", () =>
   assert.match(finding.summary, /d1, d2/);
 
   assert.equal(plan.operations.length, 1);
-  assert.equal(plan.operations[0].operation, "create_task");
+  assert.equal(plan.operations[0].operation, "merge_records");
+  assert.equal(plan.operations[0].afterValue, "requires_human_survivor_selection");
+  assert.ok(Array.isArray(plan.operations[0].beforeValue));
+  assert.equal(plan.operations[0].riskLevel, "high");
   assert.equal(plan.operations[0].approvalRequired, true);
+  assert.match(plan.operations[0].rollback ?? "", /IRREVERSIBLE/);
 });

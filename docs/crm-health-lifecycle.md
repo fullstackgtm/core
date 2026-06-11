@@ -130,6 +130,6 @@ Lessons from auditing our own apply path:
 | Release | Scope |
 | --- | --- |
 | 0.11.1 | Fix our own faucet: resolve-first `create:` + plan-scoped dedup, HubSpot association-aware CAS for `link_record`, domain normalization in `duplicate-account-domain`, `create_task` idempotency token |
-| 0.12 | `merge_records` (HubSpot contacts/companies/deals) + survivor suggestions; rules emit governed merges for dupe groups |
+| 0.12 (shipped) | `merge_records` (HubSpot contacts/companies/deals) + survivor suggestions capped at low confidence; the three duplicate rules emit governed merges instead of review tasks |
 | 0.13 | `resolve` gate (CLI/lib/MCP), provenance capture + attribution in findings, prevention-posture checks |
 | docs | The nightly watch recipe (existing flags, documented as CRM CI) |

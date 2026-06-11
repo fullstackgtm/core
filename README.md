@@ -59,7 +59,7 @@ fullstackgtm plans approve patch_plan_abc123 --values-from suggestions.json   # 
 fullstackgtm apply --plan-id patch_plan_abc123 --provider hubspot
 ```
 
-Widen the bar deliberately: `--min-confidence low` accepts single-signal matches; `--include-creates` accepts `create:<Name>` values — approving one **creates the missing company/account record and links to it** in a single audited operation, so even record creation stays inside the typed, human-approved model. Conflicting or ambiguous evidence always yields *no* suggestion with an explanation, never a guess.
+Widen the bar deliberately: `--min-confidence low` accepts single-signal matches and **merge survivor suggestions** (irreversible merges are capped at low confidence by design, so the default bar never bulk-approves one); `--include-creates` accepts `create:<Name>` values — approving one **creates the missing company/account record and links to it** in a single audited operation, so even record creation stays inside the typed, human-approved model. Conflicting or ambiguous evidence always yields *no* suggestion with an explanation, never a guess.
 
 ```bash
 # 3. Hand the findings to whoever owns the CRM: a client-ready report

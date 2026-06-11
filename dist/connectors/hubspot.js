@@ -440,6 +440,74 @@ export function createHubspotConnector(options) {
             detail: `Archived ${objectPath}/${operation.objectId}.`,
         };
     }
+    /**
+     * Merge a duplicate group into the approved survivor via HubSpot's v3
+     * merge API (supported for contacts, companies, deals, and tickets).
+     * Merges are pairwise and IRREVERSIBLE; the survivor's values win on
+     * conflict and each loser is archived by HubSpot. A loser that is already
+     * gone (404 — e.g. a replayed plan) is treated as already merged.
+     */
+    async function mergeRecords(operation) {
+        const objectPath = OBJECT_PATHS[operation.objectType];
+        if (!objectPath || operation.objectType === "user" || operation.objectType === "activity") {
+            return {
+                operationId: operation.id,
+                status: "skipped",
+                detail: "merge_records is supported for accounts, contacts, and deals.",
+            };
+        }
+        const survivorId = String(operation.afterValue ?? "");
+        const groupIds = Array.isArray(operation.beforeValue)
+            ? operation.beforeValue.map((id) => String(id))
+            : [];
+        if (!survivorId || groupIds.length < 2) {
+            return {
+                operationId: operation.id,
+                status: "skipped",
+                detail: "merge_records needs a survivor id (afterValue) and the duplicate group ids (beforeValue).",
+            };
+        }
+        if (!groupIds.includes(survivorId)) {
+            return {
+                operationId: operation.id,
+                status: "skipped",
+                detail: `Survivor ${survivorId} is not in the duplicate group (${groupIds.join(", ")}); refusing to merge into an unrelated record.`,
+            };
+        }
+        const losers = groupIds.filter((id) => id !== survivorId);
+        const mergedIds = [];
+        const alreadyGoneIds = [];
+        for (const loser of losers) {
+            try {
+                await request(`/crm/v3/objects/${objectPath}/merge`, {
+                    method: "POST",
+                    body: JSON.stringify({ primaryObjectId: survivorId, objectIdToMerge: loser }),
+                });
+                mergedIds.push(loser);
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                if (message.includes(" 404")) {
+                    alreadyGoneIds.push(loser); // replayed plan: loser already merged/archived
+                    continue;
+                }
+                return {
+                    operationId: operation.id,
+                    status: "failed",
+                    detail: `Merged ${mergedIds.length} of ${losers.length} into ${survivorId}, then failed on ${loser}: ${message}`,
+                    providerData: { survivorId, mergedIds, alreadyGoneIds },
+                };
+            }
+        }
+        return {
+            operationId: operation.id,
+            status: mergedIds.length === 0 && alreadyGoneIds.length === losers.length ? "skipped" : "applied",
+            detail: mergedIds.length === 0 && alreadyGoneIds.length === losers.length
+                ? `All ${losers.length} duplicates were already merged into ${survivorId}; nothing to do.`
+                : `Merged ${mergedIds.length} duplicate ${objectPath} into ${survivorId}${alreadyGoneIds.length ? ` (${alreadyGoneIds.length} already gone)` : ""}. Irreversible.`,
+            providerData: { survivorId, mergedIds, alreadyGoneIds },
+        };
+    }
     async function applyOperation(operation) {
         try {
             switch (operation.operation) {
@@ -450,6 +518,8 @@ export function createHubspotConnector(options) {
                     return await linkRecord(operation);
                 case "create_task":
                     return await createTask(operation);
+                case "merge_records":
+                    return await mergeRecords(operation);
                 case "archive_record":
                     return await archiveRecord(operation);
                 default:

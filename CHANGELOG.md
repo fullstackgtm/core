@@ -5,6 +5,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.12.0] — 2026-06-11
+
+Governed merges: the Remediate layer of the
+[CRM-health lifecycle](./docs/crm-health-lifecycle.md). Duplicate detection
+now ends in an approvable merge, not a chore.
+
+### Added
+
+- **`merge_records` operation type**: merges a duplicate group
+  (`beforeValue` = group ids) into an approved survivor (`afterValue`).
+  HubSpot connector implements it via the v3 merge API for companies,
+  contacts, and deals — pairwise, survivor's values win, losers archived by
+  HubSpot, **irreversible** (called out in every operation's rollback text).
+  Refuses survivors outside the group; treats 404 losers as already merged,
+  so replayed plans are safe. Salesforce skips honestly (merge is SOAP/Apex
+  only on that platform).
+- **Survivor suggestions in `suggest`**: deterministic ranking — most
+  complete record, then most recent activity — with the evidence written
+  into the reason. **Capped at low confidence by design**: an irreversible
+  merge can never clear the default bulk-approval bar; accepting one takes
+  `--min-confidence low` or an explicit `--value`.
+
+### Changed
+
+- **The three duplicate rules now emit `merge_records`** (high risk,
+  approval required, irreversibility in the rollback text) instead of
+  `create_task` review chores — detection now connects to remediation
+  inside the governed loop.
+
 ## [0.11.1] — 2026-06-11
 
 Write-path integrity: fixes our own dupe faucets, found auditing the apply

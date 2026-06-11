@@ -338,6 +338,15 @@ export function createSalesforceConnector(options) {
                 }
                 case "create_task":
                     return await createTask(operation);
+                case "merge_records":
+                    // Salesforce merge exists only in the SOAP API and Apex (Lead,
+                    // Contact, Account, Case; max 3 records) — there is no REST merge
+                    // resource. Surface that honestly instead of half-merging.
+                    return {
+                        operationId: operation.id,
+                        status: "skipped",
+                        detail: "Salesforce merge requires the SOAP API or Apex (Lead/Contact/Account/Case only) — this REST connector cannot merge. Merge in the Salesforce UI, or archive the duplicates explicitly.",
+                    };
                 case "archive_record":
                     return await archiveRecord(operation);
                 default:

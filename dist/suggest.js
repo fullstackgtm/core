@@ -22,6 +22,10 @@ export function suggestValues(plan, snapshot) {
             suggestions.push(suggestDealAccount(operation, dealsById, accountsByNorm, accountsById, contactsByName));
             continue;
         }
+        if (placeholder === "requires_human_survivor_selection") {
+            suggestions.push(suggestSurvivor(operation, snapshot, dealsById));
+            continue;
+        }
         if (placeholder === "requires_human_owner_selection" && activeUsers.length === 1) {
             suggestions.push({
                 operationId: operation.id,
@@ -139,6 +143,79 @@ function suggestDealAccount(operation, dealsById, accountsByNorm, accountsById, 
             ? `No account matches "${right}" and "${left}" is not a known contact. Supply --value ${operation.id}=<accountId> or --value ${operation.id}=create:<Company Name>.`
             : `Deal name "${deal.name}" has no "Contact - Company" pattern to derive a company from. Supply --value ${operation.id}=<accountId> or create:<Company Name>.`,
     };
+}
+/**
+ * Survivor selection for merge_records. Ranking is deterministic and
+ * evidence-based: most complete record first (count of populated canonical
+ * fields), most recent activity as the tiebreaker, group order last.
+ * Confidence is capped at "low" by design: merges are irreversible, so a
+ * survivor suggestion must never clear the default bulk-approval bar —
+ * accepting one requires --min-confidence low or an explicit --value.
+ */
+function suggestSurvivor(operation, snapshot, dealsById) {
+    const base = {
+        operationId: operation.id,
+        objectType: operation.objectType,
+        objectId: operation.objectId,
+        objectName: dealsById.get(operation.objectId)?.name,
+        placeholder: "requires_human_survivor_selection",
+    };
+    const groupIds = Array.isArray(operation.beforeValue)
+        ? operation.beforeValue.map((id) => String(id))
+        : [];
+    if (groupIds.length < 2) {
+        return {
+            ...base,
+            suggestedValue: null,
+            confidence: "none",
+            reason: "Operation does not carry a duplicate group (expected ids in beforeValue).",
+        };
+    }
+    const collection = operation.objectType === "account"
+        ? snapshot.accounts
+        : operation.objectType === "contact"
+            ? snapshot.contacts
+            : operation.objectType === "deal"
+                ? snapshot.deals
+                : [];
+    const records = groupIds
+        .map((id) => collection.find((row) => row.id === id))
+        .filter((row) => row !== undefined);
+    if (records.length !== groupIds.length) {
+        return {
+            ...base,
+            suggestedValue: null,
+            confidence: "none",
+            reason: "Not every group member is present in the snapshot; re-run the audit before merging.",
+        };
+    }
+    const ranked = [...records].sort((a, b) => {
+        const completeness = populatedFields(b) - populatedFields(a);
+        if (completeness !== 0)
+            return completeness;
+        return activityMs(b) - activityMs(a);
+    });
+    const winner = ranked[0];
+    const runnerUp = ranked[1];
+    const name = "name" in winner && typeof winner.name === "string" ? winner.name : winner.id;
+    return {
+        ...base,
+        suggestedValue: winner.id,
+        confidence: "low",
+        reason: `"${name}" (${winner.id}) is the most complete record in the group ` +
+            `(${populatedFields(winner)} populated fields vs ${populatedFields(runnerUp)}` +
+            `${activityMs(winner) > activityMs(runnerUp) ? ", and more recent activity" : ""}). ` +
+            `Merging is IRREVERSIBLE — survivor suggestions never exceed low confidence; ` +
+            `approve with --min-confidence low or an explicit --value after review.`,
+    };
+}
+function populatedFields(record) {
+    return Object.values(record).filter((value) => value !== undefined && value !== null && value !== "").length;
+}
+function activityMs(record) {
+    const value = record.lastActivityAt;
+    const parsed = value ? Date.parse(value) : NaN;
+    return Number.isFinite(parsed) ? parsed : 0;
 }
 function normalize(value) {
     return value

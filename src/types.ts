@@ -41,7 +41,11 @@ export type PatchOperationType =
   | "clear_field"
   | "link_record"
   | "archive_record"
-  | "create_task";
+  | "create_task"
+  // Merge a duplicate group into a survivor. beforeValue is the group's
+  // record ids; afterValue is the survivor id (requires_human_survivor_selection
+  // until a human picks). IRREVERSIBLE on every provider that supports it.
+  | "merge_records";
 
 export type AuditFindingSeverity = "info" | "warning" | "critical";
 

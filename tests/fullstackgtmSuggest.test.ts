@@ -372,3 +372,101 @@ test("duplicate-account-domain groups www./protocol variants of the same domain"
   assert.equal(dupes.length, 1);
   assert.match(dupes[0].summary, /3 accounts/);
 });
+
+function mergeOp(id: string, anchorId: string, groupIds: string[], objectType: PatchOperation["objectType"] = "account"): PatchOperation {
+  return {
+    id,
+    objectType,
+    objectId: anchorId,
+    operation: "merge_records",
+    field: "merge",
+    beforeValue: groupIds,
+    afterValue: "requires_human_survivor_selection",
+    reason: "test",
+    riskLevel: "high",
+    approvalRequired: true,
+  };
+}
+
+test("survivor suggestion picks the most complete record and is capped at low confidence", () => {
+  const snap = snapshot({
+    accounts: [
+      { id: "a1", name: "Acme", domain: "acme.com" },
+      { id: "a2", name: "Acme Corp", domain: "acme.com", industry: "Software", ownerId: "u1", lastActivityAt: "2026-06-01T00:00:00.000Z" },
+    ],
+  });
+  const plan: PatchPlan = {
+    id: "p", title: "t", createdAt: "2026-06-11T00:00:00.000Z", status: "needs_approval",
+    dryRun: true, summary: "", findings: [], operations: [mergeOp("opm", "a1", ["a1", "a2"])],
+  };
+  const [s] = suggestValues(plan, snap);
+  assert.equal(s.confidence, "low");
+  assert.equal(s.suggestedValue, "a2");
+  assert.match(s.reason, /most complete record/);
+  assert.match(s.reason, /IRREVERSIBLE/);
+});
+
+test("survivor suggestion refuses when group members are missing from the snapshot", () => {
+  const snap = snapshot({});
+  const plan: PatchPlan = {
+    id: "p", title: "t", createdAt: "2026-06-11T00:00:00.000Z", status: "needs_approval",
+    dryRun: true, summary: "", findings: [], operations: [mergeOp("opm", "ghost1", ["ghost1", "ghost2"])],
+  };
+  const [s] = suggestValues(plan, snap);
+  assert.equal(s.confidence, "none");
+  assert.match(s.reason, /re-run the audit/);
+});
+
+test("hubspot merge_records merges each loser into the survivor and refuses outsiders", async () => {
+  const calls: Array<{ url: string; body?: string }> = [];
+  const connector = createHubspotConnector({
+    getAccessToken: () => "token",
+    fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), body: init?.body as string });
+      return new Response(JSON.stringify({ id: "a2" }), { status: 200 });
+    }) as typeof fetch,
+  });
+  const result = await connector.applyOperation({
+    ...mergeOp("opm", "a1", ["a1", "a2", "a3"]),
+    afterValue: "a2",
+  });
+  assert.equal(result.status, "applied");
+  assert.match(result.detail ?? "", /Merged 2 duplicate companies into a2.*Irreversible/);
+  assert.equal(calls.length, 2);
+  for (const call of calls) assert.match(call.url, /\/crm\/v3\/objects\/companies\/merge$/);
+  assert.deepEqual(JSON.parse(calls[0].body!), { primaryObjectId: "a2", objectIdToMerge: "a1" });
+  assert.deepEqual(JSON.parse(calls[1].body!), { primaryObjectId: "a2", objectIdToMerge: "a3" });
+
+  const outsider = await connector.applyOperation({
+    ...mergeOp("opm2", "a1", ["a1", "a2"]),
+    afterValue: "z9",
+  });
+  assert.equal(outsider.status, "skipped");
+  assert.match(outsider.detail ?? "", /not in the duplicate group/);
+});
+
+test("hubspot merge_records treats 404 losers as already merged (replay-safe)", async () => {
+  const connector = createHubspotConnector({
+    getAccessToken: () => "token",
+    fetchImpl: (async () => new Response("gone", { status: 404 })) as typeof fetch,
+  });
+  const result = await connector.applyOperation({
+    ...mergeOp("opm", "a1", ["a1", "a2"]),
+    afterValue: "a1",
+  });
+  assert.equal(result.status, "skipped");
+  assert.match(result.detail ?? "", /already merged/);
+});
+
+test("salesforce merge_records is honestly unsupported", async () => {
+  const connector = createSalesforceConnector({
+    getConnection: () => ({ accessToken: "t", instanceUrl: "https://x.my.salesforce.com" }),
+    fetchImpl: (async () => new Response(null, { status: 204 })) as typeof fetch,
+  });
+  const result = await connector.applyOperation({
+    ...mergeOp("opm", "001A", ["001A", "001B"]),
+    afterValue: "001A",
+  });
+  assert.equal(result.status, "skipped");
+  assert.match(result.detail ?? "", /SOAP API or Apex/);
+});

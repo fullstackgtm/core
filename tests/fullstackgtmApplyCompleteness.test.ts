@@ -25,6 +25,7 @@ test("every operation a built-in audit emits is applied by the HubSpot connector
   assert.ok(operationKinds.has("set_field"));
   assert.ok(operationKinds.has("link_record"));
   assert.ok(operationKinds.has("create_task"));
+  assert.ok(operationKinds.has("merge_records"));
 
   // Accept every write; record what got called.
   const methods: string[] = [];
@@ -44,8 +45,14 @@ test("every operation a built-in audit emits is applied by the HubSpot connector
   const valueOverrides: Record<string, unknown> = {};
   for (const operation of plan.operations) {
     if (typeof operation.afterValue === "string" && operation.afterValue.startsWith("requires_human_")) {
-      // Owners/accounts need an id; dates need a date — any concrete value works for the stub.
-      valueOverrides[operation.id] = operation.field === "closeDate" ? "2026-12-31" : "user_01";
+      // Owners/accounts need an id; dates need a date; merges need a survivor
+      // FROM the duplicate group — any other concrete value works for the stub.
+      valueOverrides[operation.id] =
+        operation.operation === "merge_records" && Array.isArray(operation.beforeValue)
+          ? String(operation.beforeValue[0])
+          : operation.field === "closeDate"
+            ? "2026-12-31"
+            : "user_01";
     }
   }
 
