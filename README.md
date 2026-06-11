@@ -6,7 +6,7 @@ Think `terraform plan` for your CRM: agents and scripts may *read* everything, b
 
 Licensed under [Apache-2.0](./LICENSE). The boundary is deliberate and stable: the framework, CLI, and MCP server are open source; the hosted Full Stack GTM application (dashboard, sync backend, broker service, team workflows) is a separate, proprietary product built on top of this package. Features never move from open to closed. See [CONTRIBUTING.md](./CONTRIBUTING.md) for how development and mirroring work.
 
-**Status: 1.0 — stable.** The surfaces in [docs/api.md](./docs/api.md) are covered by semver: the canonical model, rule interface, plan/apply contract, connector contract, merge/diff, config, CLI, and MCP tools only break at a major version. Connectors: HubSpot (read/write), Salesforce (read/write), Stripe (read-only billing).
+**Status: beta (0.x).** The surfaces in [docs/api.md](./docs/api.md) — the canonical model, rule interface, plan/apply contract, connector contract, merge/diff, config, CLI, and MCP tools — are settling but may still break in minor releases until 1.0; the path there is [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md). The safety invariants (read-only audits, approval-gated writes, placeholder refusal) are not beta and do not change. Connectors: HubSpot (read/write), Salesforce (read/write), Stripe (read-only billing).
 
 ## Install
 

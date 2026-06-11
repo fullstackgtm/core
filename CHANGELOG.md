@@ -5,7 +5,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
-## [1.2.2] — 2026-06-10
+## [0.10.0] — 2026-06-10
+
+**Versioning reset to reflect beta status.** The 1.x numbering below
+(1.0.0–1.2.2) overstated maturity: those versions were development
+milestones, not a frozen public contract. 0.10.0 continues the 0.x line
+(0.9.0 was the last pre-1.x milestone) and is functionally identical to
+1.2.2 plus the status/docs corrections below. `fullstackgtm@1.2.1` and
+`@1.2.2` were briefly on npm (2026-06-10) and were unpublished the same
+week; those version numbers are permanently burned per npm policy. The real
+1.0 will be declared via [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
+once the API surface has survived external usage.
+
+### Changed
+
+- README status: "1.0 — stable" → "beta (0.x)"; API surfaces may break in
+  minor releases until 1.0 (each break will be called out here). The safety
+  invariants are explicitly not beta.
+- `docs/api.md` reframed as the 1.0 contract *candidate*.
+- MCP server now reports the real package version instead of a hardcoded
+  string.
+
+## [1.2.2] — 2026-06-10 (unpublished)
 
 Release mechanics.
 
@@ -17,7 +38,7 @@ Release mechanics.
 - Bin paths canonicalized (no `./` prefix) to silence npm 11's
   normalization warning during pack/publish.
 
-## [1.2.1] — 2026-06-10
+## [1.2.1] — 2026-06-10 (unpublished)
 
 First version published to npm.
 

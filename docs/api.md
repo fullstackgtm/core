@@ -1,9 +1,11 @@
-# fullstackgtm — Stable API (1.0 contract)
+# fullstackgtm — API surface (1.0 contract candidate)
 
-Everything listed here is covered by the semver stability commitment from
-1.0.0: breaking changes to these surfaces require a major version. Anything
-*not* listed (internal helpers, file layouts, exact message strings) may
-change in minor releases.
+Everything listed here is the intended 1.0 contract. While the package is in
+beta (0.x), these surfaces are settling and breaking changes may still land
+in minor releases — each one is called out in the CHANGELOG. At 1.0 they
+freeze: breaking changes will require a major version. Anything *not* listed
+(internal helpers, file layouts, exact message strings) may change in any
+release.
 
 ## Canonical data model (`types.ts`)
 

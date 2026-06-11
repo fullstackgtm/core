@@ -92,10 +92,19 @@ async function readSnapshot(
   ) as CanonicalGtmSnapshot;
 }
 
+function packageVersion() {
+  try {
+    const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    return (JSON.parse(raw) as { version?: string }).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 export async function startMcpServer() {
   const server = new McpServer({
     name: "fullstackgtm",
-    version: "1.2.0",
+    version: packageVersion(),
   });
 
   server.registerTool(
