@@ -45,7 +45,15 @@ Credential resolution ladder, first match wins:
 4. Broker pairing: `fullstackgtm login --via <hosted url>` (a human approves the pairing code)
 
 In an agent sandbox, prefer rung 1 or 2. Never echo tokens into argv —
-`login` reads secrets from stdin only.
+`login` reads secrets from stdin only. Set `FSGTM_NO_BROWSER=1` in headless
+environments — login flows then print verification URLs instead of opening
+the OS browser.
+
+Provider prerequisites (what the human must create, and which scopes) are in
+the README's **"Connect your CRM"** section: HubSpot needs a private app with
+four `crm.objects.*.read` scopes (plus write scopes only for `apply`);
+Salesforce needs an admin-created Connected App with device flow enabled;
+Stripe works with a restricted key (Customers + Subscriptions read).
 
 ```bash
 HUBSPOT_ACCESS_TOKEN=$TOKEN fullstackgtm audit --provider hubspot --json --out plan.json
@@ -71,8 +79,12 @@ The MCP entrypoint needs optional peers that plain `npx fullstackgtm-mcp`
 does not install:
 
 ```bash
-npx -p fullstackgtm -p @modelcontextprotocol/sdk -p zod fullstackgtm-mcp
+npx -y -p fullstackgtm -p @modelcontextprotocol/sdk -p zod fullstackgtm-mcp
 ```
+
+If the working directory's project already has the peers in its node_modules,
+the server resolves them from there (peer-dependency semantics) — so this
+works from inside existing projects too.
 
 Tools exposed over stdio: `fullstackgtm_audit` (read-only),
 `fullstackgtm_rules`, `fullstackgtm_apply` (requires `approvedOperationIds`).

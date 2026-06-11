@@ -157,7 +157,7 @@ async function hubspotConnection(args: string[]) {
   const stored = await resolveHubspotConnection();
   if (stored) return stored;
   throw new Error(
-    "No HubSpot credentials. Run `fullstackgtm login hubspot`, pair with a hosted deployment via `fullstackgtm login --via <url>`, or set HUBSPOT_ACCESS_TOKEN.",
+    "No HubSpot credentials. Run `fullstackgtm login hubspot`, pair with a hosted deployment via `fullstackgtm login --via <url>`, or set HUBSPOT_ACCESS_TOKEN. (`fullstackgtm doctor` shows credential status; see the README's \"Connect your CRM\" section for the private-app scopes to grant.)",
   );
 }
 
@@ -171,7 +171,7 @@ async function salesforceConnection() {
   const stored = await resolveSalesforceConnection();
   if (stored) return stored;
   throw new Error(
-    "No Salesforce credentials. Run `fullstackgtm login salesforce`, pair with a hosted deployment via `fullstackgtm login --via <url>`, or set SALESFORCE_ACCESS_TOKEN and SALESFORCE_INSTANCE_URL.",
+    "No Salesforce credentials. Run `fullstackgtm login salesforce`, pair with a hosted deployment via `fullstackgtm login --via <url>`, or set SALESFORCE_ACCESS_TOKEN and SALESFORCE_INSTANCE_URL. (`fullstackgtm doctor` shows credential status; device-flow login needs an admin-created Connected App — see the README's \"Connect your CRM\" section.)",
   );
 }
 
@@ -198,7 +198,7 @@ async function connectorFor(provider: string, args: string[]): Promise<GtmConnec
       process.env.STRIPE_SECRET_KEY ?? getCredential("stripe")?.accessToken;
     if (!key) {
       throw new Error(
-        "No Stripe credentials. Run `fullstackgtm login stripe --token sk_...` or set STRIPE_SECRET_KEY.",
+        "No Stripe credentials. Run `echo \"$STRIPE_KEY\" | fullstackgtm login stripe` or set STRIPE_SECRET_KEY. A restricted key with read access to Customers and Subscriptions is enough. (`fullstackgtm doctor` shows credential status.)",
       );
     }
     return createStripeConnector({ getApiKey: () => key });
@@ -991,6 +991,10 @@ export async function runCli(argv: string[]) {
   const [command, ...args] = argv;
   if (!command || command === "--help" || command === "-h") {
     console.log(usage());
+    return;
+  }
+  if (command === "--version" || command === "-v" || command === "version") {
+    console.log(readPackageInfo().version);
     return;
   }
 

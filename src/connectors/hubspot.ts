@@ -57,14 +57,20 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
 
   async function request(path: string, init: RequestInit = {}): Promise<any> {
     const token = await options.getAccessToken();
-    const response = await fetchImpl(`${baseUrl}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        ...(init.headers ?? {}),
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(`${baseUrl}${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          ...(init.headers ?? {}),
+        },
+      });
+    } catch (error) {
+      const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+      throw new Error(`Cannot reach HubSpot at ${baseUrl}${cause}. Check network access.`);
+    }
     if (!response.ok) {
       const body = await response.text();
       throw new Error(`HubSpot API error ${response.status}: ${body}`);

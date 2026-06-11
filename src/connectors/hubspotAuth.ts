@@ -212,6 +212,9 @@ export async function runHubspotLoopbackLogin(
 }
 
 export async function openInBrowser(url: string) {
+  // Headless contexts (agent sandboxes, CI, tests) suppress the OS browser;
+  // every flow that opens a URL also prints it for manual use.
+  if (process.env.FSGTM_NO_BROWSER) return;
   // The URL may come from an external source (e.g. a broker deployment's
   // verification URL). Only ever hand a well-formed http(s) URL to the OS
   // opener — this prevents a leading `-` from being read as a flag by

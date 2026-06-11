@@ -106,11 +106,39 @@ The original thesis: GTM data disagrees across systems.
 - Docs site with the operating-model registry as browsable reference.
 - Performance pass: streaming snapshots for very large orgs.
 
-## 1.0.0 — The contract (reached)
+## Known real-portal gaps to close before 1.0
+
+Found by exercising the published package as a fresh RevOps user with a real
+CRM (2026-06):
+
+- **Pipeline-aware closed-deal detection (HubSpot).** `isClosed`/`isWon` are
+  derived by substring-matching the raw `dealstage` value against
+  `closedwon`/`closedlost`. Custom pipelines use opaque stage ids, so closed
+  deals read as open and flood stale-deal/past-close findings. Fix: resolve
+  stage metadata from `/crm/v3/pipelines` once per snapshot.
+- **Rate-limit resilience.** No 429/retry/backoff handling anywhere; a
+  mid-size portal snapshot is ~1,000+ sequential page requests and one
+  transient failure aborts the run. Fix: honor `Retry-After`, retry
+  idempotent reads with backoff.
+- **`fetchChanges` 10k truncation.** The HubSpot search API caps at 10,000
+  results; the connector stops silently at MAX_PAGES. Fix: detect the cap
+  and fall back to (or instruct) a full snapshot, loudly.
+- **MCP plan hand-off.** `fullstackgtm_audit` can only return the full plan
+  inline (200KB+ on real data) while `fullstackgtm_apply` requires a file
+  path. Fix: an `outPath` option on the audit tool plus a summary-only
+  output mode.
+- **Scope-complete login validation.** `login hubspot` validates against the
+  owners endpoint only, so an under-scoped token passes login and fails
+  mid-audit. Fix: probe each required object endpoint at login and report
+  missing scopes up front.
+
+## 1.0.0 — The contract (not yet declared)
 
 Semver stability commitment on the canonical model, rule interface, connector
-contract, plan format, CLI, and MCP tools. From here, new providers and new
-rules are minor releases; the model only breaks at 2.0.
+contract, plan format, CLI, and MCP tools. Declared only after the API
+surface has survived external usage and the real-portal gaps above are
+closed. From there, new providers and new rules are minor releases; the
+model only breaks at 2.0.
 
 ## Deliberately out of scope until after 1.0
 

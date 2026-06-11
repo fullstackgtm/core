@@ -1,8 +1,39 @@
+var __rewriteRelativeImportExtension = (this && this.__rewriteRelativeImportExtension) || function (path, preserveJsx) {
+    if (typeof path === "string" && /^\.\.?\//.test(path)) {
+        return path.replace(/\.(tsx)$|((?:\.d)?)((?:\.[^./]+?)?)\.([cm]?)ts$/i, function (m, tsx, d, ext, cm) {
+            return tsx ? preserveJsx ? ".jsx" : ".js" : d && (!ext || !cm) ? m : (d + ext + "." + cm.toLowerCase() + "js");
+        });
+    }
+    return path;
+};
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod/v4";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+/**
+ * The MCP peers resolve normally when installed alongside this package, but
+ * `npx -p fullstackgtm -p @modelcontextprotocol/sdk -p zod` skips installing
+ * peers into the npx cache when the invoking project's node_modules already
+ * satisfies them — and the cache can't reach the project's tree. Fall back to
+ * resolving from the working directory: peer dependencies' natural home.
+ */
+async function importPeer(specifier) {
+    try {
+        return (await import(__rewriteRelativeImportExtension(specifier)));
+    }
+    catch (error) {
+        try {
+            const projectRequire = createRequire(join(process.cwd(), "package.json"));
+            return (await import(__rewriteRelativeImportExtension(pathToFileURL(projectRequire.resolve(specifier)).href)));
+        }
+        catch {
+            throw error; // the original error carries the missing-peer signal mcp-bin reports on
+        }
+    }
+}
+const { McpServer } = await importPeer("@modelcontextprotocol/sdk/server/mcp.js");
+const { StdioServerTransport } = await importPeer("@modelcontextprotocol/sdk/server/stdio.js");
+const { z } = await importPeer("zod/v4");
 import { auditSnapshot, defaultPolicy } from "./audit.js";
 import { loadConfig, mergePolicy, resolveConfiguredRules } from "./config.js";
 import { applyPatchPlan } from "./connector.js";
@@ -84,7 +115,8 @@ export async function startMcpServer() {
     server.registerTool("fullstackgtm_audit", {
         title: "GTM Ops Audit",
         description: "Run a dry-run GTM hygiene audit and return a reviewable patch plan. " +
-            "Reads from the sample dataset, a snapshot file, or a live provider.",
+            "Sources: the realistic zero-credential demo CRM (provider: \"demo\" — richest test data), " +
+            "the minimal sample dataset, a snapshot file, or a live provider.",
         inputSchema: {
             provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
             inputPath: z.string().optional(),

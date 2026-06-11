@@ -1,8 +1,35 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod/v4";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+/**
+ * The MCP peers resolve normally when installed alongside this package, but
+ * `npx -p fullstackgtm -p @modelcontextprotocol/sdk -p zod` skips installing
+ * peers into the npx cache when the invoking project's node_modules already
+ * satisfies them — and the cache can't reach the project's tree. Fall back to
+ * resolving from the working directory: peer dependencies' natural home.
+ */
+async function importPeer<T>(specifier: string): Promise<T> {
+  try {
+    return (await import(specifier)) as T;
+  } catch (error) {
+    try {
+      const projectRequire = createRequire(join(process.cwd(), "package.json"));
+      return (await import(pathToFileURL(projectRequire.resolve(specifier)).href)) as T;
+    } catch {
+      throw error; // the original error carries the missing-peer signal mcp-bin reports on
+    }
+  }
+}
+
+const { McpServer } = await importPeer<typeof import("@modelcontextprotocol/sdk/server/mcp.js")>(
+  "@modelcontextprotocol/sdk/server/mcp.js",
+);
+const { StdioServerTransport } = await importPeer<typeof import("@modelcontextprotocol/sdk/server/stdio.js")>(
+  "@modelcontextprotocol/sdk/server/stdio.js",
+);
+const { z } = await importPeer<typeof import("zod/v4")>("zod/v4");
 import { auditSnapshot, defaultPolicy } from "./audit.ts";
 import { loadConfig, mergePolicy, resolveConfiguredRules } from "./config.ts";
 import { applyPatchPlan } from "./connector.ts";
@@ -113,7 +140,8 @@ export async function startMcpServer() {
       title: "GTM Ops Audit",
       description:
         "Run a dry-run GTM hygiene audit and return a reviewable patch plan. " +
-        "Reads from the sample dataset, a snapshot file, or a live provider.",
+        "Sources: the realistic zero-credential demo CRM (provider: \"demo\" — richest test data), " +
+        "the minimal sample dataset, a snapshot file, or a live provider.",
       inputSchema: {
         provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
         inputPath: z.string().optional(),

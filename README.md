@@ -95,28 +95,61 @@ fullstackgtm login hubspot
 
 # HubSpot, bring-your-own-app OAuth. The browser is used exactly once — the
 # consent grant — captured on a 127.0.0.1 loopback (RFC 8252); the CLI
-# exchanges the code itself and refreshes silently from then on.
-fullstackgtm login hubspot --oauth --client-id <id> --client-secret <secret>
+# exchanges the code itself and refreshes silently from then on. The client
+# secret is read from stdin or an interactive prompt — never as a flag.
+echo "$CLIENT_SECRET" | fullstackgtm login hubspot --oauth --client-id <id>
 #   (register http://localhost:8763/callback as a redirect URL on your app)
 
 # Salesforce: native device flow — confirm a code on any device, no localhost
 # server, no client secret, silent refresh. Needs a Connected App consumer key
-# with device flow enabled.
+# with device flow enabled (see "Connect your CRM" below).
 fullstackgtm login salesforce --device --client-id <consumer key>
-# ...or a session token directly:
-fullstackgtm login salesforce --token <t> --instance-url https://yourorg.my.salesforce.com
+# ...or a session token directly (token on stdin, never as a flag):
+echo "$SF_SESSION_TOKEN" | fullstackgtm login salesforce --instance-url https://yourorg.my.salesforce.com
 
 fullstackgtm logout hubspot   # or: salesforce | broker
 ```
 
 A direct `login hubspot` always wins over a broker pairing, so an operator can override the team default. HubSpot does not support the device-authorization grant or secretless public clients, which is why the bring-your-own-app OAuth path requires client credentials; they are stored locally for silent refresh, the same model as `gcloud` and `aws` CLI profiles.
 
+## Connect your CRM
+
+What each provider actually requires before `audit --provider <name>` works on your data.
+
+### HubSpot: create a private app (~2 minutes, needs super-admin)
+
+1. In HubSpot: **Settings → Integrations → Private Apps → Create a private app.**
+2. On the **Scopes** tab, grant the read scopes the audit needs:
+   - `crm.objects.owners.read`
+   - `crm.objects.companies.read`
+   - `crm.objects.contacts.read`
+   - `crm.objects.deals.read`
+3. If you plan to **apply** approved operations (not just audit), also grant write scopes for the objects you'll let it touch: `crm.objects.deals.write` (covers `deal.next_step` and other deal fields), plus `crm.objects.contacts.write` / `crm.objects.companies.write` for contact/company patches, and the **Tasks** write scope for `create_task` operations (search "tasks" in the scope picker; naming varies by portal).
+4. Create the app, copy the token (`pat-...`), then: `echo "$TOKEN" | fullstackgtm login hubspot`.
+
+If a scope is missing you'll see a `403` mid-run whose body names the exact missing scope (`requiredGranularScopes`) — add it to the private app and re-run. Note that `login` only validates the token itself; it can't tell whether every scope you'll need is granted.
+
+### Salesforce: a Connected App (one-time, usually needs an admin)
+
+Device-flow login requires a Connected App in your org — if you're not an admin, this is the step to ask one for:
+
+1. **Setup → App Manager → New Connected App**, enable OAuth settings.
+2. Check **Enable Device Flow**.
+3. OAuth scopes: **Manage user data via APIs (`api`)** and **Perform requests at any time (`refresh_token`)** — the CLI requests exactly these.
+4. Save (Salesforce can take ~2–10 minutes to propagate a new Connected App), copy the **Consumer Key**, then: `fullstackgtm login salesforce --device --client-id <consumer key>`.
+
+Writeback needs no extra OAuth scope — applies are gated by the logged-in user's normal object/field permissions.
+
+### Stripe: a restricted key is enough (read-only connector)
+
+The Stripe connector only reads customers and subscriptions, and `apply` is read-only by construction. Create a **restricted key** with just **Customers: Read** and **Subscriptions: Read** (Developers → API keys → Create restricted key) instead of pasting a full-access secret key: `echo "$KEY" | fullstackgtm login stripe`.
+
 ## Concepts
 
 | Concept | What it is |
 |---|---|
 | **Canonical snapshot** | Provider-independent view of users, accounts, contacts, deals, activities. Records carry `identities` — `(provider, externalId)` claims — so the same real-world entity can be tracked across several systems. |
-| **Audit rule** | A deterministic function `(context) => { findings, operations }`. Five built-ins cover orphan accounts, ownerless deals, unlinked deals, past close dates, and stale pipeline. Write your own in ~10 lines. |
+| **Audit rule** | A deterministic function `(context) => { findings, operations }`. Eleven built-ins cover orphan accounts, ownerless/unlinked/amount-less deals, past close dates, stale pipeline, duplicates, and more — `fullstackgtm rules` lists them all. Write your own in ~10 lines. |
 | **Patch plan** | The dry-run output of an audit: findings plus typed patch operations with before/after values, reasons, risk levels, and approval flags. Always a proposal, never a mutation. |
 | **Connector** | A provider adapter: `fetchSnapshot()` for reads, optional `applyOperation()` for writes. HubSpot and Salesforce reference connectors ship in the package; connectors never drop records they can't fully resolve — the audit flags them instead. |
 | **Patch plan run** | The audit record of one apply attempt: per-operation applied/failed/skipped results. |

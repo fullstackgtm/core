@@ -28,14 +28,21 @@ export function createSalesforceConnector(options) {
         const url = path.startsWith("http")
             ? path
             : `${connection.instanceUrl.replace(/\/$/, "")}${path}`;
-        const response = await fetchImpl(url, {
-            ...init,
-            headers: {
-                Authorization: `Bearer ${connection.accessToken}`,
-                "Content-Type": "application/json",
-                ...(init.headers ?? {}),
-            },
-        });
+        let response;
+        try {
+            response = await fetchImpl(url, {
+                ...init,
+                headers: {
+                    Authorization: `Bearer ${connection.accessToken}`,
+                    "Content-Type": "application/json",
+                    ...(init.headers ?? {}),
+                },
+            });
+        }
+        catch (error) {
+            const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+            throw new Error(`Cannot reach Salesforce at ${connection.instanceUrl}${cause}. Check SALESFORCE_INSTANCE_URL (your My Domain URL, e.g. https://yourco.my.salesforce.com) and network access.`);
+        }
         if (!response.ok) {
             const body = await response.text();
             throw new Error(`Salesforce API error ${response.status}: ${body}`);

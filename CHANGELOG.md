@@ -5,6 +5,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.10.1] — 2026-06-11
+
+Fixes from a full fresh-user journey audit (install → demo → MCP → real CRM),
+focused on the first-contact experience.
+
+### Added
+
+- **`fullstackgtm --version`** (also `-v` / `version`) — previously exited 1
+  with a usage dump.
+- **README "Connect your CRM" section**: HubSpot private-app walkthrough with
+  the exact read scopes the audit needs (`crm.objects.{owners,companies,contacts,deals}.read`)
+  and the write scopes `apply` needs; Salesforce Connected App prerequisites
+  (admin-created, device flow enabled, `api` + `refresh_token` scopes,
+  propagation delay); Stripe restricted-key guidance. Previously the word
+  "scope" appeared nowhere in the docs.
+- Roadmap: documented the known real-portal gaps to close before 1.0
+  (pipeline-aware closed-deal detection, 429/retry, fetchChanges 10k
+  truncation, MCP plan hand-off, scope-complete login validation).
+
+### Fixed
+
+- **`FSGTM_NO_BROWSER=1` suppresses OS browser opens** in all login flows
+  (broker pairing, Salesforce device flow, HubSpot OAuth) — for agent
+  sandboxes, CI, and headless use; verification URLs are always printed.
+  The broker test suite sets it, so running `npm test` no longer pops a
+  real browser tab at a mock pairing URL on every run.
+- **MCP server now works from inside existing projects.** When launched via
+  `npx -p ... fullstackgtm-mcp` from a directory whose node_modules already
+  contains the peers (but not fullstackgtm), npx skips installing them into
+  its cache and module resolution failed; the server now falls back to
+  resolving the peers from the working directory — peer-dependency semantics.
+  Previously this made the README's `claude mcp add` setup produce a dead
+  server in most agent-tooling repos.
+- **README auth examples matched the CLI again**: `login salesforce --token ...`
+  and `login hubspot --oauth ... --client-secret ...` showed argv-secret forms
+  the CLI deliberately rejects; both now use stdin.
+- The no-credentials Stripe error suggested `login stripe --token sk_...`,
+  which the CLI itself refuses — it now shows the stdin form and mentions
+  restricted keys.
+- Unreachable hosts no longer surface as a bare `fetch failed`: HubSpot and
+  Salesforce connection errors name the target URL and (for Salesforce) point
+  at SALESFORCE_INSTANCE_URL.
+- Credential errors now point at `fullstackgtm doctor` and the README scope
+  guide; the MCP audit tool description now mentions the `demo` source;
+  README rule count corrected (11 built-ins, not five).
+
 ## [0.10.0] — 2026-06-10
 
 **Versioning reset to reflect beta status.** The 1.x numbering below

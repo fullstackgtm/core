@@ -11,6 +11,10 @@ import {
   storeCredential,
 } from "../src/index.ts";
 
+// The broker login flow opens the verification URL in the OS browser; without
+// this, every test run pops a real browser tab pointed at the mock server.
+process.env.FSGTM_NO_BROWSER = "1";
+
 const CLI_TOKEN = "fsgtm_test_broker_token";
 const FIELD_MAPPINGS = { deals: { nextStep: "custom_next_step" } };
 
