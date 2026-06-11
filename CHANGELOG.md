@@ -5,7 +5,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
-## [1.2.1] — Unreleased
+## [1.2.2] — 2026-06-10
+
+Release mechanics.
+
+### Changed
+
+- **Releases publish via npm Trusted Publishing (OIDC)** from GitHub Actions
+  on the public repo — no tokens, no 2FA bypass. (1.2.1 was published
+  manually to bootstrap the package on npm.)
+- Bin paths canonicalized (no `./` prefix) to silence npm 11's
+  normalization warning during pack/publish.
+
+## [1.2.1] — 2026-06-10
+
+First version published to npm.
 
 Onboarding polish: first-run verification, agent install docs, and a working
 zero-install MCP path.
