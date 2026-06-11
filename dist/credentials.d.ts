@@ -2,7 +2,26 @@
  * Local CLI credential store: ~/.fullstackgtm/credentials.json (0600), or
  * $FSGTM_HOME/credentials.json when set. Environment tokens always win over
  * stored credentials so CI and agent sandboxes never touch the filesystem.
+ *
+ * Profiles let one operator hold credentials for several organizations at
+ * once (a consultant working across client CRMs). The default profile keeps
+ * the historical layout; a named profile scopes the entire home — credentials
+ * AND stored plans — under `profiles/<name>/`, so a patch plan proposed
+ * against one client's CRM can never be applied through another client's
+ * credentials.
  */
+export declare const DEFAULT_PROFILE = "default";
+export declare function validateProfileName(name: string): string;
+/** Select the profile for this process; wins over $FULLSTACKGTM_PROFILE. */
+export declare function setActiveProfile(name: string): void;
+export declare function activeProfile(): string;
+/** Base home directory, shared by every profile. */
+export declare function baseHomeDir(): string;
+/**
+ * Profiles that exist on disk (have a directory), always including the
+ * default profile. Existence does not imply stored credentials.
+ */
+export declare function listProfiles(): string[];
 export type StoredCredential = {
     kind: "private_app" | "oauth" | "broker";
     accessToken: string;

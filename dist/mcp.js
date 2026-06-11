@@ -45,6 +45,7 @@ import { generateDemoSnapshot } from "./demo.js";
 import { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
 import { builtinAuditRules } from "./rules.js";
 import { sampleSnapshot } from "./sampleData.js";
+import { suggestValues } from "./suggest.js";
 function content(value) {
     return {
         content: [
@@ -139,6 +140,21 @@ export async function startMcpServer() {
             : ruleSet;
         const plan = auditSnapshot(await readSnapshot(provider, inputPath), policy, selected);
         return content(output === "markdown" ? patchPlanToMarkdown(plan) : plan);
+    });
+    server.registerTool("fullstackgtm_suggest", {
+        title: "Suggest Placeholder Values",
+        description: "Derive values for a plan's requires_human_* placeholder operations from snapshot " +
+            "evidence (account-name matching, contact associations), with confidence levels and " +
+            "reasons. Read-only; feed accepted values into fullstackgtm_apply's valueOverrides.",
+        inputSchema: {
+            planPath: z.string(),
+            provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
+            inputPath: z.string().optional(),
+        },
+    }, async ({ planPath, provider, inputPath }) => {
+        const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
+        const snapshot = await readSnapshot(provider, inputPath);
+        return content({ suggestions: suggestValues(plan, snapshot) });
     });
     server.registerTool("fullstackgtm_rules", {
         title: "List Audit Rules",

@@ -47,6 +47,39 @@ HUBSPOT_ACCESS_TOKEN=pat-... npx fullstackgtm apply \
 
 Nothing is ever written without an explicit `--approve`. Operations whose value is a human decision (`requires_human_*` placeholders, e.g. which owner to assign) are refused unless you supply a concrete `--value` override.
 
+## From findings to fixes: the suggest chain
+
+Most placeholder answers are already derivable from your own CRM data. `suggest` computes them deterministically — account-name matching cross-checked against contact associations — with a confidence level and a written reason per operation, so you (or an agent) approve evidence, not guesses:
+
+```bash
+fullstackgtm audit --provider hubspot --save        # → Saved plan patch_plan_abc123
+fullstackgtm suggest --plan-id patch_plan_abc123 --provider hubspot --out suggestions.json
+# review suggestions.json: every value carries confidence (high/low/create/none) + a reason
+fullstackgtm plans approve patch_plan_abc123 --values-from suggestions.json   # high-confidence only by default
+fullstackgtm apply --plan-id patch_plan_abc123 --provider hubspot
+```
+
+Widen the bar deliberately: `--min-confidence low` accepts single-signal matches; `--include-creates` accepts `create:<Name>` values — approving one **creates the missing company/account record and links to it** in a single audited operation, so even record creation stays inside the typed, human-approved model. Conflicting or ambiguous evidence always yields *no* suggestion with an explanation, never a guess.
+
+```bash
+# 3. Hand the findings to whoever owns the CRM: a client-ready report
+npx fullstackgtm report --provider hubspot --client "Acme" --out acme-health.html
+```
+
+`report` renders the same audit as a deliverable — severity counts up front, a prose summary, per-rule detail with example records, and next steps — as markdown or self-contained HTML (printable, emailable, no external assets).
+
+### Working across organizations
+
+Consultants and fractional operators hold credentials for several CRMs at once. A profile scopes stored logins *and* stored plans to one organization:
+
+```bash
+fullstackgtm --profile acme login hubspot
+fullstackgtm --profile acme audit --provider hubspot --save
+fullstackgtm profiles            # list profiles, * marks the active one
+```
+
+Set `FULLSTACKGTM_PROFILE=acme` to pin a shell (or agent sandbox) to one client. Plans saved under a profile are invisible to every other profile, so a patch plan proposed against one client's CRM can never be applied through another client's credentials.
+
 ## Built for agents (and the RevOps humans they work for)
 
 Every command is designed to compose in an agent loop — deterministic output, machine-readable everywhere, meaningful exit codes:

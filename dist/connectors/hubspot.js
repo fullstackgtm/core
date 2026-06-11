@@ -282,16 +282,34 @@ export function createHubspotConnector(options) {
                 detail: "link_record is supported for deals and contacts (to a company).",
             };
         }
-        const companyId = String(operation.afterValue ?? "");
+        let companyId = String(operation.afterValue ?? "");
         if (!companyId) {
             return { operationId: operation.id, status: "skipped", detail: "link_record needs a target company id." };
+        }
+        // `create:<Name>` creates the company first, then links — the approved
+        // value spells out exactly what will happen, so creation stays inside
+        // the typed, human-approved operation model.
+        let createdCompanyName = null;
+        if (companyId.startsWith("create:")) {
+            const name = companyId.slice("create:".length).trim();
+            if (!name) {
+                return { operationId: operation.id, status: "skipped", detail: "create: needs a company name (create:<Name>)." };
+            }
+            const created = await request(`/crm/v3/objects/companies`, {
+                method: "POST",
+                body: JSON.stringify({ properties: { name } }),
+            });
+            companyId = String(created.id);
+            createdCompanyName = name;
         }
         await request(`/crm/v4/objects/${fromPath}/${encodeURIComponent(operation.objectId)}/associations/default/companies/${encodeURIComponent(companyId)}`, { method: "PUT" });
         return {
             operationId: operation.id,
             status: "applied",
-            detail: `Linked ${fromPath}/${operation.objectId} to company ${companyId}.`,
-            providerData: { companyId },
+            detail: createdCompanyName
+                ? `Created company "${createdCompanyName}" (${companyId}) and linked ${fromPath}/${operation.objectId} to it.`
+                : `Linked ${fromPath}/${operation.objectId} to company ${companyId}.`,
+            providerData: { companyId, ...(createdCompanyName ? { createdCompany: true } : {}) },
         };
     }
     async function createTask(operation) {

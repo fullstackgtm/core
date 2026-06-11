@@ -6,13 +6,15 @@ export { DEFAULT_LOOPBACK_PORT, DEFAULT_OAUTH_SCOPES, exchangeHubspotCode, refre
 export { createSalesforceConnector, type SalesforceConnection, type SalesforceConnectorOptions, } from "./connectors/salesforce.ts";
 export { pollSalesforceDeviceLogin, refreshSalesforceToken, startSalesforceDeviceLogin, validateSalesforceToken, type SalesforceDeviceAuthorization, type SalesforceTokenSet, } from "./connectors/salesforceAuth.ts";
 export { createStripeConnector, type StripeConnectorOptions } from "./connectors/stripe.ts";
-export { credentialsDir, credentialsPath, deleteCredential, getCredential, resolveHubspotAccessToken, resolveHubspotConnection, storeCredential, type HubspotConnection, type StoredCredential, } from "./credentials.ts";
+export { activeProfile, credentialsDir, credentialsPath, DEFAULT_PROFILE, deleteCredential, getCredential, listProfiles, resolveHubspotAccessToken, resolveHubspotConnection, setActiveProfile, storeCredential, type HubspotConnection, type StoredCredential, } from "./credentials.ts";
 export { generateDemoSnapshot, type DemoSnapshotOptions } from "./demo.ts";
 export { diffFindings, diffSnapshots, diffToMarkdown, type CollectionDiff, type FieldChange, type FindingsDrift, type RecordChange, type SnapshotDiff, } from "./diff.ts";
 export { mergeSnapshots, type MergeConflict, type MergeMatch, type MergeReport, type MergeSuggestion, } from "./merge.ts";
 export { createFilePlanStore, type PlanStore, type StoredPlan } from "./planStore.ts";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
+export { auditReportToHtml, auditReportToMarkdown, type ReportOptions } from "./report.ts";
 export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, normalizeFieldMappings, readMappedValue, type CrmObjectType, type FieldMappings, } from "./mappings.ts";
-export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, requiresHumanInput, staleDealRule, } from "./rules.ts";
+export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, duplicateOpenDealRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, requiresHumanInput, staleDealRule, } from "./rules.ts";
 export { sampleSnapshot } from "./sampleData.ts";
+export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type { ApprovalStatus, AuditFinding, AuditFindingSeverity, CanonicalAccount, CanonicalActivity, CanonicalContact, CanonicalDeal, CanonicalGtmSnapshot, CanonicalUser, CrmProvider, GtmAuditRule, GtmConnector, GtmEvidence, GtmEvidenceSourceSystem, GtmObjectType, GtmPolicy, GtmRuleContext, GtmRuleResult, GtmSnapshotIndex, PatchOperation, PatchOperationResult, PatchOperationType, PatchPlan, PatchPlanRun, PatchPlanRunStatus, PatchVerification, PipelineFinding, PipelineFindingStatus, PipelineFindingType, ProviderIdentity, RiskLevel, SourceFreshness, } from "./types.ts";

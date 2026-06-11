@@ -1,10 +1,65 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync, } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { refreshHubspotToken } from "./connectors/hubspotAuth.js";
 import { refreshSalesforceToken } from "./connectors/salesforceAuth.js";
-export function credentialsDir() {
+/**
+ * Local CLI credential store: ~/.fullstackgtm/credentials.json (0600), or
+ * $FSGTM_HOME/credentials.json when set. Environment tokens always win over
+ * stored credentials so CI and agent sandboxes never touch the filesystem.
+ *
+ * Profiles let one operator hold credentials for several organizations at
+ * once (a consultant working across client CRMs). The default profile keeps
+ * the historical layout; a named profile scopes the entire home — credentials
+ * AND stored plans — under `profiles/<name>/`, so a patch plan proposed
+ * against one client's CRM can never be applied through another client's
+ * credentials.
+ */
+export const DEFAULT_PROFILE = "default";
+const PROFILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+let explicitProfile = null;
+export function validateProfileName(name) {
+    if (!PROFILE_NAME_PATTERN.test(name) || name === "." || name === "..") {
+        throw new Error(`Invalid profile name: ${JSON.stringify(name)}. Use letters, numbers, dots, dashes, ` +
+            "or underscores (must start with a letter or number, max 64 characters).");
+    }
+    return name;
+}
+/** Select the profile for this process; wins over $FULLSTACKGTM_PROFILE. */
+export function setActiveProfile(name) {
+    explicitProfile = validateProfileName(name);
+}
+export function activeProfile() {
+    if (explicitProfile)
+        return explicitProfile;
+    const fromEnv = process.env.FULLSTACKGTM_PROFILE;
+    return fromEnv ? validateProfileName(fromEnv) : DEFAULT_PROFILE;
+}
+/** Base home directory, shared by every profile. */
+export function baseHomeDir() {
     return process.env.FSGTM_HOME ?? join(homedir(), ".fullstackgtm");
+}
+/**
+ * Profiles that exist on disk (have a directory), always including the
+ * default profile. Existence does not imply stored credentials.
+ */
+export function listProfiles() {
+    const names = new Set([DEFAULT_PROFILE]);
+    try {
+        for (const entry of readdirSync(join(baseHomeDir(), "profiles"), { withFileTypes: true })) {
+            if (entry.isDirectory() && PROFILE_NAME_PATTERN.test(entry.name))
+                names.add(entry.name);
+        }
+    }
+    catch {
+        // No profiles directory yet.
+    }
+    return Array.from(names).sort();
+}
+export function credentialsDir() {
+    const base = baseHomeDir();
+    const profile = activeProfile();
+    return profile === DEFAULT_PROFILE ? base : join(base, "profiles", profile);
 }
 export function credentialsPath() {
     return join(credentialsDir(), "credentials.json");
@@ -18,12 +73,18 @@ export function credentialsPath() {
  */
 export function ensureSecureHomeDir() {
     const dir = credentialsDir();
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    try {
-        chmodSync(dir, 0o700);
-    }
-    catch {
-        // Non-POSIX filesystems (e.g. Windows) ignore chmod; nothing to enforce.
+    // A named profile nests under base/profiles/<name>; lock down every level
+    // we create, not just the leaf — recursive mkdir applies `mode` (less
+    // umask) only to directories it creates, and never to pre-existing ones.
+    const levels = dir === baseHomeDir() ? [dir] : [baseHomeDir(), join(baseHomeDir(), "profiles"), dir];
+    for (const level of levels) {
+        mkdirSync(level, { recursive: true, mode: 0o700 });
+        try {
+            chmodSync(level, 0o700);
+        }
+        catch {
+            // Non-POSIX filesystems (e.g. Windows) ignore chmod; nothing to enforce.
+        }
     }
     return dir;
 }

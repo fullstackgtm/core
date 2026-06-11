@@ -63,8 +63,12 @@ export async function validateHubspotToken(
   if (response.ok) {
     return { ok: true, detail: "Token accepted by the HubSpot CRM API." };
   }
-  const body = await response.text();
-  return { ok: false, detail: `HubSpot rejected the token (${response.status}): ${body}` };
+  // Never echo the response body: provider error payloads can reflect request
+  // details and end up in logs or shell scrollback.
+  return {
+    ok: false,
+    detail: `HubSpot rejected the token: HTTP ${response.status} ${response.statusText}`.trim(),
+  };
 }
 
 async function tokenRequest(

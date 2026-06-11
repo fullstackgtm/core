@@ -380,6 +380,52 @@ export const duplicateContactEmailRule = {
         return { findings, operations };
     },
 };
+export const duplicateOpenDealRule = {
+    id: "duplicate-open-deal",
+    title: "Open deals duplicate the same opportunity",
+    description: "Flags multiple open deals carrying the same name (scoped to the account when linked) — " +
+        "usually an integration re-creating deals instead of upserting, which counts the same " +
+        "revenue several times in pipeline and forecast.",
+    category: "data-quality",
+    evaluate: ({ snapshot }) => {
+        const findings = [];
+        const operations = [];
+        const keyOf = (deal) => {
+            if (!isOpen(deal))
+                return undefined;
+            const name = deal.name?.trim().toLowerCase().replace(/\s+/g, " ");
+            if (!name)
+                return undefined;
+            return `${deal.accountId ?? "unlinked"}:${name}`;
+        };
+        for (const [, deals] of duplicateGroups(snapshot.deals, keyOf)) {
+            const anchor = deals[0];
+            findings.push({
+                id: auditFindingId("duplicate-open-deal", anchor.id),
+                objectType: "deal",
+                objectId: anchor.id,
+                ruleId: "duplicate-open-deal",
+                title: "Open deals duplicate the same opportunity",
+                severity: "warning",
+                summary: `${deals.length} open deals named "${anchor.name}"${anchor.accountId ? " on the same account" : ""}: ${deals.map((deal) => deal.id).join(", ")}.`,
+                recommendation: "Keep one deal, archive the copies, and fix the integration that is re-creating them.",
+            });
+            operations.push({
+                id: patchOperationId("duplicate-open-deal", anchor.id),
+                objectType: "deal",
+                objectId: anchor.id,
+                operation: "create_task",
+                field: "merge_review_task",
+                beforeValue: null,
+                afterValue: `Review ${deals.length} duplicate open deals named "${anchor.name}" — keep one, archive ${deals.length - 1}`,
+                reason: "Duplicate open deals inflate pipeline and forecast the same revenue more than once.",
+                riskLevel: "medium",
+                approvalRequired: true,
+            });
+        }
+        return { findings, operations };
+    },
+};
 export const activeDealAccountWithoutContactsRule = {
     id: "active-deal-account-without-contacts",
     title: "Account with open pipeline has no contacts",
@@ -506,6 +552,7 @@ export const builtinAuditRules = [
     missingDealAmountRule,
     duplicateAccountDomainRule,
     duplicateContactEmailRule,
+    duplicateOpenDealRule,
     activeDealAccountWithoutContactsRule,
     closingSoonInactiveRule,
     accountSingleSourceRule,

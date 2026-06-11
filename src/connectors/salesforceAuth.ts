@@ -155,13 +155,26 @@ export async function validateSalesforceToken(
   instanceUrl: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ ok: boolean; detail: string }> {
-  const response = await fetchImpl(
-    `${instanceUrl.replace(/\/$/, "")}/services/oauth2/userinfo`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
-  );
+  let response: Response;
+  try {
+    response = await fetchImpl(
+      `${instanceUrl.replace(/\/$/, "")}/services/oauth2/userinfo`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+  } catch (error) {
+    const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+    return {
+      ok: false,
+      detail: `Cannot reach Salesforce at ${instanceUrl}${cause}. Check the --instance-url (your My Domain URL, e.g. https://yourco.my.salesforce.com) and network access.`,
+    };
+  }
   if (response.ok) {
     return { ok: true, detail: "Token accepted by the Salesforce API." };
   }
-  const body = await response.text();
-  return { ok: false, detail: `Salesforce rejected the token (${response.status}): ${body}` };
+  // Never echo the response body: provider error payloads can reflect request
+  // details and end up in logs or shell scrollback.
+  return {
+    ok: false,
+    detail: `Salesforce rejected the token: HTTP ${response.status} ${response.statusText}`.trim(),
+  };
 }

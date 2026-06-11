@@ -34,7 +34,7 @@ test("mcp server exposes the audit, rules, and apply tools over stdio", () =>
     const tools = await client.listTools();
     assert.deepEqual(
       tools.tools.map((tool) => tool.name).sort(),
-      ["fullstackgtm_apply", "fullstackgtm_audit", "fullstackgtm_rules"],
+      ["fullstackgtm_apply", "fullstackgtm_audit", "fullstackgtm_rules", "fullstackgtm_suggest"],
     );
   }));
 
@@ -108,6 +108,7 @@ test("mcp rules tool lists the built-in rules for discovery", () =>
         "closing-soon-inactive",
         "duplicate-account-domain",
         "duplicate-contact-email",
+      "duplicate-open-deal",
         "missing-deal-account",
         "missing-deal-amount",
         "missing-deal-owner",

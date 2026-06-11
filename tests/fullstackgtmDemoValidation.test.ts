@@ -160,6 +160,7 @@ test("cli rules --json lists the built-in rules for agent discovery", () => {
       "closing-soon-inactive",
       "duplicate-account-domain",
       "duplicate-contact-email",
+      "duplicate-open-deal",
       "missing-deal-account",
       "missing-deal-amount",
       "missing-deal-owner",

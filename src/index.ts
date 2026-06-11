@@ -34,12 +34,16 @@ export {
 } from "./connectors/salesforceAuth.ts";
 export { createStripeConnector, type StripeConnectorOptions } from "./connectors/stripe.ts";
 export {
+  activeProfile,
   credentialsDir,
   credentialsPath,
+  DEFAULT_PROFILE,
   deleteCredential,
   getCredential,
+  listProfiles,
   resolveHubspotAccessToken,
   resolveHubspotConnection,
+  setActiveProfile,
   storeCredential,
   type HubspotConnection,
   type StoredCredential,
@@ -64,6 +68,7 @@ export {
 } from "./merge.ts";
 export { createFilePlanStore, type PlanStore, type StoredPlan } from "./planStore.ts";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
+export { auditReportToHtml, auditReportToMarkdown, type ReportOptions } from "./report.ts";
 export {
   HUBSPOT_DEFAULT_FIELD_MAPPINGS,
   SALESFORCE_DEFAULT_FIELD_MAPPINGS,
@@ -83,6 +88,7 @@ export {
   closingSoonInactiveRule,
   duplicateAccountDomainRule,
   duplicateContactEmailRule,
+  duplicateOpenDealRule,
   missingDealAccountRule,
   missingDealAmountRule,
   missingDealOwnerRule,
@@ -93,6 +99,7 @@ export {
   staleDealRule,
 } from "./rules.ts";
 export { sampleSnapshot } from "./sampleData.ts";
+export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type {
   ApprovalStatus,
   AuditFinding,

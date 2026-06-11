@@ -5,6 +5,66 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.11.0] — 2026-06-11
+
+Canonicalizes the paths discovered dogfooding against a real portal: the
+suggest chain (every `requires_human_account_selection` answer was derivable
+from the snapshot but required ad-hoc scripting), governed record creation,
+client-ready reports, and multi-org profiles.
+
+### Added
+
+- **`fullstackgtm suggest --plan-id <id> | --plan <path> [source options]`**:
+  deterministic value suggestions for `requires_human_*` placeholder
+  operations, derived from snapshot evidence — account-name matching
+  cross-checked against contact→account associations, plus the
+  only-active-user case for owner selection. Every suggestion carries a
+  confidence level (`high`/`low`/`create`/`none`) and a written reason;
+  conflicting or ambiguous evidence yields no suggestion, never a guess.
+  `--out` writes a suggestions file; `--json` for agents. Exposed
+  programmatically as `suggestValues` and over MCP as `fullstackgtm_suggest`.
+- **`plans approve <id> --values-from <suggestions.json>`**: bulk-approve
+  with suggested values — high-confidence only by default,
+  `--min-confidence low` and `--include-creates` widen the bar explicitly.
+  Explicit `--value` flags still win.
+- **`create:<Name>` link values**: approving a `link_record` operation with
+  `--value <op>=create:Acme` creates the company (HubSpot) / account
+  (Salesforce) and links to it in one audited operation — record creation
+  stays inside the typed, human-approved model instead of a side channel.
+- New builtin rule `duplicate-open-deal` (data-quality): flags multiple open
+  deals sharing a normalized name, scoped to the account when linked —
+  typically an integration re-creating deals instead of upserting, which
+  counts the same revenue several times in pipeline and forecast. Emits one
+  finding and one approval-gated merge-review task per duplicate group.
+  Found dogfooding: an outreach-tool sync had tripled five open deals in our
+  own portal and no existing rule caught it.
+- `fullstackgtm report` — render an audit (or an existing plan via `--plan`)
+  as a client-ready deliverable in markdown or self-contained HTML:
+  at-a-glance metrics, prose summary, per-rule detail with capped example
+  records (`--max-examples`), and recommended next steps. `--client`,
+  `--title`, `--prepared-by`, and `--format` customize the output;
+  `--out report.html` infers HTML. Exposed programmatically as
+  `auditReportToMarkdown` / `auditReportToHtml`.
+- Credential profiles for multi-organization use: the global
+  `--profile <name>` flag (or `FULLSTACKGTM_PROFILE`) scopes stored logins
+  AND stored plans to `profiles/<name>/` under the fullstackgtm home, so one
+  operator can hold several clients' credentials without mixing them — and a
+  plan proposed against one org's CRM can never be applied through
+  another's. New `profiles` command lists them; `doctor` reports the active
+  profile. The default profile keeps the existing flat layout, so current
+  installs are unaffected. Exposed programmatically as `setActiveProfile`,
+  `activeProfile`, `listProfiles`, and `DEFAULT_PROFILE`.
+
+### Fixed
+
+- `validateHubspotToken` / `validateSalesforceToken` no longer echo the
+  provider's raw error body into the login failure message (observed live: a
+  HubSpot 401 body printed to the terminal). Status line only, matching the
+  no-body-interpolation rule applied elsewhere in 1.0.1.
+- Unreachable hosts during `login salesforce --instance-url` and
+  `login --via <url>` now name the target and what to check, completing the
+  0.10.1 fix that only covered the audit/connector path.
+
 ## [0.10.1] — 2026-06-11
 
 Fixes from a full fresh-user journey audit (install → demo → MCP → real CRM),

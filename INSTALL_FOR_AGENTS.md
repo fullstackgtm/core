@@ -73,6 +73,20 @@ fullstackgtm audit --provider hubspot --save     # persists plan to ~/.fullstack
 fullstackgtm plans list                          # a human reviews and approves
 ```
 
+For `requires_human_*` placeholders, chain the deterministic suggestion engine
+instead of guessing values yourself:
+
+```bash
+fullstackgtm suggest --plan-id <id> --provider hubspot --out suggestions.json   # read-only
+fullstackgtm plans approve <id> --values-from suggestions.json                  # high-confidence only
+fullstackgtm apply --plan-id <id> --provider hubspot
+```
+
+Every suggestion carries a confidence (`high`/`low`/`create`/`none`) and a
+reason derived from snapshot evidence. Surface `low`/`create`/`none` entries
+to your human rather than widening the bar unilaterally — `create:<Name>`
+values create a new CRM record when applied.
+
 ## 6. MCP server (optional)
 
 The MCP entrypoint needs optional peers that plain `npx fullstackgtm-mcp`

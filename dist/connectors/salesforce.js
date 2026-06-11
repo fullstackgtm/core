@@ -268,8 +268,26 @@ export function createSalesforceConnector(options) {
                 case "clear_field":
                     // link_record on a deal is just setting AccountId in Salesforce.
                     return await setField(operation);
-                case "link_record":
+                case "link_record": {
+                    // `create:<Name>` creates the Account first, then links — creation
+                    // stays inside the typed, human-approved operation model.
+                    const value = String(operation.afterValue ?? "");
+                    if (value.startsWith("create:")) {
+                        const name = value.slice("create:".length).trim();
+                        if (!name) {
+                            return { operationId: operation.id, status: "skipped", detail: "create: needs an account name (create:<Name>)." };
+                        }
+                        const created = await request(`/services/data/${apiVersion}/sobjects/Account`, {
+                            method: "POST",
+                            body: JSON.stringify({ Name: name }),
+                        });
+                        const result = await setField({ ...operation, operation: "set_field", afterValue: String(created.id) });
+                        return result.status === "applied"
+                            ? { ...result, detail: `Created account "${name}" (${created.id}) and linked ${operation.objectType}/${operation.objectId} to it.`, providerData: { accountId: String(created.id), createdAccount: true } }
+                            : result;
+                    }
                     return await setField({ ...operation, operation: "set_field" });
+                }
                 case "create_task":
                     return await createTask(operation);
                 case "archive_record":

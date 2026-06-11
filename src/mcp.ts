@@ -46,6 +46,7 @@ import type { FieldMappings } from "./mappings.ts";
 import { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
 import { builtinAuditRules } from "./rules.ts";
 import { sampleSnapshot } from "./sampleData.ts";
+import { suggestValues } from "./suggest.ts";
 import type { CanonicalGtmSnapshot, GtmConnector, PatchPlan } from "./types.ts";
 
 function content(value: unknown) {
@@ -163,6 +164,27 @@ export async function startMcpServer() {
         : ruleSet;
       const plan = auditSnapshot(await readSnapshot(provider, inputPath), policy, selected);
       return content(output === "markdown" ? patchPlanToMarkdown(plan) : plan);
+    },
+  );
+
+  server.registerTool(
+    "fullstackgtm_suggest",
+    {
+      title: "Suggest Placeholder Values",
+      description:
+        "Derive values for a plan's requires_human_* placeholder operations from snapshot " +
+        "evidence (account-name matching, contact associations), with confidence levels and " +
+        "reasons. Read-only; feed accepted values into fullstackgtm_apply's valueOverrides.",
+      inputSchema: {
+        planPath: z.string(),
+        provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
+        inputPath: z.string().optional(),
+      },
+    },
+    async ({ planPath, provider, inputPath }) => {
+      const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8")) as PatchPlan;
+      const snapshot = await readSnapshot(provider, inputPath);
+      return content({ suggestions: suggestValues(plan, snapshot) });
     },
   );
 

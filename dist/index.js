@@ -6,12 +6,14 @@ export { DEFAULT_LOOPBACK_PORT, DEFAULT_OAUTH_SCOPES, exchangeHubspotCode, refre
 export { createSalesforceConnector, } from "./connectors/salesforce.js";
 export { pollSalesforceDeviceLogin, refreshSalesforceToken, startSalesforceDeviceLogin, validateSalesforceToken, } from "./connectors/salesforceAuth.js";
 export { createStripeConnector } from "./connectors/stripe.js";
-export { credentialsDir, credentialsPath, deleteCredential, getCredential, resolveHubspotAccessToken, resolveHubspotConnection, storeCredential, } from "./credentials.js";
+export { activeProfile, credentialsDir, credentialsPath, DEFAULT_PROFILE, deleteCredential, getCredential, listProfiles, resolveHubspotAccessToken, resolveHubspotConnection, setActiveProfile, storeCredential, } from "./credentials.js";
 export { generateDemoSnapshot } from "./demo.js";
 export { diffFindings, diffSnapshots, diffToMarkdown, } from "./diff.js";
 export { mergeSnapshots, } from "./merge.js";
 export { createFilePlanStore } from "./planStore.js";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
+export { auditReportToHtml, auditReportToMarkdown } from "./report.js";
 export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, normalizeFieldMappings, readMappedValue, } from "./mappings.js";
-export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, requiresHumanInput, staleDealRule, } from "./rules.js";
+export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, duplicateOpenDealRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, requiresHumanInput, staleDealRule, } from "./rules.js";
 export { sampleSnapshot } from "./sampleData.js";
+export { suggestValues } from "./suggest.js";

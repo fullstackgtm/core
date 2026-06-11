@@ -12,6 +12,7 @@ export declare function doctorReport(env?: Record<string, string | undefined>): 
         ok: boolean;
         required: string;
     };
+    profile: string;
     credentialStore: {
         path: string;
         exists: boolean;

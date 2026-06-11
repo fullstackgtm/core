@@ -9,13 +9,15 @@ import { DEFAULT_LOOPBACK_PORT, openInBrowser, runHubspotLoopbackLogin, validate
 import { createSalesforceConnector } from "./connectors/salesforce.js";
 import { createStripeConnector } from "./connectors/stripe.js";
 import { pollSalesforceDeviceLogin, startSalesforceDeviceLogin, validateSalesforceToken, } from "./connectors/salesforceAuth.js";
-import { credentialsPath, deleteCredential, getCredential, resolveHubspotConnection, resolveSalesforceConnection, storeCredential, } from "./credentials.js";
+import { activeProfile, credentialsPath, DEFAULT_PROFILE, deleteCredential, getCredential, listProfiles, resolveHubspotConnection, resolveSalesforceConnection, setActiveProfile, storeCredential, } from "./credentials.js";
 import { generateDemoSnapshot } from "./demo.js";
 import { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
 import { mergeSnapshots } from "./merge.js";
 import { createFilePlanStore } from "./planStore.js";
+import { auditReportToHtml, auditReportToMarkdown } from "./report.js";
 import { builtinAuditRules } from "./rules.js";
 import { sampleSnapshot } from "./sampleData.js";
+import { suggestValues } from "./suggest.js";
 function usage() {
     return `FullStackGTM — audit GTM data across providers, propose reviewable patch plans,
 and apply only explicitly approved operations.
@@ -35,13 +37,27 @@ Usage:
     echo "$HUBSPOT_TOKEN" | fullstackgtm login hubspot
   fullstackgtm snapshot [source options] [--since <iso>] [--out <path> | --archive <dir>]
   fullstackgtm audit [source options] [audit options] [--save]
+  fullstackgtm report [source options] [audit options] [report options]
   fullstackgtm diff --before <a.json> --after <b.json> [--json] [--fail-on-new-findings]
   fullstackgtm merge --input <a.json> --input <b.json> [...] --out <merged.json> [--json]
-  fullstackgtm plans list [--status <s>] | show <id> | approve <id> --operations <ids|all> | reject <id>
+  fullstackgtm suggest --plan-id <id> | --plan <path>  [source options] [--json] [--out <path>]
+                                               derive values for requires_human_* placeholders
+                                               from snapshot evidence, with confidence + reasons
+  fullstackgtm plans list [--status <s>] | show <id> | reject <id>
+  fullstackgtm plans approve <id> --operations <ids|all> [--value <opId>=<v>]
+  fullstackgtm plans approve <id> --values-from <suggestions.json> [--min-confidence high|low] [--include-creates]
   fullstackgtm apply --plan-id <id> --provider <name>
   fullstackgtm apply --plan <path> --provider <name> --approve <ids|all> [options]
   fullstackgtm rules [--json]
+  fullstackgtm profiles [--json]               list credential profiles
   fullstackgtm doctor [--json]                 check install, credentials, and next step
+
+Profiles (multi-organization use):
+  --profile <name>       Scope credentials AND stored plans to a named profile
+                         (also: FULLSTACKGTM_PROFILE). One profile per client
+                         org keeps logins isolated and prevents a plan proposed
+                         against one CRM from being applied through another's
+                         credentials. Omitted = the default profile.
 
 Plan lifecycle:
   audit --save persists the dry-run plan to ~/.fullstackgtm/plans. Approve
@@ -78,6 +94,17 @@ Audit options:
   --today <date>         Override today's date for deterministic audits
   --stale-days <n>       Days without activity before an open deal is stale
   --fail-on <severity>   Exit 2 if any finding is at or above info|warning|critical
+
+Report options (report renders the audit as a client-ready deliverable):
+  --plan <path>          Render an existing plan JSON instead of re-auditing
+                         (add --input <snapshot.json> for record counts)
+  --client <name>        Organization name shown in the heading and summary
+  --title <text>         Report heading (default "GTM Data Health Report")
+  --prepared-by <name>   Attribution shown in the footer
+  --format <fmt>         markdown (default) or html (self-contained, printable;
+                         inferred from an --out path ending in .html)
+  --max-examples <n>     Example records listed per rule (default 10)
+  --out <path>           Write the report to a file instead of stdout
 
 Apply options:
   --plan <path>          Patch plan JSON produced by \`audit --out\`
@@ -288,6 +315,60 @@ async function audit(args) {
         process.exitCode = 2;
     }
 }
+/**
+ * Render an audit as a client-facing deliverable. Same sources and audit
+ * options as `audit`; `--plan` instead renders an existing plan JSON without
+ * re-fetching (useful for a plan produced earlier or by another machine).
+ */
+async function reportCommand(args) {
+    const loaded = loadConfig(option(args, "--config") ?? undefined);
+    const configuredRules = await resolveConfiguredRules(loaded);
+    let plan;
+    let snapshot;
+    const planPath = option(args, "--plan");
+    if (planPath) {
+        plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
+        const input = option(args, "--input");
+        if (input) {
+            snapshot = JSON.parse(readFileSync(resolve(process.cwd(), input), "utf8"));
+        }
+    }
+    else {
+        snapshot = await readSnapshot(args);
+        const policy = mergePolicy(defaultPolicy(), loaded?.config);
+        const today = option(args, "--today");
+        if (today)
+            policy.today = today;
+        const staleDealDays = numericOption(args, "--stale-days");
+        if (staleDealDays !== undefined)
+            policy.staleDealDays = staleDealDays;
+        plan = auditSnapshot(snapshot, policy, selectedRules(args, configuredRules));
+    }
+    const reportOptions = {
+        title: option(args, "--title") ?? undefined,
+        clientName: option(args, "--client") ?? undefined,
+        preparedBy: option(args, "--prepared-by") ?? undefined,
+        date: option(args, "--today") ?? undefined,
+        maxExamplesPerRule: numericOption(args, "--max-examples"),
+        rules: configuredRules,
+        snapshot,
+    };
+    const out = option(args, "--out");
+    const format = option(args, "--format") ?? (out?.endsWith(".html") ? "html" : "markdown");
+    if (format !== "markdown" && format !== "html") {
+        throw new Error("--format must be markdown or html");
+    }
+    const rendered = format === "html"
+        ? auditReportToHtml(plan, reportOptions)
+        : auditReportToMarkdown(plan, reportOptions);
+    if (out) {
+        writeFileSync(resolve(process.cwd(), out), rendered);
+        console.log(`Wrote ${format} report (${plan.findings.length} findings) to ${out}`);
+    }
+    else {
+        console.log(rendered.trimEnd());
+    }
+}
 async function rulesCommand(args) {
     const loaded = loadConfig(option(args, "--config") ?? undefined);
     const rules = await resolveConfiguredRules(loaded);
@@ -321,6 +402,78 @@ function parseValueOverrides(args) {
         valueOverrides[pair.slice(0, separator)] = pair.slice(separator + 1);
     }
     return valueOverrides;
+}
+async function suggest(args) {
+    const planId = option(args, "--plan-id");
+    const planPath = option(args, "--plan");
+    if (!planId && !planPath)
+        throw new Error("suggest requires --plan <path> or --plan-id <id>");
+    let plan;
+    if (planId) {
+        const stored = await createFilePlanStore().get(planId);
+        if (!stored)
+            throw new Error(`No stored plan with id ${planId}.`);
+        plan = stored.plan;
+    }
+    else {
+        plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
+    }
+    const snapshot = await readSnapshot(args);
+    const suggestions = suggestValues(plan, snapshot);
+    const payload = { planId: planId ?? planPath, suggestions };
+    const outPath = option(args, "--out");
+    if (outPath)
+        writeFileSync(resolve(process.cwd(), outPath), `${JSON.stringify(payload, null, 2)}\n`);
+    if (args.includes("--json")) {
+        console.log(JSON.stringify(payload, null, 2));
+        return;
+    }
+    if (suggestions.length === 0) {
+        console.log("No requires_human_* placeholder operations in this plan — nothing to suggest.");
+        return;
+    }
+    const byConfidence = {};
+    for (const s of suggestions)
+        byConfidence[s.confidence] = (byConfidence[s.confidence] ?? 0) + 1;
+    console.log(`Suggestions for ${suggestions.length} placeholder operation(s):\n`);
+    for (const s of suggestions) {
+        const marker = s.confidence === "high" ? "✓" : s.confidence === "low" ? "~" : s.confidence === "create" ? "+" : "✗";
+        console.log(`${marker} [${s.confidence}] ${s.operationId} ${s.objectName ?? s.objectId}`);
+        console.log(`    ${s.suggestedValue ? `→ ${s.suggestedValue}` : "(no suggestion)"} — ${s.reason}`);
+    }
+    console.log(`\n${Object.entries(byConfidence).map(([k, v]) => `${k}: ${v}`).join(" · ")}`);
+    if (planId && (byConfidence.high ?? 0) > 0 && !outPath) {
+        console.log(`\nChain it:\n  fullstackgtm suggest --plan-id ${planId} ${snapshotSourceHint(args)}--out suggestions.json\n  fullstackgtm plans approve ${planId} --values-from suggestions.json\n  fullstackgtm apply --plan-id ${planId} --provider <name>`);
+    }
+}
+function snapshotSourceHint(args) {
+    const provider = option(args, "--provider");
+    if (provider)
+        return `--provider ${provider} `;
+    const input = option(args, "--input");
+    if (input)
+        return `--input ${input} `;
+    return "";
+}
+function readSuggestionValues(path, minConfidence, includeCreates) {
+    const raw = JSON.parse(readFileSync(resolve(process.cwd(), path), "utf8"));
+    if (!Array.isArray(raw.suggestions)) {
+        throw new Error(`${path} is not a suggestions file (expected { suggestions: [...] } from \`fullstackgtm suggest --out\`).`);
+    }
+    const accepted = new Set(minConfidence === "low" ? ["high", "low"] : ["high"]);
+    const overrides = {};
+    let skipped = 0;
+    for (const s of raw.suggestions) {
+        if (!s.suggestedValue)
+            continue;
+        if (accepted.has(s.confidence) || (includeCreates && s.confidence === "create")) {
+            overrides[s.operationId] = s.suggestedValue;
+        }
+        else {
+            skipped += 1;
+        }
+    }
+    return { overrides, skipped };
 }
 async function apply(args) {
     const provider = option(args, "--provider");
@@ -484,17 +637,43 @@ async function plansCommand(args) {
     if (subcommand === "approve") {
         const planId = rest.find((arg) => !arg.startsWith("--") && !isOptionValue(rest, arg));
         if (!planId)
-            throw new Error("Usage: fullstackgtm plans approve <planId> --operations <ids|all>");
+            throw new Error("Usage: fullstackgtm plans approve <planId> --operations <ids|all> | --values-from <suggestions.json>");
         const operations = option(rest, "--operations");
-        if (!operations)
-            throw new Error("plans approve requires --operations <ids|all>");
+        const valuesFrom = option(rest, "--values-from");
+        if (!operations && !valuesFrom) {
+            throw new Error("plans approve requires --operations <ids|all> and/or --values-from <suggestions.json>");
+        }
         const stored = await store.get(planId);
         if (!stored)
             throw new Error(`No stored plan with id ${planId}.`);
+        // Values from a `fullstackgtm suggest --out` file. High-confidence only by
+        // default; widen with --min-confidence low, opt into record-creating
+        // values (create:<Name>) with --include-creates. Explicit --value wins.
+        let fileOverrides = {};
+        if (valuesFrom) {
+            const minConfidence = option(rest, "--min-confidence") ?? "high";
+            if (!["high", "low"].includes(minConfidence)) {
+                throw new Error("--min-confidence must be high or low");
+            }
+            const { overrides, skipped } = readSuggestionValues(valuesFrom, minConfidence, rest.includes("--include-creates"));
+            fileOverrides = overrides;
+            if (Object.keys(overrides).length === 0) {
+                throw new Error(`No suggestions in ${valuesFrom} meet the confidence bar (${skipped} below it). Re-run with --min-confidence low or --include-creates, or pass explicit --value overrides.`);
+            }
+            if (skipped > 0) {
+                console.log(`Skipped ${skipped} suggestion(s) below the confidence bar (widen with --min-confidence low / --include-creates).`);
+            }
+        }
+        const explicitOverrides = parseValueOverrides(rest);
         const operationIds = operations === "all"
             ? stored.plan.operations.map((operation) => operation.id)
-            : operations.split(",").map((id) => id.trim()).filter(Boolean);
-        const updated = await store.approveOperations(planId, operationIds, parseValueOverrides(rest));
+            : operations
+                ? operations.split(",").map((id) => id.trim()).filter(Boolean)
+                : Object.keys(fileOverrides);
+        const updated = await store.approveOperations(planId, operationIds, {
+            ...fileOverrides,
+            ...explicitOverrides,
+        });
         console.log(`Approved ${updated.approvedOperationIds.length} operation(s) on ${planId}. Apply with \`fullstackgtm apply --plan-id ${planId} --provider <name>\`.`);
         return;
     }
@@ -566,11 +745,18 @@ async function brokerLogin(baseUrl) {
     // Self-reported, shown to the approver so they can recognize this request
     // and refuse one they didn't initiate.
     const requesterLabel = `${os.hostname()} (${process.platform}, ${os.userInfo().username})`;
-    const startResponse = await fetch(`${base}/api/cli/auth/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requesterLabel }),
-    });
+    let startResponse;
+    try {
+        startResponse = await fetch(`${base}/api/cli/auth/start`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ requesterLabel }),
+        });
+    }
+    catch (error) {
+        const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+        throw new Error(`Cannot reach the hosted deployment at ${base}${cause}. Check the --via URL and network access.`);
+    }
     if (!startResponse.ok) {
         throw new Error(`Could not start pairing with ${base} (${startResponse.status}). Is this a FullStackGTM deployment?`);
     }
@@ -806,6 +992,7 @@ export function doctorReport(env = process.env) {
     return {
         package: packageInfo,
         node: { version: process.versions.node, ok: nodeMajor >= 20, required: ">=20" },
+        profile: activeProfile(),
         credentialStore: { path: storePath, exists: existsSync(storePath) },
         config: { path: configPath, exists: existsSync(configPath) },
         providers,
@@ -844,6 +1031,7 @@ function doctorCommand(args) {
     const lines = [
         `Package:    ${report.package.name} ${report.package.version}`,
         `Node:       v${report.node.version} (${report.node.required} required) ${mark(report.node.ok)}`,
+        `Profile:    ${report.profile}${report.profile === DEFAULT_PROFILE ? "" : " (named profile — credentials and plans are scoped to it)"}`,
         `Cred store: ${report.credentialStore.path} (${report.credentialStore.exists ? "present" : "not created yet — created on first login"})`,
         `Config:     ${report.config.exists ? report.config.path : "none — defaults apply"}`,
         "",
@@ -862,8 +1050,39 @@ function doctorCommand(args) {
     if (!report.node.ok)
         process.exitCode = 1;
 }
+/**
+ * Pull the global `--profile <name>` flag out of argv (it may appear before
+ * or after the command) and activate it. Stripping it keeps positional
+ * detection in subcommands — `login <provider>`, `plans show <id>` — simple.
+ */
+function extractProfile(argv) {
+    const index = argv.indexOf("--profile");
+    if (index === -1)
+        return argv;
+    const name = argv[index + 1];
+    if (!name)
+        throw new Error("--profile requires a name, e.g. --profile acme");
+    setActiveProfile(name);
+    return [...argv.slice(0, index), ...argv.slice(index + 2)];
+}
+function profilesCommand(args) {
+    const profiles = listProfiles();
+    const current = activeProfile();
+    if (args.includes("--json")) {
+        console.log(JSON.stringify({ active: current, profiles }, null, 2));
+        return;
+    }
+    for (const profile of profiles) {
+        console.log(`${profile === current ? "*" : " "} ${profile}`);
+    }
+    if (!profiles.includes(current)) {
+        console.log(`* ${current} (selected; created on first login)`);
+    }
+    console.log("\nSelect with --profile <name> on any command, or set FULLSTACKGTM_PROFILE. " +
+        "Each profile keeps its own credentials and stored plans.");
+}
 export async function runCli(argv) {
-    const [command, ...args] = argv;
+    const [command, ...args] = extractProfile(argv);
     if (!command || command === "--help" || command === "-h") {
         console.log(usage());
         return;
@@ -888,12 +1107,24 @@ export async function runCli(argv) {
         await audit(args);
         return;
     }
+    if (command === "report") {
+        await reportCommand(args);
+        return;
+    }
     if (command === "rules") {
         await rulesCommand(args);
         return;
     }
     if (command === "doctor") {
         doctorCommand(args);
+        return;
+    }
+    if (command === "suggest") {
+        await suggest(args);
+        return;
+    }
+    if (command === "profiles") {
+        profilesCommand(args);
         return;
     }
     if (command === "diff") {

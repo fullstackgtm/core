@@ -18,6 +18,7 @@ export declare const staleDealRule: GtmAuditRule;
 export declare const missingDealAmountRule: GtmAuditRule;
 export declare const duplicateAccountDomainRule: GtmAuditRule;
 export declare const duplicateContactEmailRule: GtmAuditRule;
+export declare const duplicateOpenDealRule: GtmAuditRule;
 export declare const activeDealAccountWithoutContactsRule: GtmAuditRule;
 export declare const closingSoonInactiveRule: GtmAuditRule;
 export declare const accountSingleSourceRule: GtmAuditRule;

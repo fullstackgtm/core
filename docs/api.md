@@ -57,7 +57,8 @@ release.
 
 ## CLI
 
-Commands: `login` / `logout`, `snapshot`, `audit`, `diff`, `merge`, `plans`, `apply`, `rules`.
+Commands: `login` / `logout`, `snapshot`, `audit`, `report`, `diff`, `merge`, `plans`,
+`apply`, `rules`, `profiles`, `doctor`.
 Exit codes: `0` success · `1` error · `2` findings/regressions at the requested gate
 (`--fail-on`, `--fail-on-new-findings`). `--json` everywhere; JSON output shapes are stable.
 
@@ -65,6 +66,17 @@ Credential resolution ladder: explicit `--token-env` → ambient env
 (`HUBSPOT_ACCESS_TOKEN`, `SALESFORCE_ACCESS_TOKEN`+`SALESFORCE_INSTANCE_URL`,
 `STRIPE_SECRET_KEY`) → stored login (`~/.fullstackgtm`, `FSGTM_HOME` override)
 → broker pairing (`login --via`).
+
+Profiles: the global `--profile <name>` flag (or `FULLSTACKGTM_PROFILE`) scopes
+stored logins and stored plans to `profiles/<name>/` under the home directory,
+so one operator can work across several organizations' CRMs without mixing
+credentials or applying one org's plan through another's connection. The
+default profile keeps the historical flat layout.
+
+`report` renders an audit (or an existing plan via `--plan`) as a client-ready
+deliverable in markdown or self-contained HTML: severity counts, prose summary,
+per-rule detail with capped examples, and next steps. `auditReportToMarkdown` /
+`auditReportToHtml` expose the same rendering programmatically.
 
 ## MCP
 

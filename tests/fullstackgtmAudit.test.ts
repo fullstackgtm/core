@@ -4,6 +4,7 @@ import {
   auditFindingId,
   auditSnapshot,
   builtinAuditRules,
+  duplicateOpenDealRule,
   defaultPolicy,
   sampleSnapshot,
   type GtmAuditRule,
@@ -91,4 +92,36 @@ test("fullstackgtm audit findings have stable ids across runs", () => {
     first.operations.map((operation) => operation.id),
     second.operations.map((operation) => operation.id),
   );
+});
+
+test("duplicate open deals are flagged once per group, scoped by account", () => {
+  const snapshot = {
+    generatedAt: "2026-05-01T00:00:00.000Z",
+    provider: "mock" as const,
+    users: [],
+    accounts: [],
+    contacts: [],
+    activities: [],
+    deals: [
+      // Unlinked duplicates — names differ only by case/whitespace.
+      { id: "d1", name: "Acme — Renewal" },
+      { id: "d2", name: "  acme —  renewal " },
+      // Same name but closed: never grouped.
+      { id: "d3", name: "Acme — Renewal", isClosed: true },
+      // Same name on a linked account: a different scope, alone in its group.
+      { id: "d4", name: "Acme — Renewal", accountId: "a1" },
+    ],
+  };
+  const plan = auditSnapshot(snapshot, defaultPolicy("2026-05-03"), [duplicateOpenDealRule]);
+
+  assert.equal(plan.findings.length, 1);
+  const finding = plan.findings[0];
+  assert.equal(finding.ruleId, "duplicate-open-deal");
+  assert.equal(finding.objectId, "d1");
+  assert.match(finding.summary, /2 open deals/);
+  assert.match(finding.summary, /d1, d2/);
+
+  assert.equal(plan.operations.length, 1);
+  assert.equal(plan.operations[0].operation, "create_task");
+  assert.equal(plan.operations[0].approvalRequired, true);
 });
