@@ -44,11 +44,14 @@ import {
   computeFrontStates,
   createFileObservationStore,
   diffFrontStates,
+  loadCaptureTexts,
   loadMarketConfig,
   starterMarketConfig,
   validateObservationSet,
+  verifyEvidenceSpans,
   type ObservationSet,
 } from "./market.ts";
+import { buildWorksheet, classifyMarket } from "./marketClassify.ts";
 import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
 import {
   DEFAULT_RUBRIC,
@@ -107,13 +110,18 @@ Usage:
                                                found (exists/ambiguous) — call before ANY record creation
   fullstackgtm market init --category <name>   start a market map: vendors + claim taxonomy as reviewable config
   fullstackgtm market capture [--config <path>] [--run <label>]
-  fullstackgtm market observe --from <observations.json>
+  fullstackgtm market classify [--run <label>] [--vendor <id>] [--model m] [--out <path>]
+  fullstackgtm market worksheet --vendor <id> [--out <path>]
+  fullstackgtm market observe --from <observations.json> [--unverified]
   fullstackgtm market fronts [--run <label>] [--diff <prior-run>] [--json]
   fullstackgtm market report [--run <label>] [--format md|html] [--out <path>]
+  fullstackgtm market refresh [--run <label>] [--model m]
                                                the live competitive map: capture vendor pages (content-addressed),
-                                               ingest intensity readings with verbatim-quote evidence, compute
-                                               deterministic front states (open/contested/owned/saturated) and
-                                               drift between runs, render the client-ready field report
+                                               classify intensity per claim (LLM bring-your-own-key, or fill the
+                                               worksheet with any agent) — every quoted span is verified verbatim
+                                               against the stored capture it cites before it's accepted — then
+                                               compute deterministic front states and drift, render the field
+                                               report. refresh = capture → classify → drift → report in one step
   fullstackgtm suggest --plan-id <id> | --plan <path>  [source options] [--json] [--out <path>]
                                                derive values for requires_human_* placeholders
                                                from snapshot evidence, with confidence + reasons
@@ -696,15 +704,22 @@ the free keyword baseline; score always needs a key (scoring is LLM work).`);
  * TTY a missing key is captured once (validated, stored 0600 like provider
  * logins). Non-interactive contexts get an actionable error instead.
  */
-async function requireLlmCredential(command: "parse" | "score" = "parse"): Promise<{ provider: LlmProvider; apiKey: string }> {
+async function requireLlmCredential(
+  command: "parse" | "score" | "market classify" = "parse",
+): Promise<{ provider: LlmProvider; apiKey: string }> {
   const resolved = resolveLlmCredential();
   if (resolved) return resolved;
   // Scoring is inherently LLM work — there is no keyword fallback to suggest.
   const fallbackHint =
-    command === "parse" ? ", or pass --deterministic for the free keyword baseline" : " (call score has no non-LLM mode)";
+    command === "parse"
+      ? ", or pass --deterministic for the free keyword baseline"
+      : command === "score"
+        ? " (call score has no non-LLM mode)"
+        : ", or classify by hand: `market worksheet --vendor <id>` then `market observe --from`";
+  const work = command === "score" ? "scoring" : command === "parse" ? "extraction" : "classification";
   if (!process.stdin.isTTY) {
     throw new Error(
-      `LLM ${command === "score" ? "scoring" : "extraction"} needs an API key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, or run \`echo "$KEY" | fullstackgtm login anthropic\` (or \`login openai\`) once${fallbackHint}.`,
+      `LLM ${work} needs an API key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, or run \`echo "$KEY" | fullstackgtm login anthropic\` (or \`login openai\`) once${fallbackHint}.`,
     );
   }
   console.error("LLM parsing needs an API key (Anthropic or OpenAI) — yours, used directly with the provider.");
@@ -824,9 +839,11 @@ function buildCallPlan(
 /**
  * The market map: claim taxonomy in a reviewable config file, page captures
  * and append-only observations under the profile home, deterministic front
- * states and reports computed from the store. Classification (LLM intensity
- * readings) lands in a later change; until then `market observe --from`
- * ingests proposal files produced by an agent or a human.
+ * states and reports computed from the store. Intensity readings enter as
+ * proposals through two channels — `classify` (LLM, bring-your-own-key, the
+ * call-intelligence pattern) and `worksheet`/`observe` (an agent or human
+ * fills the worksheet) — and BOTH pass the same mechanical gate: every quoted
+ * span is verified verbatim against the stored capture it cites.
  */
 async function marketCommand(args: string[]) {
   const [subcommand, ...rest] = args;
@@ -836,9 +853,18 @@ async function marketCommand(args: string[]) {
     console.log(`Usage:
 market init --category <name> [--out <path>]   write a starter market.config.json
 market capture [--config <path>] [--run <label>]
-market observe --from <observations.json> [--config <path>]
+market classify [--run <label>] [--capture-run <label>] [--vendor <id>] [--model m] [--out <path>]
+market worksheet --vendor <id> [--capture-run <label>] [--out <path>]
+market observe --from <observations.json> [--unverified]
 market fronts [--config <path>] [--run <label>] [--diff <prior-run>] [--json]
 market report [--config <path>] [--run <label>] [--format md|html] [--out <path>]
+market refresh [--run <label>] [--model m]     capture → classify → fronts drift → HTML report
+
+classify uses your Anthropic/OpenAI key (like call parse) to read the stored
+captures and propose intensity readings; worksheet is the no-key path (an
+agent or human fills it, submits via observe). Either way, every quoted span
+is verified character-for-character against the capture it cites before the
+observation is accepted — quotes that aren't on the page bounce.
 
 The taxonomy (vendors + claims) is config you review and version; captures
 and observations live under ~/.fullstackgtm/market/<category> (profile-scoped,
@@ -883,8 +909,97 @@ recomputed deterministically on every invocation — never stored.`);
       process.exitCode = 1;
       return;
     }
+    if (!rest.includes("--unverified")) {
+      const { textByHash } = loadCaptureTexts(config.category);
+      const failures = verifyEvidenceSpans(set.observations, textByHash);
+      if (failures.length > 0) {
+        console.error(`Rejected: ${failures.length} evidence span(s) failed verification against the stored captures`);
+        for (const failure of failures.slice(0, 20)) {
+          console.error(`  - ${failure.vendorId} × ${failure.claimId}: ${failure.problem}`);
+        }
+        console.error("Quotes must be copied verbatim from the captured pages. (--unverified skips this gate when the captures genuinely live elsewhere.)");
+        process.exitCode = 1;
+        return;
+      }
+    }
     await store.append(set);
     console.log(`Appended ${set.runLabel}: ${set.observations.length} observations (${set.extractor})`);
+    return;
+  }
+
+  if (subcommand === "worksheet") {
+    const vendorId = option(rest, "--vendor");
+    if (!vendorId) throw new Error("market worksheet requires --vendor <id>");
+    const worksheet = buildWorksheet(config, vendorId, { captureRun: option(rest, "--capture-run") ?? undefined });
+    const outPath = option(rest, "--out");
+    const payload = `${JSON.stringify(worksheet, null, 2)}\n`;
+    if (outPath) {
+      writeFileSync(resolve(process.cwd(), outPath), payload);
+      console.log(`Wrote ${outPath} (${worksheet.pages.length} captured pages, ${worksheet.claims.length} claims)`);
+    } else {
+      console.log(payload);
+    }
+    return;
+  }
+
+  if (subcommand === "classify") {
+    const credential = await requireLlmCredential("market classify");
+    const vendorFilter = option(rest, "--vendor");
+    const outPath = option(rest, "--out");
+    if (vendorFilter && !outPath) {
+      throw new Error(
+        "market classify --vendor produces a partial set (coverage validation would reject it) — pass --out <path> to inspect/merge it by hand",
+      );
+    }
+    const result = await classifyMarket(config, {
+      llm: { ...credential, model: option(rest, "--model") ?? undefined },
+      runLabel: option(rest, "--run") ?? option(rest, "--capture-run") ?? "run-1",
+      captureRun: option(rest, "--capture-run") ?? undefined,
+      vendors: vendorFilter ? [vendorFilter] : undefined,
+    });
+    if (result.retriedVendorIds.length > 0) {
+      console.error(`Span verification bounced ${result.retriedVendorIds.join(", ")} once; retry passed.`);
+    }
+    if (outPath) {
+      writeFileSync(resolve(process.cwd(), outPath), `${JSON.stringify(result.set, null, 2)}\n`);
+      console.log(`Wrote ${outPath}: ${result.set.observations.length} verified observations (${result.set.extractor})`);
+      return;
+    }
+    const problems = validateObservationSet(config, result.set);
+    if (problems.length > 0) {
+      throw new Error(`Classified set failed validation: ${problems.slice(0, 5).join("; ")}`);
+    }
+    await store.append(result.set);
+    console.log(
+      `Appended ${result.set.runLabel}: ${result.set.observations.length} observations, every span verified (${result.set.extractor})`,
+    );
+    return;
+  }
+
+  if (subcommand === "refresh") {
+    const credential = await requireLlmCredential("market classify");
+    const runLabel = option(rest, "--run") ?? `run-${new Date().toISOString().slice(0, 10)}`;
+    const prior = await store.latest();
+    console.log(`Capturing ${config.vendors.length} vendors as ${runLabel}…`);
+    const captured = await captureMarket(config, { runLabel });
+    const failed = captured.entries.filter((entry) => !entry.captureHash);
+    if (failed.length > 0) console.log(`${failed.length} page(s) failed/empty — affected cells will verify against remaining pages or read unobservable.`);
+    console.log(`Classifying with ${credential.provider}…`);
+    const result = await classifyMarket(config, {
+      llm: { ...credential, model: option(rest, "--model") ?? undefined },
+      runLabel,
+      captureRun: runLabel,
+    });
+    await store.append(result.set);
+    const fronts = computeFrontStates(config, result.set);
+    if (prior) {
+      const drift = diffFrontStates(computeFrontStates(config, prior), fronts);
+      if (drift.length === 0) console.log(`No front changes since ${prior.runLabel}.`);
+      for (const change of drift) console.log(`CHANGED   ${change.claimId}: ${change.before} → ${change.after}`);
+    }
+    const outPath = option(rest, "--out") ?? `${config.category}-${runLabel}.html`;
+    writeFileSync(resolve(process.cwd(), outPath), marketMapToHtml(config, result.set));
+    console.log(`Wrote ${outPath}`);
     return;
   }
 
@@ -938,7 +1053,9 @@ recomputed deterministically on every invocation — never stored.`);
     return;
   }
 
-  throw new Error(`Unknown market subcommand: ${subcommand} (try: init, capture, observe, fronts, report)`);
+  throw new Error(
+    `Unknown market subcommand: ${subcommand} (try: init, capture, classify, worksheet, observe, fronts, report, refresh)`,
+  );
 }
 
 /**

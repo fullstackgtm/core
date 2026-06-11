@@ -256,7 +256,9 @@ test("cli: market init, observe, fronts, report round-trip", async () => {
 
     writeFileSync(join(work, "market.config.json"), `${JSON.stringify(config(), null, 2)}\n`);
     writeFileSync(join(work, "observations.json"), JSON.stringify(fullSet()));
-    await runCli(["market", "observe", "--from", "observations.json"]);
+    // The fixture set cites captures that don't exist in this empty profile home;
+    // span verification has its own tests — this one exercises the round-trip.
+    await runCli(["market", "observe", "--from", "observations.json", "--unverified"]);
     assert.ok(existsSync(join(home, "market", "test-category", "observations", "run-1.json")));
 
     await runCli(["market", "fronts", "--json"]);

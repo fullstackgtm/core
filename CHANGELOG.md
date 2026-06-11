@@ -5,6 +5,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.17.0] — 2026-06-11
+
+Market map classification: intensity readings become a one-command step, and
+the verbatim-quote rule becomes a mechanical gate instead of a prompt
+instruction.
+
+### Added
+
+- **`fullstackgtm market classify`** — LLM intensity readings for every
+  vendor × claim cell from the stored captures, through the same
+  bring-your-own-key constrained-tool-call seam as `call parse`
+  (provenance `extractor: "llm:<provider>:<model>"`). Vendors with no
+  usable captures score UNOBSERVABLE deterministically, without an LLM
+  call. `--vendor` classifies one vendor to `--out` for hand-merging;
+  `--model` overrides the provider default.
+- **Mechanical span verification** — because market sources are *stored*
+  captures (unlike transcripts, which pass through), every quoted evidence
+  span is checked character-for-character (whitespace-normalized) against
+  the capture it cites. Readings that fail bounce back to the model once
+  with the failures named; persistent failures abort with nothing stored.
+  The same gate now guards `market observe` (escape hatch: `--unverified`,
+  for sets whose captures genuinely live elsewhere) and the MCP submission
+  path — every proposal channel passes the same gate.
+- **`fullstackgtm market worksheet --vendor <id>`** — the no-key channel:
+  a self-contained packet (claims with judging definitions, surface rule,
+  captured page texts) for an agent or human to classify by hand and
+  submit via `observe`.
+- **`fullstackgtm market refresh`** — capture → classify → front drift →
+  HTML field report, one command. The weekly refresh is now a single
+  invocation (schedule it however you schedule things).
+- **MCP**: `fullstackgtm_market_worksheet` and `fullstackgtm_market_observe`
+  (validates + verifies + appends; returns the computed front states on
+  acceptance).
+- `forcedToolCall` exported from `llm.ts` — the one seam every LLM feature
+  in the package goes through.
+
 ## [0.16.0] — 2026-06-11
 
 The market map: a live model of the competitive category a company sells

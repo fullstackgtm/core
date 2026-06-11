@@ -239,7 +239,13 @@ export function parseRubric(json: string): Rubric {
 
 // ── Provider plumbing (raw fetch, forced tool calls) ───────────────────────
 
-async function forcedToolCall(
+/**
+ * Shared constrained-tool-call plumbing: force the model to answer through a
+ * single tool whose input_schema is the output contract. Exported for other
+ * semi-deterministic features (market classification) — every LLM feature in
+ * the package goes through this one seam.
+ */
+export async function forcedToolCall(
   prompt: string,
   toolName: string,
   schema: object,

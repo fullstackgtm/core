@@ -86,6 +86,7 @@ export async function runOpenAICompatAgent(
         toolErrors += 1;
       }
       messages.push({ role: "tool", tool_call_id: call.id, content: result });
+      opts.onEvent?.({ type: "tool_result", turn: turns, name: call.function?.name ?? "", output: result.slice(0, 4000) });
     }
   }
 

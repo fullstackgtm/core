@@ -48,6 +48,16 @@ import { builtinAuditRules } from "./rules.ts";
 import { sampleSnapshot } from "./sampleData.ts";
 import { normalizeTranscript, parseCall } from "./calls.ts";
 import { extractInsightsLlm, resolveLlmCredential } from "./llm.ts";
+import {
+  computeFrontStates,
+  createFileObservationStore,
+  loadCaptureTexts,
+  loadMarketConfig,
+  validateObservationSet,
+  verifyEvidenceSpans,
+  type ObservationSet,
+} from "./market.ts";
+import { buildWorksheet } from "./marketClassify.ts";
 import { resolveRecord } from "./resolve.ts";
 import { suggestValues } from "./suggest.ts";
 import type { CanonicalGtmSnapshot, GtmConnector, PatchPlan } from "./types.ts";
@@ -304,6 +314,61 @@ export async function startMcpServer() {
         valueOverrides,
       });
       return content(output === "markdown" ? formatPatchPlanRun(run) : run);
+    },
+  );
+
+  server.registerTool(
+    "fullstackgtm_market_worksheet",
+    {
+      title: "Market Map Classification Worksheet",
+      description:
+        "Get everything needed to classify ONE vendor's messaging intensity for a market map: " +
+        "the claim taxonomy with judging definitions, the surface rule, and the captured page " +
+        "texts. Read each claim's definition, judge loud/quiet/absent from the page texts only, " +
+        "and quote verbatim spans (≤300 chars) for every loud/quiet reading. Submit the full " +
+        "ObservationSet via fullstackgtm_market_observe — quotes are verified character-for-" +
+        "character against the captures, so never paraphrase.",
+      inputSchema: {
+        vendorId: z.string(),
+        configPath: z.string().optional().describe("Path to market.config.json (default ./market.config.json)"),
+        captureRun: z.string().optional(),
+      },
+    },
+    async ({ vendorId, configPath, captureRun }) => {
+      const config = loadMarketConfig(resolve(process.cwd(), configPath ?? "market.config.json"));
+      return content(buildWorksheet(config, vendorId, { captureRun }));
+    },
+  );
+
+  server.registerTool(
+    "fullstackgtm_market_observe",
+    {
+      title: "Submit Market Map Observations",
+      description:
+        "Submit a complete ObservationSet (every vendor × claim cell) for a market map run. " +
+        "Validates coverage, the verbatim-evidence rule, and mechanically verifies every quoted " +
+        "span against the stored capture it cites. Returns problems if rejected; nothing is " +
+        "stored unless the whole set passes. Observations are append-only — use a new runLabel.",
+      inputSchema: {
+        observationsPath: z.string().describe("Path to the ObservationSet JSON file"),
+        configPath: z.string().optional().describe("Path to market.config.json (default ./market.config.json)"),
+      },
+    },
+    async ({ observationsPath, configPath }) => {
+      const config = loadMarketConfig(resolve(process.cwd(), configPath ?? "market.config.json"));
+      const set = JSON.parse(readFileSync(resolve(process.cwd(), observationsPath), "utf8")) as ObservationSet;
+      const problems = validateObservationSet(config, set);
+      const failures = verifyEvidenceSpans(set.observations, loadCaptureTexts(config.category).textByHash);
+      if (problems.length > 0 || failures.length > 0) {
+        return content({
+          accepted: false,
+          problems,
+          spanFailures: failures.map((failure) => `${failure.vendorId} × ${failure.claimId}: ${failure.problem}`),
+        });
+      }
+      await createFileObservationStore(config.category).append(set);
+      const fronts = computeFrontStates(config, set);
+      return content({ accepted: true, runLabel: set.runLabel, observations: set.observations.length, fronts });
     },
   );
 

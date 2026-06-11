@@ -136,12 +136,15 @@ export {
   createFileObservationStore,
   diffFrontStates,
   extractReadableText,
+  loadCaptureTexts,
   loadMarketConfig,
   marketHome,
+  normalizeForMatch,
   observationId,
   parseMarketConfig,
   starterMarketConfig,
   validateObservationSet,
+  verifyEvidenceSpans,
   type CaptureEntry,
   type CaptureOptions,
   type ClaimFront,
@@ -155,7 +158,15 @@ export {
   type ObservationConfidence,
   type ObservationSet,
   type ObservationStore,
+  type SpanVerificationFailure,
 } from "./market.ts";
+export {
+  buildWorksheet,
+  classifyMarket,
+  type ClassifyMarketOptions,
+  type ClassifyMarketResult,
+  type MarketWorksheet,
+} from "./marketClassify.ts";
 export { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
 export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type {

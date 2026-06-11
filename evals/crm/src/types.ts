@@ -41,6 +41,10 @@ export type RunResult = {
   scenario: string;
   model: string;
   arm: Arm;
+  /** 1-based trial index when running repeated trials */
+  trial?: number;
+  /** path to the saved tool-call transcript, when capture is enabled */
+  transcriptPath?: string;
   taskScore: number;
   maxScore: number;
   violations: Violation[];

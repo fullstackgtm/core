@@ -409,6 +409,98 @@ export function validateObservationSet(config: MarketConfig, set: ObservationSet
 }
 
 // ---------------------------------------------------------------------------
+// Evidence span verification — the deterministic gate that makes the
+// verbatim-quote rule mechanical instead of a prompt instruction. Because the
+// source documents are *stored* (unlike call transcripts, which pass through),
+// every quoted span can be checked against the capture it cites before the
+// observation is accepted. Comparison is whitespace-normalized only: case and
+// wording must match the page exactly.
+
+export function loadCaptureTexts(
+  category: string,
+  directory?: string,
+): { entries: CaptureEntry[]; textByHash: Map<string, string> } {
+  const dir = directory ?? join(marketHome(category), "captures");
+  const manifestPath = join(dir, "manifest.json");
+  const entries: CaptureEntry[] = existsSync(manifestPath)
+    ? (JSON.parse(readFileSync(manifestPath, "utf8")) as CaptureEntry[])
+    : [];
+  const textByHash = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.captureHash && !textByHash.has(entry.captureHash)) {
+      try {
+        textByHash.set(entry.captureHash, readFileSync(join(dir, `${entry.captureHash}.txt`), "utf8"));
+      } catch {
+        // Missing capture file: verification of anything citing it will fail loudly.
+      }
+    }
+  }
+  return { entries, textByHash };
+}
+
+/**
+ * Whitespace-only normalization for span matching, plus one extraction
+ * artifact: the HTML-to-text step can emit a line break before punctuation
+ * that follows an inline tag ("placements\n. Districts"), which no honest
+ * quoter would reproduce — so whitespace *before* punctuation is dropped
+ * too. Words, casing, and characters must still match the page exactly.
+ */
+export function normalizeForMatch(value: string): string {
+  return value
+    .replace(/\s+([.,;:!?])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export type SpanVerificationFailure = {
+  vendorId: string;
+  claimId: string;
+  quote: string;
+  problem: string;
+};
+
+export function verifyEvidenceSpans(
+  observations: MarketObservation[],
+  textByHash: Map<string, string>,
+): SpanVerificationFailure[] {
+  const failures: SpanVerificationFailure[] = [];
+  for (const obs of observations) {
+    for (const evidence of obs.evidence) {
+      const quote = evidence.text ?? "";
+      const hash = String(evidence.metadata?.captureHash ?? "");
+      if (!hash) {
+        failures.push({
+          vendorId: obs.vendorId,
+          claimId: obs.claimId,
+          quote,
+          problem: "evidence has no captureHash — spans must cite a stored capture",
+        });
+        continue;
+      }
+      const captureText = textByHash.get(hash);
+      if (captureText === undefined) {
+        failures.push({
+          vendorId: obs.vendorId,
+          claimId: obs.claimId,
+          quote,
+          problem: `capture ${hash.slice(0, 12)} not found — evidence must stay resolvable`,
+        });
+        continue;
+      }
+      if (!normalizeForMatch(captureText).includes(normalizeForMatch(quote))) {
+        failures.push({
+          vendorId: obs.vendorId,
+          claimId: obs.claimId,
+          quote,
+          problem: `quote not found verbatim in capture ${hash.slice(0, 12)}`,
+        });
+      }
+    }
+  }
+  return failures;
+}
+
+// ---------------------------------------------------------------------------
 // Front states — deterministic, recomputed every time, never stored.
 
 export type ClaimFront = {

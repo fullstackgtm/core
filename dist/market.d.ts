@@ -126,6 +126,25 @@ export declare function createFileObservationStore(category: string, directory?:
  * Returns problems; an empty array means accept.
  */
 export declare function validateObservationSet(config: MarketConfig, set: ObservationSet): string[];
+export declare function loadCaptureTexts(category: string, directory?: string): {
+    entries: CaptureEntry[];
+    textByHash: Map<string, string>;
+};
+/**
+ * Whitespace-only normalization for span matching, plus one extraction
+ * artifact: the HTML-to-text step can emit a line break before punctuation
+ * that follows an inline tag ("placements\n. Districts"), which no honest
+ * quoter would reproduce — so whitespace *before* punctuation is dropped
+ * too. Words, casing, and characters must still match the page exactly.
+ */
+export declare function normalizeForMatch(value: string): string;
+export type SpanVerificationFailure = {
+    vendorId: string;
+    claimId: string;
+    quote: string;
+    problem: string;
+};
+export declare function verifyEvidenceSpans(observations: MarketObservation[], textByHash: Map<string, string>): SpanVerificationFailure[];
 export type ClaimFront = {
     claimId: string;
     state: FrontState;

@@ -158,7 +158,13 @@ export function parseRubric(json) {
     };
 }
 // ── Provider plumbing (raw fetch, forced tool calls) ───────────────────────
-async function forcedToolCall(prompt, toolName, schema, model, options) {
+/**
+ * Shared constrained-tool-call plumbing: force the model to answer through a
+ * single tool whose input_schema is the output contract. Exported for other
+ * semi-deterministic features (market classification) — every LLM feature in
+ * the package goes through this one seam.
+ */
+export async function forcedToolCall(prompt, toolName, schema, model, options) {
     const fetchImpl = options.fetchImpl ?? fetch;
     if (options.provider === "anthropic") {
         const response = await llmFetch(fetchImpl, ANTHROPIC_URL, {

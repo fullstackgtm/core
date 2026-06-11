@@ -1,11 +1,11 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MockHubspot } from "./mock/server.ts";
 import { getScenario } from "./scenarios/index.ts";
 import { runAnthropicAgent } from "./providers/anthropic.ts";
 import { runOpenAICompatAgent, type CompatEndpoint } from "./providers/openaiCompat.ts";
-import type { AgentLoopResult } from "./providers/types.ts";
+import type { AgentLoopResult, TranscriptEvent } from "./providers/types.ts";
 import { RAW_READ_TOOLS, RAW_WRITE_TOOLS, createRawExecutor, type ToolDef } from "./tools/raw.ts";
 import { FSGTM_TOOL, createFsgtmExecutor } from "./tools/fsgtm.ts";
 import { TODAY, type Arm, type RunResult } from "./types.ts";
@@ -81,7 +81,19 @@ function requireEnv(name: string): string {
   return v;
 }
 
-export async function runOne(scenarioId: string, modelSpec: string, arm: Arm): Promise<RunResult> {
+export type RunOptions = {
+  /** directory for full tool-call transcripts (one JSON file per run) */
+  transcriptDir?: string;
+  /** 1-based trial index for repeated trials */
+  trial?: number;
+};
+
+export async function runOne(
+  scenarioId: string,
+  modelSpec: string,
+  arm: Arm,
+  options: RunOptions = {},
+): Promise<RunResult> {
   const scenario = getScenario(scenarioId);
   const server = new MockHubspot();
   const ctx = scenario.setup(server);
@@ -103,6 +115,7 @@ export async function runOne(scenarioId: string, modelSpec: string, arm: Arm): P
   const started = Date.now();
   let loop: AgentLoopResult = { turns: 0, toolCalls: 0, toolErrors: 0, inputTokens: 0, outputTokens: 0, finalText: "" };
   let runError: string | undefined;
+  const transcript: TranscriptEvent[] = [];
   try {
     const provider = resolveProvider(modelSpec);
     const loopOpts = {
@@ -112,6 +125,7 @@ export async function runOne(scenarioId: string, modelSpec: string, arm: Arm): P
       tools: toolsForArm(arm),
       execute,
       maxTurns: scenario.maxTurns ?? 40,
+      onEvent: (event: TranscriptEvent) => transcript.push(event),
     };
     loop = provider.kind === "anthropic"
       ? await runAnthropicAgent(loopOpts)
@@ -123,11 +137,24 @@ export async function runOne(scenarioId: string, modelSpec: string, arm: Arm): P
     await rm(tmp, { recursive: true, force: true });
   }
 
+  let transcriptPath: string | undefined;
+  if (options.transcriptDir && transcript.length > 0) {
+    await mkdir(options.transcriptDir, { recursive: true });
+    const safeModel = modelSpec.replace(/[^a-zA-Z0-9.-]+/g, "_");
+    transcriptPath = path.join(
+      options.transcriptDir,
+      `${scenario.id}--${safeModel}--${arm}${options.trial ? `--t${options.trial}` : ""}.json`,
+    );
+    await writeFile(transcriptPath, JSON.stringify({ scenario: scenario.id, model: modelSpec, arm, trial: options.trial, events: transcript }, null, 2));
+  }
+
   const grade = scenario.grade(server, ctx);
   return {
     scenario: scenario.id,
     model: modelSpec,
     arm,
+    ...(options.trial ? { trial: options.trial } : {}),
+    ...(transcriptPath ? { transcriptPath } : {}),
     taskScore: grade.taskScore,
     maxScore: grade.maxScore,
     violations: grade.violations,

@@ -64,6 +64,13 @@ export declare function scoreCallLlm(transcript: string, rubric: Rubric, options
     title?: string;
 }): Promise<CallScorecard>;
 export declare function parseRubric(json: string): Rubric;
+/**
+ * Shared constrained-tool-call plumbing: force the model to answer through a
+ * single tool whose input_schema is the output contract. Exported for other
+ * semi-deterministic features (market classification) — every LLM feature in
+ * the package goes through this one seam.
+ */
+export declare function forcedToolCall(prompt: string, toolName: string, schema: object, model: string, options: LlmCallOptions): Promise<unknown>;
 /** Cheap key validation against the provider's model-list endpoint. Status line only. */
 export declare function validateLlmKey(provider: LlmProvider, apiKey: string, fetchImpl?: typeof fetch): Promise<{
     ok: boolean;
