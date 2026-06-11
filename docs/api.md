@@ -58,7 +58,9 @@ release.
 ## CLI
 
 Commands: `login` / `logout`, `snapshot`, `audit`, `report`, `diff`, `merge`, `plans`,
-`apply`, `rules`, `profiles`, `doctor`.
+`apply`, `suggest`, `call` (`parse` / `score` / `link` / `plan`), `resolve`,
+`market` (`init` / `capture` / `classify` / `worksheet` / `observe` / `fronts` /
+`axes` / `report` / `refresh`), `rules`, `profiles`, `doctor`.
 Exit codes: `0` success · `1` error · `2` findings/regressions at the requested gate
 (`--fail-on`, `--fail-on-new-findings`). `--json` everywhere; JSON output shapes are stable.
 
@@ -78,7 +80,32 @@ deliverable in markdown or self-contained HTML: severity counts, prose summary,
 per-rule detail with capped examples, and next steps. `auditReportToMarkdown` /
 `auditReportToHtml` expose the same rendering programmatically.
 
+## Market map
+
+Newer surface (0.16–0.18); shapes are settling toward the 1.0 contract. A live
+model of the competitive category: claim taxonomy + vendor registry as a
+reviewable `market.config.json` (`MarketConfig`, `MarketClaim`, `MarketVendor`,
+`MarketAxis`), content-addressed page captures (`captureMarket`,
+`loadCaptureTexts`), append-only observations (`ObservationSet`,
+`MarketObservation`, `ObservationStore` / `createFileObservationStore` —
+profile-scoped under `<home>/market/<category>`), and deterministic
+derivations: `computeFrontStates` / `diffFrontStates` (front rule v1),
+`assessAxes` / `pcaTop2` / `axisPosition` (axis discovery), and
+`marketMapToMarkdown` / `marketMapToHtml` (the field report; renders the
+primary strategic 2×2 when `axes` / `primaryAxes` are configured).
+
+Intensity readings are proposals: `classifyMarket` (LLM, bring-your-own-key,
+provenance-marked) or `buildWorksheet` + `market observe` (agent/human). Every
+quoted evidence span is mechanically verified verbatim
+(`verifyEvidenceSpans`; whitespace and punctuation-spacing normalized) against
+the stored capture it cites before a set is accepted; failed captures read as
+`unobservable`, never `absent`.
+
 ## MCP
 
 Tools: `fullstackgtm_audit`, `fullstackgtm_rules`, `fullstackgtm_apply`
-(requires explicit `approvedOperationIds`). Input schemas are stable.
+(requires explicit `approvedOperationIds`), `fullstackgtm_suggest`,
+`fullstackgtm_call_parse`, `fullstackgtm_resolve`,
+`fullstackgtm_market_worksheet`, `fullstackgtm_market_observe` (validates,
+verifies quoted spans against the stored captures, appends, returns front
+states). Input schemas are stable.

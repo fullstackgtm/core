@@ -5,6 +5,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.18.0] — 2026-06-11
+
+Axis discovery: earn a strategic 2×2 from the observations instead of
+asserting one.
+
+### Added
+
+- **Axes as config** — `axes` in `market.config.json`: each axis is a
+  claim-scoring rubric (`{ id, label, poles, rubric, status, claimScores }`,
+  null = axis doesn't apply to that claim); a vendor's position is the
+  intensity-weighted mean (loud=1, quiet=½) of the claims it voices.
+  `primaryAxes: [x, y]` picks the report's strategic map. Config validation
+  rejects axes scoring unknown claims.
+- **`fullstackgtm market axes`** — the discovery math, pure and
+  dependency-free: PCA (power iteration) over the vendor × claim intensity
+  matrix — PC1 is the category's own primary axis, PC2 the
+  maximum-differentiation direction orthogonal to it; triangulation of every
+  configured axis against the PCs (a real axis is *derivable* from the data,
+  not just felt); and an orthogonality screen (|r| ≥ 0.75 = one axis twice —
+  sometimes the finding: the category couples the ideas and the empty
+  quadrant is the white space). Fully-unobservable vendors are excluded,
+  never zeroed.
+- **Report: strategic map** — section 03 renders the primary 2×2 (positions
+  computed, not asserted; dot size = LOUD count; axis status in the caption)
+  when axes are configured; the evidence appendix renumbers accordingly. The
+  report deliberately carries only the one earned 2×2 — best foot forward
+  for the client; axis exploration (every pairing, r, verdicts) is `market
+  axes` territory for the analyst or agent doing the iterating.
+- **Golden regression**: the 280-cell creative-intelligence validation
+  dataset ships as a test fixture — PCA must recover the buyer axis as PC1
+  (|r| ≥ 0.9) and value-mode as PC2 (|r| ≥ 0.85), and flag the documented
+  buyer × operating-model redundancy.
+
 ## [0.17.0] — 2026-06-11
 
 Market map classification: intensity readings become a one-command step, and

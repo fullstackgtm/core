@@ -52,6 +52,19 @@ export type MarketVendor = {
   notes?: string;
 };
 
+export type MarketAxis = {
+  id: string;
+  label: string;
+  negativePole: string;
+  positivePole: string;
+  /** How a human scores a claim on this axis — the axis IS this rubric. */
+  rubric: string;
+  /** e.g. "validated", "proposal", "proposal (PC2-validated)". Reviewer-facing. */
+  status?: string;
+  /** claimId → score in [-1, 1]; null = the axis does not apply to this claim. */
+  claimScores: Record<string, number | null>;
+};
+
 export type MarketConfig = {
   category: string;
   anchorVendor?: string;
@@ -59,6 +72,10 @@ export type MarketConfig = {
   claims: MarketClaim[];
   /** The LOUD/QUIET/ABSENT/UNOBSERVABLE judging rule, stated for reviewers. */
   surfaceRule?: string;
+  /** Strategic axes as claim-scoring rubrics — config, not code. */
+  axes?: MarketAxis[];
+  /** [xAxisId, yAxisId] for the report's strategic map. */
+  primaryAxes?: [string, string];
 };
 
 export type MarketObservation = {
@@ -147,6 +164,27 @@ export function parseMarketConfig(raw: string): MarketConfig {
   }
   if (config.anchorVendor && !config.vendors.some((v) => v.id === config.anchorVendor)) {
     throw new Error(`market config: anchorVendor "${config.anchorVendor}" is not in vendors`);
+  }
+  if (config.axes) {
+    const claimIds = new Set(config.claims.map((claim) => claim.id));
+    const axisIds = new Set<string>();
+    for (const axis of config.axes) {
+      if (!axis.id) throw new Error("market config: axis missing id");
+      if (axisIds.has(axis.id)) throw new Error(`market config: duplicate axis id "${axis.id}"`);
+      axisIds.add(axis.id);
+      for (const claimId of Object.keys(axis.claimScores ?? {})) {
+        if (!claimIds.has(claimId)) {
+          throw new Error(`market config: axis "${axis.id}" scores unknown claim "${claimId}"`);
+        }
+      }
+    }
+    if (config.primaryAxes) {
+      if (config.primaryAxes.length !== 2 || config.primaryAxes.some((id) => !axisIds.has(id))) {
+        throw new Error(`market config: primaryAxes must name two configured axes (got ${JSON.stringify(config.primaryAxes)})`);
+      }
+    }
+  } else if (config.primaryAxes) {
+    throw new Error("market config: primaryAxes set but no axes configured");
   }
   return config;
 }

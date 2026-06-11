@@ -1,4 +1,5 @@
 import { computeFrontStates } from "./market.js";
+import { assessAxes, messageBreadth } from "./marketAxes.js";
 /**
  * Render a market map as a client-ready deliverable: markdown for terminals
  * and PRs, and a self-contained printable HTML "field report" — front
@@ -77,6 +78,107 @@ export function marketMapToMarkdown(config, set) {
     }
     return `${lines.join("\n")}\n`;
 }
+function svgScatter(points, ax, ay, anchor, mini) {
+    const W = mini ? 330 : 700;
+    const H = mini ? 250 : 460;
+    const PAD = mini ? 34 : 56;
+    const range = (axis, values) => {
+        if (axis.signed)
+            return [-1.1, 1.1];
+        if (values.length === 0)
+            return [0, 1];
+        return [Math.min(0, Math.min(...values) - 0.05), Math.max(...values) + 0.08];
+    };
+    const [xLo, xHi] = range(ax, points.map((p) => p.x));
+    const [yLo, yHi] = range(ay, points.map((p) => p.y));
+    const sx = (x) => PAD + ((x - xLo) / (xHi - xLo)) * (W - 2 * PAD);
+    const sy = (y) => H - PAD - ((y - yLo) / (yHi - yLo)) * (H - 2 * PAD);
+    const fsLabel = mini ? 8.5 : 10.5;
+    const fsAx = mini ? 8 : 10;
+    const e = escapeHtml;
+    const dots = points
+        .map((p) => {
+        const r = mini ? 3 + p.loud * 0.8 : 6 + p.loud * 1.6;
+        const cls = p.vendorId === anchor ? "dot-anchor" : "dot";
+        return (`<circle class="${cls}" cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${r.toFixed(1)}"/>` +
+            `<text class="dot-label" style="font-size:${fsLabel}px" x="${sx(p.x).toFixed(1)}" y="${(sy(p.y) - r - 4).toFixed(1)}">${e(p.name)}</text>`);
+    })
+        .join("");
+    const midX = ax.signed ? `<line class="axis-mid" x1="${sx(0).toFixed(0)}" y1="${PAD}" x2="${sx(0).toFixed(0)}" y2="${H - PAD}"/>` : "";
+    const midY = ay.signed ? `<line class="axis-mid" x1="${PAD}" y1="${sy(0).toFixed(0)}" x2="${W - PAD}" y2="${sy(0).toFixed(0)}"/>` : "";
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${e(ax.label)} vs ${e(ay.label)}">
+    <line class="axis" x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}"/>
+    <line class="axis" x1="${PAD}" y1="${PAD}" x2="${PAD}" y2="${H - PAD}"/>${midX}${midY}
+    <text class="ax-label" style="font-size:${fsAx}px" x="${PAD}" y="${H - 14}">&#8592; ${e(ax.negativePole)}</text>
+    <text class="ax-label" style="font-size:${fsAx}px" x="${W - PAD}" y="${H - 14}" text-anchor="end">${e(ax.positivePole)} &#8594;</text>
+    <text class="ax-label" style="font-size:${fsAx}px" x="${PAD}" y="${PAD - 10}">&#8593; ${e(ay.positivePole)}${ay.signed ? ` &#183; &#8595; ${e(ay.negativePole)}` : ""}</text>
+    ${dots}</svg>`;
+}
+function axisSectionsHtml(config, set) {
+    const axes = config.axes ?? [];
+    if (axes.length === 0)
+        return { strategicMap: "", report: null };
+    const e = escapeHtml;
+    const report = assessAxes(config, set);
+    const vendorNames = new Map(config.vendors.map((vendor) => [vendor.id, vendor.name]));
+    const loudCounts = new Map(report.vendors.map((vendorId) => [vendorId, messageBreadth(vendorId, set.observations).loudCount]));
+    const breadthAxis = {
+        id: "breadth",
+        label: "Message breadth",
+        negativePole: "FOCUSED",
+        positivePole: "BROAD (share of claims voiced)",
+        signed: false,
+    };
+    const axisInfo = new Map([
+        ...axes.map((axis) => [axis.id, { id: axis.id, label: axis.label, negativePole: axis.negativePole, positivePole: axis.positivePole, signed: true }]),
+        [breadthAxis.id, breadthAxis],
+    ]);
+    const positions = new Map();
+    for (const assessment of report.assessments) {
+        positions.set(assessment.axis.id, new Map(assessment.positions
+            .filter((entry) => entry.position !== null)
+            .map((entry) => [entry.vendorId, entry.position])));
+    }
+    const breadthMap = new Map();
+    for (const vendorId of report.vendors) {
+        const { breadth } = messageBreadth(vendorId, set.observations);
+        if (breadth !== null)
+            breadthMap.set(vendorId, breadth);
+    }
+    positions.set("breadth", breadthMap);
+    const pointsFor = (xId, yId) => {
+        const xs = positions.get(xId);
+        const ys = positions.get(yId);
+        if (!xs || !ys)
+            return [];
+        return report.vendors
+            .filter((vendorId) => xs.has(vendorId) && ys.has(vendorId))
+            .map((vendorId) => ({
+            vendorId,
+            name: vendorNames.get(vendorId) ?? vendorId,
+            x: xs.get(vendorId),
+            y: ys.get(vendorId),
+            loud: loudCounts.get(vendorId) ?? 0,
+        }));
+    };
+    const [px, py] = config.primaryAxes ?? [axes[0].id, axes[1]?.id ?? "breadth"];
+    const axInfo = axisInfo.get(px);
+    const ayInfo = axisInfo.get(py);
+    const statusOf = (id) => axes.find((axis) => axis.id === id)?.status ?? (id === "breadth" ? "derived" : "");
+    const strategicMap = `<section>
+  <h2><span class="no">03</span> Strategic map — ${e(axInfo.label)} &#215; ${e(ayInfo.label)}</h2>
+  <figure>${svgScatter(pointsFor(px, py), axInfo, ayInfo, config.anchorVendor, false)}
+  <figcaption>Positions computed from run ${e(set.runLabel)} observations: each axis is a per-claim scoring rubric
+  in the market config; a vendor sits at the intensity-weighted mean (loud=1, quiet=&#189;) of the claims it
+  voices. Dot size = LOUD count. Axis status — ${e(axInfo.label)}: ${e(statusOf(px))}; ${e(ayInfo.label)}: ${e(statusOf(py))}.</figcaption>
+  </figure>
+</section>`;
+    // Deliberately no axis-pairing gallery here: the report is the client-facing
+    // artifact, best foot forward — one earned 2x2. Axis exploration (PCA,
+    // triangulation, the orthogonality screen over every pairing) lives in
+    // `market axes` for the analyst or agent doing the iterating.
+    return { strategicMap, report };
+}
 export function marketMapToHtml(config, set) {
     const model = buildModel(config, set);
     const stateByClaim = new Map(model.fronts.map((front) => [front.claimId, front.state]));
@@ -87,6 +189,8 @@ export function marketMapToHtml(config, set) {
     const unobservable = set.observations.filter((obs) => obs.intensity === "unobservable").length;
     const anchor = config.anchorVendor;
     const e = escapeHtml;
+    const axisHtml = axisSectionsHtml(config, set);
+    const appendixNo = axisHtml.report ? "04" : "03";
     const matrixRows = model.orderedClaimIds
         .map((claimId) => {
         const claim = claimsById.get(claimId);
@@ -184,6 +288,14 @@ tr.front-open th .claim-cap { color:var(--accent); font-weight:600; }
 .ev-head { font-size:10.5px; letter-spacing:.1em; color:var(--accent); }
 .ev blockquote { font-style:italic; margin:6px 0; font-size:13.5px; line-height:1.5; }
 .ev-src { font-size:10px; color:var(--ink-soft); word-break:break-all; }
+figure { margin-top:22px; border:1px solid var(--line); background:rgba(255,255,255,.35); }
+.axis { stroke:var(--ink); stroke-width:1.5; }
+.axis-mid { stroke:var(--line); stroke-dasharray:3 5; }
+.ax-label { letter-spacing:.16em; fill:var(--ink-soft); font-family:"SF Mono",Menlo,Consolas,monospace; }
+.dot { fill:rgba(33,29,22,.78); }
+.dot-anchor { fill:var(--green); stroke:var(--ink); stroke-width:1.5; }
+.dot-label { fill:var(--ink); text-anchor:middle; letter-spacing:.04em; font-family:"SF Mono",Menlo,Consolas,monospace; }
+figcaption { font-size:12px; color:var(--ink-soft); padding:12px 16px 14px; font-style:italic; border-top:1px solid var(--line); line-height:1.5; }
 footer { margin-top:72px; border-top:3px double var(--ink); padding-top:14px; font-size:11px; color:var(--ink-soft);
   display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; }
 @media print { body { max-width:none; padding:0 8mm; background:white; } section { break-inside:avoid-page; } tr { break-inside:avoid; } }
@@ -221,8 +333,9 @@ footer { margin-top:72px; border-top:3px double var(--ink); padding-top:14px; fo
     <tbody>${matrixRows}</tbody>
   </table>
 </section>
+${axisHtml.strategicMap}
 <section>
-  <h2><span class="no">03</span> Evidence appendix</h2>
+  <h2><span class="no">${appendixNo}</span> Evidence appendix</h2>
   ${appendix}
 </section>
 <footer>

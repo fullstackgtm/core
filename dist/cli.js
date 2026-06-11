@@ -19,6 +19,7 @@ import { builtinAuditRules } from "./rules.js";
 import { sampleSnapshot } from "./sampleData.js";
 import { normalizeTranscript, parseCall, suggestCallDeal } from "./calls.js";
 import { captureMarket, computeFrontStates, createFileObservationStore, diffFrontStates, loadCaptureTexts, loadMarketConfig, starterMarketConfig, validateObservationSet, verifyEvidenceSpans, } from "./market.js";
+import { assessAxes, axesReportToText } from "./marketAxes.js";
 import { buildWorksheet, classifyMarket } from "./marketClassify.js";
 import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
 import { DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
@@ -64,6 +65,7 @@ Usage:
   fullstackgtm market worksheet --vendor <id> [--out <path>]
   fullstackgtm market observe --from <observations.json> [--unverified]
   fullstackgtm market fronts [--run <label>] [--diff <prior-run>] [--json]
+  fullstackgtm market axes [--run <label>] [--json]
   fullstackgtm market report [--run <label>] [--format md|html] [--out <path>]
   fullstackgtm market refresh [--run <label>] [--model m]
                                                the live competitive map: capture vendor pages (content-addressed),
@@ -757,8 +759,16 @@ market classify [--run <label>] [--capture-run <label>] [--vendor <id>] [--model
 market worksheet --vendor <id> [--capture-run <label>] [--out <path>]
 market observe --from <observations.json> [--unverified]
 market fronts [--config <path>] [--run <label>] [--diff <prior-run>] [--json]
+market axes [--config <path>] [--run <label>] [--json]
 market report [--config <path>] [--run <label>] [--format md|html] [--out <path>]
 market refresh [--run <label>] [--model m]     capture → classify → fronts drift → HTML report
+
+axes runs the axis-discovery math: PCA over the vendor × claim intensity
+matrix (PC1 = the category's primary axis, PC2 = the max-differentiation
+direction orthogonal to it), triangulation of configured axes against the
+PCs, and an orthogonality screen (|r|>0.75 = one axis twice). Axes live in
+the config as claim-scoring rubrics; the report's strategic map and axis
+lab render from them.
 
 classify uses your Anthropic/OpenAI key (like call parse) to read the stored
 captures and propose intensity readings; worksheet is the no-key path (an
@@ -947,7 +957,17 @@ recomputed deterministically on every invocation — never stored.`);
         }
         return;
     }
-    throw new Error(`Unknown market subcommand: ${subcommand} (try: init, capture, classify, worksheet, observe, fronts, report, refresh)`);
+    if (subcommand === "axes") {
+        const set = await loadSet();
+        const report = assessAxes(config, set);
+        if (rest.includes("--json")) {
+            console.log(JSON.stringify(report, null, 2));
+            return;
+        }
+        console.log(axesReportToText(report));
+        return;
+    }
+    throw new Error(`Unknown market subcommand: ${subcommand} (try: init, capture, classify, worksheet, observe, fronts, axes, report, refresh)`);
 }
 /**
  * The resolve gate: exit 0 = safe to create, exit 2 = match found (exists or

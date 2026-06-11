@@ -151,6 +151,7 @@ export {
   type ClaimIntensity,
   type FrontDrift,
   type FrontState,
+  type MarketAxis,
   type MarketClaim,
   type MarketConfig,
   type MarketObservation,
@@ -160,6 +161,18 @@ export {
   type ObservationStore,
   type SpanVerificationFailure,
 } from "./market.ts";
+export {
+  assessAxes,
+  axesReportToText,
+  axisPosition,
+  messageBreadth,
+  pcaTop2,
+  pearson,
+  type AxesReport,
+  type AxisAssessment,
+  type AxisPairing,
+  type PrincipalComponent,
+} from "./marketAxes.ts";
 export {
   buildWorksheet,
   classifyMarket,

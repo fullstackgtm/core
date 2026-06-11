@@ -41,6 +41,18 @@ export type MarketVendor = {
     };
     notes?: string;
 };
+export type MarketAxis = {
+    id: string;
+    label: string;
+    negativePole: string;
+    positivePole: string;
+    /** How a human scores a claim on this axis — the axis IS this rubric. */
+    rubric: string;
+    /** e.g. "validated", "proposal", "proposal (PC2-validated)". Reviewer-facing. */
+    status?: string;
+    /** claimId → score in [-1, 1]; null = the axis does not apply to this claim. */
+    claimScores: Record<string, number | null>;
+};
 export type MarketConfig = {
     category: string;
     anchorVendor?: string;
@@ -48,6 +60,10 @@ export type MarketConfig = {
     claims: MarketClaim[];
     /** The LOUD/QUIET/ABSENT/UNOBSERVABLE judging rule, stated for reviewers. */
     surfaceRule?: string;
+    /** Strategic axes as claim-scoring rubrics — config, not code. */
+    axes?: MarketAxis[];
+    /** [xAxisId, yAxisId] for the report's strategic map. */
+    primaryAxes?: [string, string];
 };
 export type MarketObservation = {
     /** stableHash(category, runLabel, vendorId, claimId) — deterministic. */
