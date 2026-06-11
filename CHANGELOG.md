@@ -5,6 +5,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.15.0] — 2026-06-11
+
+The Prevent layer: stop creating duplicates, and name the writer that does.
+
+### Added
+
+- **`fullstackgtm resolve <account|contact|deal>`** — the create gate.
+  Deterministic verdicts (exists / ambiguous / safe_to_create) with matches
+  and reasons, using the same identity keys as the audit/merge engines:
+  normalized account domain, contact email, open-deal key. Names alone are
+  never identity (ambiguous, with candidates). Gate-shaped exit codes for
+  scripts: 0 = safe to create, 2 = match found, 1 = error. Exposed as
+  `resolveRecord()` and MCP `fullstackgtm_resolve`.
+- **Record provenance** (`RecordProvenance` on accounts/contacts/deals):
+  HubSpot snapshots capture the read-only `hs_object_source`,
+  `hs_object_source_label`, `hs_object_source_id` fields, and the three
+  duplicate rules append writer attribution to findings — "Created by:
+  Gojiberry (app-123) ×2, CRM_UI" — so recurring dupes are fixed at the
+  faucet. Provenance is exempt from merge conflicts and diff drift, and
+  records created by the CLI's own `create:` path stamp
+  `hs_object_source_detail_2` (best-effort).
+
 ## [0.14.1] — 2026-06-11
 
 Fixes from the 0.14.0 journey verification (4 agents, 21 checks).

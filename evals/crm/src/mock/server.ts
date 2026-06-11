@@ -244,6 +244,18 @@ export class MockHubspot {
         return;
       }
 
+      const assocTasks = path.match(
+        /^\/crm\/v4\/objects\/(companies|contacts|deals)\/([^/]+)\/associations\/tasks$/,
+      );
+      if (method === "GET" && assocTasks) {
+        const [, type, id] = assocTasks;
+        const rec = this.requireActive(type as ObjectType, id, res);
+        if (!rec) return;
+        this.log({ kind: "read", method, path, objectType: type as ObjectType, objectId: id });
+        const tasks = this.active("tasks").filter((t) => t.properties.__associated_object_id === id);
+        return json(res, 200, { results: tasks.map((t) => ({ toObjectId: Number(t.id) })) });
+      }
+
       const assocGet = path.match(
         /^\/crm\/v4\/objects\/(companies|contacts|deals|tasks)\/([^/]+)\/associations\/companies$/,
       );

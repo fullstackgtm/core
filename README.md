@@ -74,6 +74,20 @@ for t in transcripts/*; do fullstackgtm call parse --transcript "$t" --ndjson --
 
 The boundary that remains: Slack/Notion/warehouse sinks are *your* pipeline, composed around the JSON — and your rubrics and keys stay yours.
 
+## The create gate: no new dupes
+
+Detection cleans up yesterday's duplicates; the **resolve gate** prevents tomorrow's. Before any writer — a sync job, a webhook handler, an agent, your own script — creates a record, ask the gate:
+
+```bash
+fullstackgtm resolve contact --email jane@acme.com --input snap.json   # exit 0 = safe to create
+fullstackgtm resolve account --domain acme.com --provider hubspot      # exit 2 = exists/ambiguous: do NOT create
+fullstackgtm resolve deal --name "Acme Expansion" --account-id 123 --input snap.json
+```
+
+Identity keys match the audit/merge engines exactly: account domain (normalized), contact email, and the open-deal key (account + normalized name). Names alone are never identity — they return `ambiguous` with the candidates, not a guess. Exit codes are gate-shaped for scripts: `0` safe to create, `2` match found, `1` error. For high-volume writers, pair it with a cron-refreshed snapshot file rather than a live `--provider` fetch per call. Also exposed as `resolveRecord()` and the MCP tool `fullstackgtm_resolve`.
+
+**Provenance attribution** closes the loop on recurring dupes: snapshots now capture each record's source (HubSpot's read-only `hs_object_source*` fields), and duplicate findings name the writer — `"3 accounts share acme.com … Created by: Gojiberry (app-123) ×2, CRM_UI"` — so you fix the integration, not just the records. Records created by this CLI stamp their own provenance (`hs_object_source_detail_2`, best-effort).
+
 ## From findings to fixes: the suggest chain
 
 Most placeholder answers are already derivable from your own CRM data. `suggest` computes them deterministically — account-name matching cross-checked against contact associations — with a confidence level and a written reason per operation, so you (or an agent) approve evidence, not guesses:

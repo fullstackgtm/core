@@ -41,12 +41,11 @@ fix the faucet instead of mopping the puddle.
   a unique match, refuse on ambiguity, create only on a confirmed miss.
   HubSpot's search API is eventually consistent (~5–10s), so same-run
   creations are deduped in memory, not via search.
-- A standalone **`resolve` gate** (planned, 0.13): given a candidate
-  record, return existing match(es) or "safe to create" — for the CLI, the
-  library, MCP, and any external writer (sync jobs, agents, webhook
-  handlers). Identity keys are the ones the package already uses:
-  contact email, normalized account domain, and the open-deal key
-  (account + normalized name).
+- The **`resolve` gate** (shipped 0.15): `fullstackgtm resolve
+  <account|contact|deal>` returns exists/ambiguous/safe_to_create with
+  matches and reasons; exit 0 = safe, exit 2 = do not create. Same identity
+  keys as the audit/merge engines. Also `resolveRecord()` and MCP
+  `fullstackgtm_resolve`.
 - **Stamp provenance on our own creates** (HubSpot allows integrations to
   set `hs_object_source_detail_2/3` at create time).
 - Recommend native config in `doctor`/audit: Salesforce duplicate rules
@@ -61,10 +60,10 @@ fix the faucet instead of mopping the puddle.
   (ruleId, objectId).
 - **The nightly watch recipe** ("CRM CI"): scheduled
   `snapshot → audit → diff` against yesterday's snapshot, alert on exit 2.
-- **Attribution** (planned, 0.13): capture HubSpot's read-only
-  `hs_object_source`, `hs_object_source_label`, `hs_object_source_id` into
-  the canonical model so duplicate findings can say *"all five created by
-  integration X"*. The fix for recurring dupes is upstream, in the writer.
+- **Attribution** (shipped 0.15): snapshots capture HubSpot's read-only
+  `hs_object_source*` into `RecordProvenance`; duplicate findings append
+  *"Created by: …"* naming the writer(s). The fix for recurring dupes is
+  upstream, in the writer.
 - Incremental reads (`snapshot --since`) exist for all three connectors;
   caveats: HubSpot deltas carry no associations and cap at 10k per object,
   Stripe deltas catch creations only.
@@ -131,5 +130,6 @@ Lessons from auditing our own apply path:
 | --- | --- |
 | 0.11.1 | Fix our own faucet: resolve-first `create:` + plan-scoped dedup, HubSpot association-aware CAS for `link_record`, domain normalization in `duplicate-account-domain`, `create_task` idempotency token |
 | 0.12 (shipped) | `merge_records` (HubSpot contacts/companies/deals) + survivor suggestions capped at low confidence; the three duplicate rules emit governed merges instead of review tasks |
-| 0.13 | `resolve` gate (CLI/lib/MCP), provenance capture + attribution in findings, prevention-posture checks |
+| 0.15 (shipped) | `resolve` gate (CLI/lib/MCP, gate exit codes), provenance capture (`hs_object_source*` → `RecordProvenance`) + attribution in duplicate findings, self-stamped creates |
+| 0.16 | prevention-posture checks (native duplicate rules active? unique-value properties defined?) · live targeted resolve lookups |
 | docs | The nightly watch recipe (existing flags, documented as CRM CI) |

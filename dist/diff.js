@@ -4,7 +4,7 @@
  * appeared, what disappeared, what changed — and whether hygiene regressed.
  */
 // Fields that change on every sync without semantic meaning.
-const IGNORED_FIELDS = new Set(["raw", "lastSyncAt", "identities"]);
+const IGNORED_FIELDS = new Set(["raw", "lastSyncAt", "identities", "provenance"]);
 function labelOf(record) {
     return record.name ?? record.email ?? record.id;
 }

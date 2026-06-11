@@ -62,7 +62,10 @@ export async function runOpenAICompatAgent(
 
     const msg = data.choices?.[0]?.message;
     if (!msg) break;
-    if (typeof msg.content === "string" && msg.content) finalText = msg.content;
+    if (typeof msg.content === "string" && msg.content) {
+      finalText = msg.content;
+      opts.onEvent?.({ type: "assistant", turn: turns, text: msg.content });
+    }
 
     const calls: any[] = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
     if (calls.length === 0) break;
@@ -73,6 +76,7 @@ export async function runOpenAICompatAgent(
       let result: string;
       try {
         const args = call.function?.arguments ? JSON.parse(call.function.arguments) : {};
+        opts.onEvent?.({ type: "tool_call", turn: turns, name: call.function?.name ?? "", input: args });
         result = await opts.execute(call.function?.name ?? "", args);
         if (result.startsWith("HTTP 4") || result.startsWith("HTTP 5") || result.startsWith("exit code: 1")) {
           toolErrors += 1;

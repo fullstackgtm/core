@@ -19,6 +19,7 @@ import { builtinAuditRules } from "./rules.js";
 import { sampleSnapshot } from "./sampleData.js";
 import { normalizeTranscript, parseCall, suggestCallDeal } from "./calls.js";
 import { DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
+import { resolveRecord } from "./resolve.js";
 import { suggestValues } from "./suggest.js";
 function usage() {
     return `FullStackGTM — audit GTM data across providers, propose reviewable patch plans,
@@ -51,6 +52,9 @@ Usage:
                                                ANTHROPIC_API_KEY/OPENAI_API_KEY, or \`login anthropic|openai\`);
                                                --deterministic uses the free keyword baseline. Then link the call
                                                to its deal and propose governed next-step writes.
+  fullstackgtm resolve <account|contact|deal> [--name N] [--domain D] [--email E] [--account-id A] [source options] [--json]
+                                               the create gate: exit 0 = safe to create, exit 2 = match
+                                               found (exists/ambiguous) — call before ANY record creation
   fullstackgtm suggest --plan-id <id> | --plan <path>  [source options] [--json] [--out <path>]
                                                derive values for requires_human_* placeholders
                                                from snapshot evidence, with confidence + reasons
@@ -710,6 +714,38 @@ function buildCallPlan(parsed, deal, proposed, current, extraNextSteps) {
         evidence: parsed.evidence,
         operations,
     };
+}
+/**
+ * The resolve gate: exit 0 = safe to create, exit 2 = match found (exists or
+ * ambiguous — do NOT blind-create), exit 1 = error. Built for sync jobs and
+ * webhook handlers to call before any record creation.
+ */
+async function resolveCommand(args) {
+    const [objectType, ...rest] = args;
+    if (!objectType || !["account", "contact", "deal"].includes(objectType)) {
+        throw new Error("Usage: fullstackgtm resolve <account|contact|deal> [--name N] [--domain D] [--email E] [--account-id A] [source options] [--json]");
+    }
+    const candidate = {
+        objectType: objectType,
+        name: option(rest, "--name") ?? undefined,
+        domain: option(rest, "--domain") ?? undefined,
+        email: option(rest, "--email") ?? undefined,
+        accountId: option(rest, "--account-id") ?? undefined,
+    };
+    const snapshot = await readSnapshot(rest);
+    const result = resolveRecord(snapshot, candidate);
+    if (rest.includes("--json")) {
+        console.log(JSON.stringify(result, null, 2));
+    }
+    else {
+        const marker = result.verdict === "safe_to_create" ? "✓" : result.verdict === "exists" ? "=" : "?";
+        console.log(`${marker} [${result.verdict}] ${result.reason}`);
+        for (const m of result.matches) {
+            console.log(`    ${m.id} "${m.name}" — matched by ${m.matchedBy}: ${m.detail}`);
+        }
+    }
+    if (result.verdict !== "safe_to_create")
+        process.exitCode = 2;
 }
 async function suggest(args) {
     const planId = option(args, "--plan-id");
@@ -1454,6 +1490,10 @@ export async function runCli(argv) {
     }
     if (command === "call") {
         await callCommand(args);
+        return;
+    }
+    if (command === "resolve") {
+        await resolveCommand(args);
         return;
     }
     if (command === "profiles") {

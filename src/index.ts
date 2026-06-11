@@ -95,6 +95,7 @@ export {
   orphanAccountRule,
   pastCloseDateRule,
   patchOperationId,
+  provenanceSummary,
   requiresHumanInput,
   staleDealRule,
 } from "./rules.ts";
@@ -128,6 +129,7 @@ export {
   type Rubric,
   type ScoredDimension,
 } from "./llm.ts";
+export { resolveRecord, type ResolveCandidate, type ResolveMatch, type ResolveResult } from "./resolve.ts";
 export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type {
   ApprovalStatus,

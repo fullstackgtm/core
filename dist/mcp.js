@@ -47,6 +47,7 @@ import { builtinAuditRules } from "./rules.js";
 import { sampleSnapshot } from "./sampleData.js";
 import { normalizeTranscript, parseCall } from "./calls.js";
 import { extractInsightsLlm, resolveLlmCredential } from "./llm.js";
+import { resolveRecord } from "./resolve.js";
 import { suggestValues } from "./suggest.js";
 function content(value) {
     return {
@@ -196,6 +197,25 @@ export async function startMcpServer() {
             return content(parseCall(raw, { title, sourceSystem: source, insights, extractor: `llm:${credential.provider}:${used}` }));
         }
         return content(parseCall(raw, { title, sourceSystem: source }));
+    });
+    server.registerTool("fullstackgtm_resolve", {
+        title: "Resolve Record (create gate)",
+        description: "Before creating a CRM record, check whether it already exists. Returns a verdict " +
+            "(exists | ambiguous | safe_to_create) with matches and a reason, using the same " +
+            "identity keys as the audit/merge engines (account domain, contact email, open-deal " +
+            "key). Read-only. Never create on 'exists' or 'ambiguous'.",
+        inputSchema: {
+            objectType: z.enum(["account", "contact", "deal"]),
+            name: z.string().optional(),
+            domain: z.string().optional(),
+            email: z.string().optional(),
+            accountId: z.string().optional(),
+            provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
+            inputPath: z.string().optional(),
+        },
+    }, async ({ objectType, name, domain, email, accountId, provider, inputPath }) => {
+        const snapshot = await readSnapshot(provider, inputPath);
+        return content(resolveRecord(snapshot, { objectType, name, domain, email, accountId }));
     });
     server.registerTool("fullstackgtm_rules", {
         title: "List Audit Rules",

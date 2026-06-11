@@ -208,6 +208,7 @@ test("hubspot connector applies set_field through a mapped PATCH", async () => {
 test("hubspot connector creates a task associated with the target object", async () => {
   const { fetchImpl, calls } = stubFetch({
     "/crm/v3/objects/tasks/search": { results: [] },
+    "/crm/v4/objects/companies/c1/associations/tasks": { results: [] },
     "/crm/v3/objects/tasks": { id: "task_1" },
   });
   const connector = createHubspotConnector({ getAccessToken: () => "test-token", fetchImpl });
@@ -226,11 +227,13 @@ test("hubspot connector creates a task associated with the target object", async
   });
 
   assert.equal(result.status, "applied");
-  // Idempotency pre-check (search) then the create.
-  assert.equal(calls.length, 2);
+  // Idempotency pre-checks (token search, then open-task association lookup)
+  // followed by the create.
+  assert.equal(calls.length, 3);
   assert.match(calls[0].url, /\/crm\/v3\/objects\/tasks\/search$/);
-  assert.equal(calls[1].init?.method, "POST");
-  const body = JSON.parse(String(calls[1].init?.body));
+  assert.match(calls[1].url, /\/crm\/v4\/objects\/companies\/c1\/associations\/tasks/);
+  assert.equal(calls[2].init?.method, "POST");
+  const body = JSON.parse(String(calls[2].init?.body));
   assert.equal(body.properties.hs_task_subject, "Follow Up");
   assert.match(body.properties.hs_task_body, /^Research account fit/);
   assert.match(body.properties.hs_task_body, /fsgtm task/);
@@ -262,6 +265,59 @@ test("hubspot connector skips creating a task that already exists for the operat
   assert.equal(result.status, "skipped");
   assert.match(result.detail ?? "", /already exists \(task task_existing\)/);
   assert.equal(calls.length, 1);
+});
+
+test("hubspot connector skips creating a task when the object already has an open task", async () => {
+  // Not fsgtm's own task — a human-created follow-up from a prior partial run.
+  const { fetchImpl, calls } = stubFetch({
+    "/crm/v3/objects/tasks/search": { results: [] },
+    "/crm/v4/objects/deals/d1/associations/tasks": { results: [{ toObjectId: 777 }] },
+    "/crm/v3/objects/tasks/777": { id: "777", properties: { hs_task_status: "NOT_STARTED" } },
+  });
+  const connector = createHubspotConnector({ getAccessToken: () => "test-token", fetchImpl });
+
+  const result = await connector.applyOperation!({
+    id: "op_task_dupe",
+    objectType: "deal",
+    objectId: "d1",
+    operation: "create_task",
+    field: "follow_up_task",
+    beforeValue: null,
+    afterValue: "Follow up on stale deal",
+    reason: "Stale deal",
+    riskLevel: "low",
+    approvalRequired: true,
+  });
+
+  assert.equal(result.status, "skipped");
+  assert.match(result.detail ?? "", /open task \(task 777\) already exists/);
+  assert.equal(calls.length, 3); // token search, association lookup, task status read
+});
+
+test("hubspot connector still creates a task when existing associated tasks are completed", async () => {
+  const { fetchImpl, calls } = stubFetch({
+    "/crm/v3/objects/tasks/search": { results: [] },
+    "/crm/v4/objects/deals/d1/associations/tasks": { results: [{ toObjectId: 778 }] },
+    "/crm/v3/objects/tasks/778": { id: "778", properties: { hs_task_status: "COMPLETED" } },
+    "/crm/v3/objects/tasks": { id: "task_2" },
+  });
+  const connector = createHubspotConnector({ getAccessToken: () => "test-token", fetchImpl });
+
+  const result = await connector.applyOperation!({
+    id: "op_task_done",
+    objectType: "deal",
+    objectId: "d1",
+    operation: "create_task",
+    field: "follow_up_task",
+    beforeValue: null,
+    afterValue: "Follow up on stale deal",
+    reason: "Stale deal",
+    riskLevel: "low",
+    approvalRequired: true,
+  });
+
+  assert.equal(result.status, "applied");
+  assert.equal(calls.length, 4); // token search, association lookup, status read, create
 });
 
 test("hubspot connector links a deal to a company via the associations API", async () => {

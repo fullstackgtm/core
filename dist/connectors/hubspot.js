@@ -84,7 +84,10 @@ export function createHubspotConnector(options) {
             email: stringOrUndefined(owner.email),
             active: owner.archived !== true,
         }));
-        const companyProperties = mappedFields(mappings, "accounts", HUBSPOT_DEFAULT_FIELD_MAPPINGS.accounts).join(",");
+        // Read-only record-source fields power duplicate-finding attribution
+        // ("all five created by integration X") — see RecordProvenance.
+        const PROVENANCE_PROPERTIES = "hs_object_source,hs_object_source_label,hs_object_source_id";
+        const companyProperties = `${mappedFields(mappings, "accounts", HUBSPOT_DEFAULT_FIELD_MAPPINGS.accounts).join(",")},${PROVENANCE_PROPERTIES}`;
         const companies = await fetchObjects("companies", companyProperties, false);
         const accounts = companies
             .filter((company) => company.id)
@@ -101,11 +104,12 @@ export function createHubspotConnector(options) {
                 employeeCount: numberOrUndefined(readMapped(props, "accounts", "employeeCount", "numberofemployees")),
                 annualRevenue: numberOrUndefined(readMapped(props, "accounts", "annualRevenue", "annualrevenue")),
                 ownerId: stringOrUndefined(readMapped(props, "accounts", "ownerId", "hubspot_owner_id")),
+                provenance: provenanceFrom(props),
                 lastSyncAt: stringOrUndefined(company.updatedAt),
                 raw: company,
             };
         });
-        const contactProperties = mappedFields(mappings, "contacts", HUBSPOT_DEFAULT_FIELD_MAPPINGS.contacts).join(",");
+        const contactProperties = `${mappedFields(mappings, "contacts", HUBSPOT_DEFAULT_FIELD_MAPPINGS.contacts).join(",")},${PROVENANCE_PROPERTIES}`;
         const hubspotContacts = await fetchObjects("contacts", contactProperties, true);
         const contacts = hubspotContacts
             .filter((contact) => contact.id)
@@ -124,11 +128,12 @@ export function createHubspotConnector(options) {
                 phone: stringOrUndefined(readMapped(props, "contacts", "phone", "phone")),
                 title: stringOrUndefined(readMapped(props, "contacts", "title", "jobtitle")),
                 ownerId: stringOrUndefined(readMapped(props, "contacts", "ownerId", "hubspot_owner_id")),
+                provenance: provenanceFrom(props),
                 lastSyncAt: stringOrUndefined(contact.updatedAt),
                 raw: contact,
             };
         });
-        const dealProperties = mappedFields(mappings, "deals", HUBSPOT_DEFAULT_FIELD_MAPPINGS.deals).join(",");
+        const dealProperties = `${mappedFields(mappings, "deals", HUBSPOT_DEFAULT_FIELD_MAPPINGS.deals).join(",")},${PROVENANCE_PROPERTIES}`;
         const hubspotDeals = await fetchObjects("deals", dealProperties, true);
         const deals = hubspotDeals
             .filter((deal) => deal.id)
@@ -152,6 +157,7 @@ export function createHubspotConnector(options) {
                 identities: [{ provider: "hubspot", externalId: String(deal.id) }],
                 accountId: companyId ? String(companyId) : undefined,
                 ownerId: stringOrUndefined(readMapped(props, "deals", "ownerId", "hubspot_owner_id")),
+                provenance: provenanceFrom(props),
                 name: stringOrFallback(readMapped(props, "deals", "name", "dealname"), "Untitled Deal"),
                 amount: numberOrUndefined(readMapped(props, "deals", "amount", "amount")),
                 stage,
@@ -323,10 +329,23 @@ export function createHubspotConnector(options) {
                     createdCompaniesByName.set(nameKey, companyId);
                 }
                 else {
-                    const created = await request(`/crm/v3/objects/companies`, {
-                        method: "POST",
-                        body: JSON.stringify({ properties: { name } }),
-                    });
+                    let created;
+                    try {
+                        created = await request(`/crm/v3/objects/companies`, {
+                            method: "POST",
+                            body: JSON.stringify({
+                                properties: { name, hs_object_source_detail_2: "fullstackgtm create: operation" },
+                            }),
+                        });
+                    }
+                    catch {
+                        // Some portals reject writes to source-detail properties — the
+                        // provenance stamp is best-effort, the create is not.
+                        created = await request(`/crm/v3/objects/companies`, {
+                            method: "POST",
+                            body: JSON.stringify({ properties: { name } }),
+                        });
+                    }
                     companyId = String(created.id);
                     createdCompanyName = name;
                     createdCompaniesByName.set(nameKey, companyId);
@@ -389,6 +408,34 @@ export function createHubspotConnector(options) {
                     detail: `Task for this operation already exists (task ${hit.id}); not creating a duplicate.`,
                     providerData: { id: hit.id, existing: true },
                 };
+            }
+        }
+        catch {
+            // fall through to create
+        }
+        // A live CRM often already carries a human-created follow-up for the same
+        // record (a previous partial run, or a rep's own task). Creating another
+        // on top is duplicate noise — skip when the object already has an open
+        // task, regardless of who created it. Fail-open: a lookup hiccup must
+        // not block the apply.
+        try {
+            const objectPath = OBJECT_PATHS[operation.objectType];
+            const assoc = await request(`/crm/v4/objects/${objectPath}/${encodeURIComponent(operation.objectId)}/associations/tasks?limit=20`);
+            const taskIds = (assoc?.results ?? [])
+                .map((row) => String(row.toObjectId ?? ""))
+                .filter(Boolean)
+                .slice(0, 10);
+            for (const taskId of taskIds) {
+                const existingTask = await request(`/crm/v3/objects/tasks/${encodeURIComponent(taskId)}?properties=hs_task_status`);
+                const status = String(existingTask?.properties?.hs_task_status ?? "");
+                if (status !== "COMPLETED" && status !== "DELETED") {
+                    return {
+                        operationId: operation.id,
+                        status: "skipped",
+                        detail: `An open task (task ${taskId}) already exists on ${operation.objectType}/${operation.objectId}; not creating a duplicate follow-up.`,
+                        providerData: { id: taskId, existing: true },
+                    };
+                }
             }
         }
         catch {
@@ -566,6 +613,14 @@ export function createHubspotConnector(options) {
         applyOperation,
         readField,
     };
+}
+function provenanceFrom(props) {
+    const source = stringOrUndefined(props.hs_object_source);
+    const sourceLabel = stringOrUndefined(props.hs_object_source_label);
+    const sourceId = stringOrUndefined(props.hs_object_source_id);
+    if (!source && !sourceLabel && !sourceId)
+        return undefined;
+    return { source, sourceLabel, sourceId };
 }
 function stringOrUndefined(value) {
     if (value === undefined || value === null || value === "")

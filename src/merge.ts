@@ -52,7 +52,7 @@ export type MergeReport = {
 };
 
 const CONFLICT_IGNORED_FIELDS = new Set([
-  "id", "provider", "crmId", "identities", "raw", "lastSyncAt", "lastActivityAt", "ownerId", "accountId",
+  "id", "provider", "crmId", "identities", "raw", "lastSyncAt", "lastActivityAt", "ownerId", "accountId", "provenance",
 ]);
 
 export function normalizeDomain(domain?: string): string | undefined {

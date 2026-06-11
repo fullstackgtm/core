@@ -8,6 +8,28 @@ export const REQUIRES_HUMAN_PREFIX = "requires_human_";
 export function requiresHumanInput(value) {
     return typeof value === "string" && value.startsWith(REQUIRES_HUMAN_PREFIX);
 }
+/**
+ * Attribution for duplicate groups: when the provider exposes record-source
+ * provenance (RecordProvenance), name the writer(s) that created the group —
+ * the fix for recurring dupes is upstream in the writer, not in the records.
+ */
+export function provenanceSummary(records) {
+    const counts = new Map();
+    for (const record of records) {
+        const p = record.provenance;
+        if (!p)
+            continue;
+        const label = p.sourceLabel ?? p.source ?? "unknown source";
+        const key = p.sourceId ? `${label} (${p.sourceId})` : label;
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    if (counts.size === 0)
+        return "";
+    const parts = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([key, count]) => (count > 1 ? `${key} ×${count}` : key));
+    return ` Created by: ${parts.join(", ")}.`;
+}
 export function auditFindingId(ruleId, objectId) {
     return `finding_${stableHash(`${ruleId}:${objectId}`)}`;
 }
@@ -326,7 +348,7 @@ export const duplicateAccountDomainRule = {
                 ruleId: "duplicate-account-domain",
                 title: "Accounts share the same domain",
                 severity: "warning",
-                summary: `${accounts.length} accounts share ${domain}: ${accounts.map((account) => account.name).join(", ")}.`,
+                summary: `${accounts.length} accounts share ${domain}: ${accounts.map((account) => account.name).join(", ")}.${provenanceSummary(accounts)}`,
                 recommendation: "Review the group and merge duplicates so activity and deals roll up once.",
             });
             operations.push({
@@ -363,7 +385,7 @@ export const duplicateContactEmailRule = {
                 ruleId: "duplicate-contact-email",
                 title: "Contacts share the same email",
                 severity: "warning",
-                summary: `${contacts.length} contacts share ${email}.`,
+                summary: `${contacts.length} contacts share ${email}.${provenanceSummary(contacts)}`,
                 recommendation: "Merge the duplicates so engagement history and routing stay coherent.",
             });
             operations.push({
@@ -410,7 +432,7 @@ export const duplicateOpenDealRule = {
                 ruleId: "duplicate-open-deal",
                 title: "Open deals duplicate the same opportunity",
                 severity: "warning",
-                summary: `${deals.length} open deals named "${anchor.name}"${anchor.accountId ? " on the same account" : ""}: ${deals.map((deal) => deal.id).join(", ")}.`,
+                summary: `${deals.length} open deals named "${anchor.name}"${anchor.accountId ? " on the same account" : ""}: ${deals.map((deal) => deal.id).join(", ")}.${provenanceSummary(deals)}`,
                 recommendation: "Keep one deal, archive the copies, and fix the integration that is re-creating them.",
             });
             operations.push({

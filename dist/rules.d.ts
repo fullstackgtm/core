@@ -6,6 +6,18 @@ import type { CanonicalGtmSnapshot, GtmAuditRule, GtmSnapshotIndex } from "./typ
  */
 export declare const REQUIRES_HUMAN_PREFIX = "requires_human_";
 export declare function requiresHumanInput(value: unknown): boolean;
+/**
+ * Attribution for duplicate groups: when the provider exposes record-source
+ * provenance (RecordProvenance), name the writer(s) that created the group —
+ * the fix for recurring dupes is upstream in the writer, not in the records.
+ */
+export declare function provenanceSummary(records: Array<{
+    provenance?: {
+        source?: string;
+        sourceLabel?: string;
+        sourceId?: string;
+    };
+}>): string;
 export declare function auditFindingId(ruleId: string, objectId: string): string;
 export declare function patchOperationId(ruleId: string, objectId: string): string;
 export declare function stableHash(value: string): string;

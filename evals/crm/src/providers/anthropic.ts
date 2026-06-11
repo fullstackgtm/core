@@ -36,7 +36,10 @@ export async function runAnthropicAgent(opts: AgentLoopOptions): Promise<AgentLo
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
       .map((b) => b.text)
       .join("\n");
-    if (text) finalText = text;
+    if (text) {
+      finalText = text;
+      opts.onEvent?.({ type: "assistant", turn: turns, text });
+    }
 
     if (response.stop_reason === "pause_turn") {
       messages.push({ role: "assistant", content: response.content });
@@ -53,6 +56,7 @@ export async function runAnthropicAgent(opts: AgentLoopOptions): Promise<AgentLo
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const tu of toolUses) {
       toolCalls += 1;
+      opts.onEvent?.({ type: "tool_call", turn: turns, name: tu.name, input: tu.input });
       let result: string;
       let isError = false;
       try {
@@ -66,6 +70,7 @@ export async function runAnthropicAgent(opts: AgentLoopOptions): Promise<AgentLo
         toolErrors += 1;
       }
       results.push({ type: "tool_result", tool_use_id: tu.id, content: result, is_error: isError });
+      opts.onEvent?.({ type: "tool_result", turn: turns, name: tu.name, output: result.slice(0, 4000) });
     }
     messages.push({ role: "user", content: results });
   }

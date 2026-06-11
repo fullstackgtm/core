@@ -7,7 +7,7 @@ import type { AuditFinding, CanonicalGtmSnapshot, PatchPlan } from "./types.ts";
  */
 
 // Fields that change on every sync without semantic meaning.
-const IGNORED_FIELDS = new Set(["raw", "lastSyncAt", "identities"]);
+const IGNORED_FIELDS = new Set(["raw", "lastSyncAt", "identities", "provenance"]);
 
 export type FieldChange = { field: string; before: unknown; after: unknown };
 

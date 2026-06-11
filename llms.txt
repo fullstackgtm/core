@@ -18,6 +18,10 @@ at/above `--fail-on`.
 - [CRM-health lifecycle](https://github.com/fullstackgtm/core/blob/main/docs/crm-health-lifecycle.md): the Prevent → Detect → Remediate → Verify/Attribute model; no-new-dupes design
 - [CHANGELOG](https://github.com/fullstackgtm/core/blob/main/CHANGELOG.md): release history
 
+`fullstackgtm resolve <type>` is the create gate: exit 0 = safe to create,
+exit 2 = exists/ambiguous (never blind-create); duplicate findings carry
+"Created by:" writer attribution when the provider exposes record source.
+
 ## Key invariants (calls)
 
 `fullstackgtm call parse` defaults to LLM extraction (BYO Anthropic/OpenAI

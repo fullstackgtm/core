@@ -48,6 +48,7 @@ import { builtinAuditRules } from "./rules.ts";
 import { sampleSnapshot } from "./sampleData.ts";
 import { normalizeTranscript, parseCall } from "./calls.ts";
 import { extractInsightsLlm, resolveLlmCredential } from "./llm.ts";
+import { resolveRecord } from "./resolve.ts";
 import { suggestValues } from "./suggest.ts";
 import type { CanonicalGtmSnapshot, GtmConnector, PatchPlan } from "./types.ts";
 
@@ -236,6 +237,31 @@ export async function startMcpServer() {
         );
       }
       return content(parseCall(raw, { title, sourceSystem: source }));
+    },
+  );
+
+  server.registerTool(
+    "fullstackgtm_resolve",
+    {
+      title: "Resolve Record (create gate)",
+      description:
+        "Before creating a CRM record, check whether it already exists. Returns a verdict " +
+        "(exists | ambiguous | safe_to_create) with matches and a reason, using the same " +
+        "identity keys as the audit/merge engines (account domain, contact email, open-deal " +
+        "key). Read-only. Never create on 'exists' or 'ambiguous'.",
+      inputSchema: {
+        objectType: z.enum(["account", "contact", "deal"]),
+        name: z.string().optional(),
+        domain: z.string().optional(),
+        email: z.string().optional(),
+        accountId: z.string().optional(),
+        provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
+        inputPath: z.string().optional(),
+      },
+    },
+    async ({ objectType, name, domain, email, accountId, provider, inputPath }) => {
+      const snapshot = await readSnapshot(provider, inputPath);
+      return content(resolveRecord(snapshot, { objectType, name, domain, email, accountId }));
     },
   );
 

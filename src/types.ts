@@ -141,11 +141,26 @@ export type CanonicalUser = {
   active?: boolean;
 };
 
+/**
+ * Who created a record, per the provider's read-only record-source fields
+ * (HubSpot: hs_object_source / _label / _id). Populated on read; used to
+ * attribute duplicate findings to the writer that produced them.
+ */
+export type RecordProvenance = {
+  /** Provider source code, e.g. INTEGRATION, API, CRM_UI, IMPORT, FORM. */
+  source?: string;
+  /** Human label, e.g. an integration's name. */
+  sourceLabel?: string;
+  /** Provider-side id of the source (e.g. app id, import id). */
+  sourceId?: string;
+};
+
 export type CanonicalAccount = {
   id: string;
   provider?: CrmProvider;
   crmId?: string;
   identities?: ProviderIdentity[];
+  provenance?: RecordProvenance;
   name: string;
   domain?: string;
   industry?: string;
@@ -163,6 +178,7 @@ export type CanonicalContact = {
   provider?: CrmProvider;
   crmId?: string;
   identities?: ProviderIdentity[];
+  provenance?: RecordProvenance;
   accountId?: string;
   firstName?: string;
   lastName?: string;
@@ -181,6 +197,7 @@ export type CanonicalDeal = {
   provider?: CrmProvider;
   crmId?: string;
   identities?: ProviderIdentity[];
+  provenance?: RecordProvenance;
   accountId?: string;
   ownerId?: string;
   name: string;
