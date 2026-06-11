@@ -18,6 +18,8 @@ import { auditReportToHtml, auditReportToMarkdown } from "./report.js";
 import { builtinAuditRules } from "./rules.js";
 import { sampleSnapshot } from "./sampleData.js";
 import { normalizeTranscript, parseCall, suggestCallDeal } from "./calls.js";
+import { captureMarket, computeFrontStates, createFileObservationStore, diffFrontStates, loadMarketConfig, starterMarketConfig, validateObservationSet, } from "./market.js";
+import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
 import { DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
 import { resolveRecord } from "./resolve.js";
 import { suggestValues } from "./suggest.js";
@@ -55,6 +57,15 @@ Usage:
   fullstackgtm resolve <account|contact|deal> [--name N] [--domain D] [--email E] [--account-id A] [source options] [--json]
                                                the create gate: exit 0 = safe to create, exit 2 = match
                                                found (exists/ambiguous) — call before ANY record creation
+  fullstackgtm market init --category <name>   start a market map: vendors + claim taxonomy as reviewable config
+  fullstackgtm market capture [--config <path>] [--run <label>]
+  fullstackgtm market observe --from <observations.json>
+  fullstackgtm market fronts [--run <label>] [--diff <prior-run>] [--json]
+  fullstackgtm market report [--run <label>] [--format md|html] [--out <path>]
+                                               the live competitive map: capture vendor pages (content-addressed),
+                                               ingest intensity readings with verbatim-quote evidence, compute
+                                               deterministic front states (open/contested/owned/saturated) and
+                                               drift between runs, render the client-ready field report
   fullstackgtm suggest --plan-id <id> | --plan <path>  [source options] [--json] [--out <path>]
                                                derive values for requires_human_* placeholders
                                                from snapshot evidence, with confidence + reasons
@@ -714,6 +725,120 @@ function buildCallPlan(parsed, deal, proposed, current, extraNextSteps) {
         evidence: parsed.evidence,
         operations,
     };
+}
+/**
+ * The market map: claim taxonomy in a reviewable config file, page captures
+ * and append-only observations under the profile home, deterministic front
+ * states and reports computed from the store. Classification (LLM intensity
+ * readings) lands in a later change; until then `market observe --from`
+ * ingests proposal files produced by an agent or a human.
+ */
+async function marketCommand(args) {
+    const [subcommand, ...rest] = args;
+    const configPath = () => resolve(process.cwd(), option(rest, "--config") ?? "market.config.json");
+    if (!subcommand || subcommand === "--help") {
+        console.log(`Usage:
+market init --category <name> [--out <path>]   write a starter market.config.json
+market capture [--config <path>] [--run <label>]
+market observe --from <observations.json> [--config <path>]
+market fronts [--config <path>] [--run <label>] [--diff <prior-run>] [--json]
+market report [--config <path>] [--run <label>] [--format md|html] [--out <path>]
+
+The taxonomy (vendors + claims) is config you review and version; captures
+and observations live under ~/.fullstackgtm/market/<category> (profile-scoped,
+one client's category intel never bleeds into another's). Front states are
+recomputed deterministically on every invocation — never stored.`);
+        return;
+    }
+    if (subcommand === "init") {
+        const category = option(rest, "--category");
+        if (!category)
+            throw new Error("market init requires --category <name>");
+        const outPath = resolve(process.cwd(), option(rest, "--out") ?? "market.config.json");
+        if (existsSync(outPath))
+            throw new Error(`${outPath} already exists — refusing to overwrite`);
+        writeFileSync(outPath, `${JSON.stringify(starterMarketConfig(category), null, 2)}\n`);
+        console.log(`Wrote ${outPath}. Fill in vendors and claims, then: fullstackgtm market capture`);
+        return;
+    }
+    const config = loadMarketConfig(configPath());
+    const store = createFileObservationStore(config.category);
+    if (subcommand === "capture") {
+        const result = await captureMarket(config, { runLabel: option(rest, "--run") ?? "run-1" });
+        for (const entry of result.entries) {
+            const flag = entry.captureHash && entry.textChars > 500 ? "" : "  <-- thin/empty";
+            console.log(`${entry.vendorId.padEnd(16)} ${entry.kind.padEnd(8)} ${String(entry.httpStatus ?? "ERR").padEnd(4)} ${String(entry.textChars).padStart(7)} chars  ${entry.url}${flag}`);
+        }
+        console.log(`\nmanifest: ${result.manifestPath}`);
+        return;
+    }
+    if (subcommand === "observe") {
+        const fromPath = option(rest, "--from");
+        if (!fromPath)
+            throw new Error("market observe requires --from <observations.json>");
+        const set = JSON.parse(readFileSync(resolve(process.cwd(), fromPath), "utf8"));
+        const problems = validateObservationSet(config, set);
+        if (problems.length > 0) {
+            console.error(`Rejected: ${problems.length} problem(s)`);
+            for (const problem of problems.slice(0, 20))
+                console.error(`  - ${problem}`);
+            process.exitCode = 1;
+            return;
+        }
+        await store.append(set);
+        console.log(`Appended ${set.runLabel}: ${set.observations.length} observations (${set.extractor})`);
+        return;
+    }
+    const loadSet = async () => {
+        const runLabel = option(rest, "--run");
+        const set = runLabel ? await store.get(runLabel) : await store.latest();
+        if (!set) {
+            throw new Error(runLabel
+                ? `No observation run "${runLabel}" for ${config.category}`
+                : `No observations stored for ${config.category} — run market observe --from <file> first`);
+        }
+        return set;
+    };
+    if (subcommand === "fronts") {
+        const set = await loadSet();
+        const fronts = computeFrontStates(config, set);
+        const priorLabel = option(rest, "--diff");
+        const prior = priorLabel ? await store.get(priorLabel) : null;
+        if (priorLabel && !prior)
+            throw new Error(`No observation run "${priorLabel}" to diff against`);
+        const drift = prior ? diffFrontStates(computeFrontStates(config, prior), fronts) : null;
+        if (rest.includes("--json")) {
+            console.log(JSON.stringify({ runLabel: set.runLabel, fronts, drift }, null, 2));
+            return;
+        }
+        for (const front of fronts) {
+            const owner = front.state === "owned" ? ` → ${front.loudVendorIds[0]}` : "";
+            console.log(`${front.state.toUpperCase().padEnd(10)} ${front.claimId}${owner}`);
+        }
+        if (drift) {
+            console.log("");
+            if (drift.length === 0)
+                console.log(`No front changes since ${priorLabel}.`);
+            for (const change of drift)
+                console.log(`CHANGED   ${change.claimId}: ${change.before} → ${change.after}`);
+        }
+        return;
+    }
+    if (subcommand === "report") {
+        const set = await loadSet();
+        const format = option(rest, "--format") ?? "md";
+        const output = format === "html" ? marketMapToHtml(config, set) : marketMapToMarkdown(config, set);
+        const outPath = option(rest, "--out");
+        if (outPath) {
+            writeFileSync(resolve(process.cwd(), outPath), output);
+            console.log(`Wrote ${outPath}`);
+        }
+        else {
+            console.log(output);
+        }
+        return;
+    }
+    throw new Error(`Unknown market subcommand: ${subcommand} (try: init, capture, observe, fronts, report)`);
 }
 /**
  * The resolve gate: exit 0 = safe to create, exit 2 = match found (exists or
@@ -1494,6 +1619,10 @@ export async function runCli(argv) {
     }
     if (command === "resolve") {
         await resolveCommand(args);
+        return;
+    }
+    if (command === "market") {
+        await marketCommand(args);
         return;
     }
     if (command === "profiles") {

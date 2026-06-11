@@ -73,28 +73,47 @@ function resolveDeal(snapshot, c) {
     if (!c.name) {
         return { ...base, verdict: "ambiguous", matches: [], reason: "Supply --name (and ideally --account-id) to resolve a deal." };
     }
-    const key = `${c.accountId ?? "unlinked"}:${normalizeName(c.name)}`;
+    const nameKey = normalizeName(c.name);
     const open = snapshot.deals.filter((d) => d.isClosed !== true && d.isWon !== true);
-    const matches = open
-        .filter((d) => `${d.accountId ?? "unlinked"}:${normalizeName(d.name)}` === key)
-        .map((d) => match(d.id, d.name, "deal_key", `open deal with the same name on ${c.accountId ? `account ${c.accountId}` : "no account"}`));
-    if (matches.length > 0) {
+    if (c.accountId) {
+        const key = `${c.accountId}:${nameKey}`;
+        const matches = open
+            .filter((d) => `${d.accountId ?? "unlinked"}:${normalizeName(d.name)}` === key)
+            .map((d) => match(d.id, d.name, "deal_key", `open deal with the same name on account ${c.accountId}`));
+        if (matches.length > 0) {
+            return {
+                ...base,
+                verdict: "exists",
+                matches,
+                reason: `${matches.length} open deal(s) already match "${c.name}" on account ${c.accountId} — creating another would double-count pipeline. Update the existing deal.`,
+            };
+        }
+        const closedSameName = snapshot.deals.filter((d) => (d.isClosed === true || d.isWon === true) &&
+            d.accountId === c.accountId &&
+            normalizeName(d.name) === nameKey);
         return {
             ...base,
-            verdict: "exists",
-            matches,
-            reason: `${matches.length} open deal(s) already match "${c.name}" on ${c.accountId ? `account ${c.accountId}` : "unlinked"} — creating another would double-count pipeline. Update the existing deal.`,
+            verdict: "safe_to_create",
+            matches: [],
+            reason: closedSameName.length > 0
+                ? `No open deal matches on account ${c.accountId}; ${closedSameName.length} closed deal(s) on it share the name (a re-open/renewal may be intended). Safe to create.`
+                : `No open deal matches "${c.name}" on account ${c.accountId}. Safe to create.`,
         };
     }
-    const closedSameName = snapshot.deals.filter((d) => (d.isClosed === true || d.isWon === true) && normalizeName(d.name) === normalizeName(c.name));
-    return {
-        ...base,
-        verdict: "safe_to_create",
-        matches: [],
-        reason: closedSameName.length > 0
-            ? `No open deal matches; ${closedSameName.length} closed deal(s) share the name (a re-open/renewal may be intended). Safe to create.`
-            : `No open deal matches "${c.name}". Safe to create.`,
-    };
+    // No account scope: name-only matches across ALL open deals are ambiguous,
+    // never safe — a gate that ignores name collisions protects nobody.
+    const sameName = open
+        .filter((d) => normalizeName(d.name) === nameKey)
+        .map((d) => match(d.id, d.name, "name", `open deal with the same name on ${d.accountId ? `account ${d.accountId}` : "no account"}`));
+    if (sameName.length > 0) {
+        return {
+            ...base,
+            verdict: "ambiguous",
+            matches: sameName,
+            reason: `${sameName.length} open deal(s) named "${c.name}" exist (no --account-id supplied to scope the check). Confirm before creating — supply --account-id to resolve definitively.`,
+        };
+    }
+    return { ...base, verdict: "safe_to_create", matches: [], reason: `No open deal named "${c.name}" anywhere. Safe to create.` };
 }
 function contactName(row) {
     return [row.firstName, row.lastName].filter(Boolean).join(" ") || "(unnamed)";

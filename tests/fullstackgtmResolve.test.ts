@@ -67,7 +67,7 @@ test("deal: open-deal key blocks double-counting; closed deals don't block but a
 
   const renewal = resolveRecord(snapshot(), { objectType: "deal", name: "Old Renewal", accountId: "a1" });
   assert.equal(renewal.verdict, "safe_to_create");
-  assert.match(renewal.reason, /closed deal\(s\) share the name/);
+  assert.match(renewal.reason, /closed deal\(s\) on it share the name/);
 
   const otherAccount = resolveRecord(snapshot(), { objectType: "deal", name: "Acme Expansion", accountId: "a2" });
   assert.equal(otherAccount.verdict, "safe_to_create"); // key is account-scoped
@@ -118,4 +118,24 @@ test("provenance attribution: duplicate findings name the writer", () => {
 
   // No provenance → no attribution clause, no noise.
   assert.equal(provenanceSummary([{}, {}]), "");
+});
+
+test("deal gate without --account-id: name collisions are ambiguous, never safe", () => {
+  const exists = resolveRecord(snapshot(), { objectType: "deal", name: "Acme Expansion" });
+  assert.equal(exists.verdict, "ambiguous");
+  assert.equal(exists.matches.length, 1); // only the OPEN d1
+  assert.match(exists.reason, /supply --account-id/i);
+
+  const safe = resolveRecord(snapshot(), { objectType: "deal", name: "Brand New Deal" });
+  assert.equal(safe.verdict, "safe_to_create");
+});
+
+test("closed-deal note is account-scoped", () => {
+  // d3 "Old Renewal" is closed on a1; resolving on a DIFFERENT account must not count it.
+  const other = resolveRecord(snapshot(), { objectType: "deal", name: "Old Renewal", accountId: "a2" });
+  assert.equal(other.verdict, "safe_to_create");
+  assert.doesNotMatch(other.reason, /closed deal/);
+
+  const sameAccount = resolveRecord(snapshot(), { objectType: "deal", name: "Old Renewal", accountId: "a1" });
+  assert.match(sameAccount.reason, /closed deal\(s\) on it share the name/);
 });

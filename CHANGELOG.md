@@ -5,6 +5,54 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.16.0] — 2026-06-11
+
+The market map: a live model of the competitive category a company sells
+into — claim taxonomy as reviewable config, append-only observations with
+verbatim-quote evidence, deterministic front states and drift.
+
+### Added
+
+- **`fullstackgtm market`** — `init` scaffolds a `market.config.json`
+  (vendor registry + claim taxonomy + the LOUD/QUIET/ABSENT surface rule);
+  `capture` fetches vendor pages into a content-addressed text cache (the
+  change detector, replay buffer, and evidence chain); `observe --from`
+  ingests intensity readings after validating full coverage and the
+  verbatim-evidence rule (a loud/quiet reading with no quote is rejected);
+  `fronts` computes deterministic front states (open / contested / owned /
+  saturated / vacant) and `--diff` reports drift between runs; `report`
+  renders the claim × vendor matrix as markdown or a self-contained
+  printable HTML field report with an evidence appendix.
+- **Division of labor matches call intelligence:** intensity readings are
+  proposals (provenance-marked extractor, always with quoted evidence);
+  everything downstream is deterministic over the stored observations —
+  same observations, same map. A failed capture reads as UNOBSERVABLE,
+  never as absence.
+- **Profile-scoped storage:** captures and observations live under
+  `~/.fullstackgtm/market/<category>` (or the active profile's home), so one
+  client org's category intel never bleeds into another's.
+- `ObservationStore` contract + file implementation (append-only, one JSON
+  document per run) — like the plan store, the file layout and the hosted
+  backend are two implementations of the same contract.
+- `"web"` joined `GtmEvidenceSourceSystem`: market observations carry
+  standard `GtmEvidence` with `metadata.url` + `metadata.captureHash`.
+
+## [0.15.1] — 2026-06-11
+
+Fixes from the 0.15.0 journey verification (4 agents, 26 checks).
+
+### Fixed
+
+- **Name-only deal resolution is gated**: `resolve deal --name X` without
+  `--account-id` returned safe_to_create even when open deals named X
+  existed — a gate that ignores name collisions protects nobody. It now
+  returns ambiguous with the colliding open deals and tells the caller to
+  supply `--account-id` for a definitive answer.
+- The closed-deals-share-name note is account-scoped (it previously counted
+  closed deals on *other* accounts).
+- The `hs_object_source_detail_2` stamp on CLI-created companies now
+  carries the operation id for precise attribution.
+
 ## [0.15.0] — 2026-06-11
 
 The Prevent layer: stop creating duplicates, and name the writer that does.

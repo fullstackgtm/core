@@ -130,6 +130,33 @@ export {
   type ScoredDimension,
 } from "./llm.ts";
 export { resolveRecord, type ResolveCandidate, type ResolveMatch, type ResolveResult } from "./resolve.ts";
+export {
+  captureMarket,
+  computeFrontStates,
+  createFileObservationStore,
+  diffFrontStates,
+  extractReadableText,
+  loadMarketConfig,
+  marketHome,
+  observationId,
+  parseMarketConfig,
+  starterMarketConfig,
+  validateObservationSet,
+  type CaptureEntry,
+  type CaptureOptions,
+  type ClaimFront,
+  type ClaimIntensity,
+  type FrontDrift,
+  type FrontState,
+  type MarketClaim,
+  type MarketConfig,
+  type MarketObservation,
+  type MarketVendor,
+  type ObservationConfidence,
+  type ObservationSet,
+  type ObservationStore,
+} from "./market.ts";
+export { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
 export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type {
   ApprovalStatus,

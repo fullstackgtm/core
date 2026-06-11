@@ -334,7 +334,7 @@ export function createHubspotConnector(options) {
                         created = await request(`/crm/v3/objects/companies`, {
                             method: "POST",
                             body: JSON.stringify({
-                                properties: { name, hs_object_source_detail_2: "fullstackgtm create: operation" },
+                                properties: { name, hs_object_source_detail_2: `fullstackgtm create: (${operation.id})` },
                             }),
                         });
                     }

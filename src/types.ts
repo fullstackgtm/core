@@ -34,6 +34,7 @@ export type GtmEvidenceSourceSystem =
   | "manual"
   | "csv"
   | "mock"
+  | "web"
   | "unknown";
 
 export type PatchOperationType =
