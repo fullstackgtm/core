@@ -42,6 +42,7 @@ export type MergeReport = {
     conflicts: MergeConflict[];
     suggestions: MergeSuggestion[];
 };
+export declare function normalizeDomain(domain?: string): string | undefined;
 export declare function mergeSnapshots(snapshots: CanonicalGtmSnapshot[]): {
     snapshot: CanonicalGtmSnapshot;
     report: MergeReport;

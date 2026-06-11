@@ -1,3 +1,4 @@
+import { normalizeDomain } from "./merge.ts";
 import type {
   AuditFinding,
   CanonicalActivity,
@@ -333,7 +334,7 @@ export const duplicateAccountDomainRule: GtmAuditRule = {
   evaluate: ({ snapshot }) => {
     const findings: AuditFinding[] = [];
     const operations = [];
-    for (const [domain, accounts] of duplicateGroups(snapshot.accounts, (account) => account.domain)) {
+    for (const [domain, accounts] of duplicateGroups(snapshot.accounts, (account) => normalizeDomain(account.domain))) {
       const anchor = accounts[0];
       findings.push({
         id: auditFindingId("duplicate-account-domain", anchor.id),

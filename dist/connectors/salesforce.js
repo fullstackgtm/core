@@ -23,6 +23,8 @@ export function createSalesforceConnector(options) {
     const apiVersion = options.apiVersion ?? DEFAULT_API_VERSION;
     const fetchImpl = options.fetchImpl ?? fetch;
     const mappings = options.fieldMappings;
+    // create:<Name> dedup within one connector lifetime (one apply run).
+    const createdAccountsByName = new Map();
     async function request(path, init = {}) {
         const connection = await options.getConnection();
         const url = path.startsWith("http")
@@ -228,11 +230,28 @@ export function createSalesforceConnector(options) {
                 detail: "Tasks can be attached to accounts, contacts, and deals.",
             };
         }
+        // Idempotency: the operation id is stamped into the Description and
+        // pre-checked, so replaying a plan does not duplicate tasks. Fail-open.
+        const token = `fsgtm:${operation.id}`;
+        try {
+            const existing = await query(`SELECT Id FROM Task WHERE Description LIKE '%${token.replace(/'/g, "\\'")}%' LIMIT 1`);
+            if (existing.length > 0) {
+                return {
+                    operationId: operation.id,
+                    status: "skipped",
+                    detail: `Task for this operation already exists (task ${existing[0].Id}); not creating a duplicate.`,
+                    providerData: { id: String(existing[0].Id), existing: true },
+                };
+            }
+        }
+        catch {
+            // fall through to create
+        }
         const response = await request(`/services/data/${apiVersion}/sobjects/Task`, {
             method: "POST",
             body: JSON.stringify({
                 Subject: operation.field ? humanizeField(operation.field) : "Follow up",
-                Description: String(operation.afterValue ?? operation.reason ?? ""),
+                Description: `${String(operation.afterValue ?? operation.reason ?? "")}\n\n[${token}]`,
                 Status: "Not Started",
                 Priority: "Normal",
                 ...reference,
@@ -269,21 +288,50 @@ export function createSalesforceConnector(options) {
                     // link_record on a deal is just setting AccountId in Salesforce.
                     return await setField(operation);
                 case "link_record": {
-                    // `create:<Name>` creates the Account first, then links — creation
-                    // stays inside the typed, human-approved operation model.
+                    // `create:<Name>` is resolve-first: link to an unambiguous existing
+                    // Account, refuse on ambiguity, create only on a confirmed miss —
+                    // and never create the same name twice within one apply run.
                     const value = String(operation.afterValue ?? "");
                     if (value.startsWith("create:")) {
                         const name = value.slice("create:".length).trim();
                         if (!name) {
                             return { operationId: operation.id, status: "skipped", detail: "create: needs an account name (create:<Name>)." };
                         }
-                        const created = await request(`/services/data/${apiVersion}/sobjects/Account`, {
-                            method: "POST",
-                            body: JSON.stringify({ Name: name }),
-                        });
-                        const result = await setField({ ...operation, operation: "set_field", afterValue: String(created.id) });
+                        const nameKey = name.toLowerCase();
+                        let accountId = createdAccountsByName.get(nameKey);
+                        let createdNew = false;
+                        if (!accountId) {
+                            const soqlName = name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+                            const matches = await query(`SELECT Id FROM Account WHERE Name = '${soqlName}' LIMIT 3`);
+                            if (matches.length > 1) {
+                                return {
+                                    operationId: operation.id,
+                                    status: "skipped",
+                                    detail: `create:${name} is ambiguous — ${matches.length} accounts already named "${name}". Link an explicit account id instead.`,
+                                };
+                            }
+                            if (matches.length === 1) {
+                                accountId = String(matches[0].Id);
+                            }
+                            else {
+                                const created = await request(`/services/data/${apiVersion}/sobjects/Account`, {
+                                    method: "POST",
+                                    body: JSON.stringify({ Name: name }),
+                                });
+                                accountId = String(created.id);
+                                createdNew = true;
+                            }
+                            createdAccountsByName.set(nameKey, accountId);
+                        }
+                        const result = await setField({ ...operation, operation: "set_field", afterValue: accountId });
                         return result.status === "applied"
-                            ? { ...result, detail: `Created account "${name}" (${created.id}) and linked ${operation.objectType}/${operation.objectId} to it.`, providerData: { accountId: String(created.id), createdAccount: true } }
+                            ? {
+                                ...result,
+                                detail: createdNew
+                                    ? `Created account "${name}" (${accountId}) and linked ${operation.objectType}/${operation.objectId} to it.`
+                                    : `Linked ${operation.objectType}/${operation.objectId} to existing account ${accountId} (resolved by name, nothing created).`,
+                                providerData: { accountId, ...(createdNew ? { createdAccount: true } : {}) },
+                            }
                             : result;
                     }
                     return await setField({ ...operation, operation: "set_field" });

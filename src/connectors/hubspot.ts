@@ -54,6 +54,10 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
   const baseUrl = (options.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, "");
   const fetchImpl = options.fetchImpl ?? fetch;
   const mappings = options.fieldMappings;
+  // create:<Name> dedup within one connector lifetime (one apply run): the
+  // search API is eventually consistent, so a just-created company is
+  // invisible to search — this map is the authoritative same-run record.
+  const createdCompaniesByName = new Map<string, string>();
 
   async function request(path: string, init: RequestInit = {}): Promise<any> {
     const token = await options.getAccessToken();
@@ -384,21 +388,46 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
     if (!companyId) {
       return { operationId: operation.id, status: "skipped", detail: "link_record needs a target company id." };
     }
-    // `create:<Name>` creates the company first, then links — the approved
-    // value spells out exactly what will happen, so creation stays inside
-    // the typed, human-approved operation model.
+    // `create:<Name>` is resolve-first: link to an existing company when one
+    // unambiguously matches, refuse on ambiguity, create only on a confirmed
+    // miss — and never create the same name twice within one apply run
+    // (HubSpot's search API is eventually consistent, so a just-created
+    // record is invisible to search for several seconds).
     let createdCompanyName: string | null = null;
+    let resolvedExisting = false;
     if (companyId.startsWith("create:")) {
       const name = companyId.slice("create:".length).trim();
       if (!name) {
         return { operationId: operation.id, status: "skipped", detail: "create: needs a company name (create:<Name>)." };
       }
-      const created = await request(`/crm/v3/objects/companies`, {
-        method: "POST",
-        body: JSON.stringify({ properties: { name } }),
-      });
-      companyId = String(created.id);
-      createdCompanyName = name;
+      const nameKey = name.toLowerCase();
+      const alreadyCreated = createdCompaniesByName.get(nameKey);
+      if (alreadyCreated) {
+        companyId = alreadyCreated;
+        resolvedExisting = true;
+      } else {
+        const matches = await searchCompaniesByName(name);
+        if (matches.length > 1) {
+          return {
+            operationId: operation.id,
+            status: "skipped",
+            detail: `create:${name} is ambiguous — ${matches.length} companies already named "${name}" (ids ${matches.join(", ")}). Link an explicit company id instead.`,
+          };
+        }
+        if (matches.length === 1) {
+          companyId = matches[0];
+          resolvedExisting = true;
+          createdCompaniesByName.set(nameKey, companyId);
+        } else {
+          const created = await request(`/crm/v3/objects/companies`, {
+            method: "POST",
+            body: JSON.stringify({ properties: { name } }),
+          });
+          companyId = String(created.id);
+          createdCompanyName = name;
+          createdCompaniesByName.set(nameKey, companyId);
+        }
+      }
     }
     await request(
       `/crm/v4/objects/${fromPath}/${encodeURIComponent(operation.objectId)}/associations/default/companies/${encodeURIComponent(companyId)}`,
@@ -409,9 +438,24 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
       status: "applied",
       detail: createdCompanyName
         ? `Created company "${createdCompanyName}" (${companyId}) and linked ${fromPath}/${operation.objectId} to it.`
-        : `Linked ${fromPath}/${operation.objectId} to company ${companyId}.`,
+        : resolvedExisting
+          ? `Linked ${fromPath}/${operation.objectId} to existing company ${companyId} (resolved by name, nothing created).`
+          : `Linked ${fromPath}/${operation.objectId} to company ${companyId}.`,
       providerData: { companyId, ...(createdCompanyName ? { createdCompany: true } : {}) },
     };
+  }
+
+  /** Exact-name company lookup for resolve-first creates. Returns matching ids (max 3 fetched). */
+  async function searchCompaniesByName(name: string): Promise<string[]> {
+    const data = await request(`/crm/v3/objects/companies/search`, {
+      method: "POST",
+      body: JSON.stringify({
+        filterGroups: [{ filters: [{ propertyName: "name", operator: "EQ", value: name }] }],
+        properties: ["name"],
+        limit: 3,
+      }),
+    });
+    return ((data?.results ?? []) as Array<{ id: string }>).map((row) => String(row.id));
   }
 
   async function createTask(operation: PatchOperation): Promise<PatchOperationResult> {
@@ -424,7 +468,33 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
       };
     }
     const subject = operation.field ? humanizeField(operation.field) : "Follow up";
-    const body = String(operation.afterValue ?? operation.reason ?? "");
+    // The operation id doubles as an idempotency token: it is stamped into
+    // the task body and pre-checked so a replayed plan does not create the
+    // same task twice. Fail-open — a search hiccup must not block the apply.
+    const token = `fsgtm ${operation.id.replace(/^op_/, "")}`;
+    try {
+      const existing = await request(`/crm/v3/objects/tasks/search`, {
+        method: "POST",
+        body: JSON.stringify({
+          filterGroups: [
+            { filters: [{ propertyName: "hs_task_body", operator: "CONTAINS_TOKEN", value: token.split(" ")[1] }] },
+          ],
+          limit: 1,
+        }),
+      });
+      const hit = (existing?.results ?? [])[0] as { id?: string } | undefined;
+      if (hit?.id) {
+        return {
+          operationId: operation.id,
+          status: "skipped",
+          detail: `Task for this operation already exists (task ${hit.id}); not creating a duplicate.`,
+          providerData: { id: hit.id, existing: true },
+        };
+      }
+    } catch {
+      // fall through to create
+    }
+    const body = `${String(operation.afterValue ?? operation.reason ?? "")}\n\n[${token}]`;
     const response = await request(`/crm/v3/objects/tasks`, {
       method: "POST",
       body: JSON.stringify({
@@ -518,6 +588,15 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
     const mappingType = MAPPING_OBJECT_TYPES[objectType];
     if (!objectPath || !mappingType) {
       throw new Error(`Field reads are only supported for accounts, contacts, and deals.`);
+    }
+    // accountId is an association in HubSpot, not a property — without this
+    // branch the compare-and-set on link_record reads null and passes blind.
+    if (field === "accountId" && (objectType === "deal" || objectType === "contact")) {
+      const data = await request(
+        `/crm/v4/objects/${objectPath}/${encodeURIComponent(objectId)}/associations/companies?limit=1`,
+      );
+      const first = (data?.results ?? [])[0] as { toObjectId?: number | string } | undefined;
+      return first?.toObjectId !== undefined ? String(first.toObjectId) : null;
     }
     const defaults = HUBSPOT_DEFAULT_FIELD_MAPPINGS[mappingType] ?? {};
     const property = mappedField(mappings, mappingType, field, defaults[field] ?? field);

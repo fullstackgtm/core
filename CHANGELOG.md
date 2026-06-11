@@ -5,6 +5,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.11.1] — 2026-06-11
+
+Write-path integrity: fixes our own dupe faucets, found auditing the apply
+path for the new [CRM-health lifecycle](./docs/crm-health-lifecycle.md) doc.
+
+### Added
+
+- **docs/crm-health-lifecycle.md**: the full CRUD lifecycle for keeping a
+  CRM healthy — Prevent → Detect → Remediate → Verify/Attribute — grounded
+  in verified platform behavior (HubSpot/Salesforce dedupe and merge
+  support) and the build order toward governed merges and a resolve gate.
+
+### Fixed
+
+- **`create:<Name>` is now resolve-first**: it links to an unambiguous
+  existing company/account instead of creating, refuses on ambiguity, and
+  creates only on a confirmed miss — and never creates the same name twice
+  within one apply run (HubSpot search is eventually consistent, so the
+  same-run record is authoritative).
+- **HubSpot compare-and-set on `link_record` is no longer blind**:
+  `readField("deal"|"contact", id, "accountId")` reads the actual company
+  association (it is not a property), so replaying an applied link returns
+  `conflict` instead of silently re-creating companies.
+- **`create_task` is idempotent**: the operation id is stamped into the
+  task body as a token and pre-checked (fail-open), so replayed plans no
+  longer duplicate merge-review tasks on either provider.
+- **`duplicate-account-domain` normalizes domains** the same way merge
+  does — `www.acme.com`, `https://acme.com/about`, and `acme.com` now
+  group as duplicates.
+
 ## [0.11.0] — 2026-06-11
 
 Canonicalizes the paths discovered dogfooding against a real portal: the

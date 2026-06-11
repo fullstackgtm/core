@@ -1,3 +1,4 @@
+import { normalizeDomain } from "./merge.js";
 /**
  * Placeholder used as `afterValue` when the right value is a human decision
  * (e.g. which owner to assign). Apply orchestration refuses to write these
@@ -316,7 +317,7 @@ export const duplicateAccountDomainRule = {
     evaluate: ({ snapshot }) => {
         const findings = [];
         const operations = [];
-        for (const [domain, accounts] of duplicateGroups(snapshot.accounts, (account) => account.domain)) {
+        for (const [domain, accounts] of duplicateGroups(snapshot.accounts, (account) => normalizeDomain(account.domain))) {
             const anchor = accounts[0];
             findings.push({
                 id: auditFindingId("duplicate-account-domain", anchor.id),

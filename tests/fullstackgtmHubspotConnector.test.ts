@@ -207,6 +207,7 @@ test("hubspot connector applies set_field through a mapped PATCH", async () => {
 
 test("hubspot connector creates a task associated with the target object", async () => {
   const { fetchImpl, calls } = stubFetch({
+    "/crm/v3/objects/tasks/search": { results: [] },
     "/crm/v3/objects/tasks": { id: "task_1" },
   });
   const connector = createHubspotConnector({ getAccessToken: () => "test-token", fetchImpl });
@@ -225,15 +226,42 @@ test("hubspot connector creates a task associated with the target object", async
   });
 
   assert.equal(result.status, "applied");
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].init?.method, "POST");
-  const body = JSON.parse(String(calls[0].init?.body));
+  // Idempotency pre-check (search) then the create.
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].url, /\/crm\/v3\/objects\/tasks\/search$/);
+  assert.equal(calls[1].init?.method, "POST");
+  const body = JSON.parse(String(calls[1].init?.body));
   assert.equal(body.properties.hs_task_subject, "Follow Up");
-  assert.equal(body.properties.hs_task_body, "Research account fit");
+  assert.match(body.properties.hs_task_body, /^Research account fit/);
+  assert.match(body.properties.hs_task_body, /fsgtm task/);
   assert.equal(body.properties.hs_task_status, "NOT_STARTED");
   // Associated to the company with HubSpot's defined task→company type id.
   assert.equal(body.associations[0].to.id, "c1");
   assert.equal(body.associations[0].types[0].associationTypeId, 192);
+});
+
+test("hubspot connector skips creating a task that already exists for the operation", async () => {
+  const { fetchImpl, calls } = stubFetch({
+    "/crm/v3/objects/tasks/search": { results: [{ id: "task_existing" }] },
+  });
+  const connector = createHubspotConnector({ getAccessToken: () => "test-token", fetchImpl });
+
+  const result = await connector.applyOperation!({
+    id: "op_task",
+    objectType: "account",
+    objectId: "c1",
+    operation: "create_task",
+    field: "follow_up_task",
+    beforeValue: null,
+    afterValue: "Research account fit",
+    reason: "Orphan account",
+    riskLevel: "low",
+    approvalRequired: true,
+  });
+
+  assert.equal(result.status, "skipped");
+  assert.match(result.detail ?? "", /already exists \(task task_existing\)/);
+  assert.equal(calls.length, 1);
 });
 
 test("hubspot connector links a deal to a company via the associations API", async () => {

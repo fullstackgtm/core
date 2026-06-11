@@ -74,6 +74,10 @@ function stubFetch() {
         ],
       });
     }
+    if (soql.includes("FROM Task")) {
+      // create_task idempotency pre-check: no existing task by default.
+      return respond({ records: [] });
+    }
     if (soql.includes("FROM Account")) {
       return respond({
         records: [
@@ -262,11 +266,14 @@ test("salesforce connector creates a Task related to the record", async () => {
   });
 
   assert.equal(result.status, "applied");
-  assert.equal(calls.length, 1);
-  assert.match(calls[0].url, /sobjects\/Task$/);
-  const body = JSON.parse(String(calls[0].init?.body));
+  // Idempotency pre-check (SOQL) then the create.
+  assert.equal(calls.length, 2);
+  assert.match(decodeURIComponent(calls[0].url), /FROM Task WHERE Description LIKE/);
+  assert.match(calls[1].url, /sobjects\/Task$/);
+  const body = JSON.parse(String(calls[1].init?.body));
   assert.equal(body.Subject, "Follow Up");
-  assert.equal(body.Description, "Research account fit");
+  assert.match(body.Description, /^Research account fit/);
+  assert.match(body.Description, /fsgtm:op_task/);
   assert.equal(body.WhatId, "001A");
   assert.equal(body.Status, "Not Started");
 });

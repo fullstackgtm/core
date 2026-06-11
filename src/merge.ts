@@ -55,7 +55,7 @@ const CONFLICT_IGNORED_FIELDS = new Set([
   "id", "provider", "crmId", "identities", "raw", "lastSyncAt", "lastActivityAt", "ownerId", "accountId",
 ]);
 
-function normalizeDomain(domain?: string): string | undefined {
+export function normalizeDomain(domain?: string): string | undefined {
   if (!domain) return undefined;
   return domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "") || undefined;
 }
