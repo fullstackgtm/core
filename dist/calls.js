@@ -246,7 +246,7 @@ export function normalizeTranscript(raw) {
 export function parseCall(raw, options = {}) {
     const normalized = normalizeTranscript(raw);
     const segments = parseTranscript(normalized);
-    const insights = extractCallInsights(normalized, segments);
+    const insights = options.insights ?? extractCallInsights(normalized, segments);
     const sourceSystem = options.sourceSystem ?? "manual";
     const id = `call_${callHash(normalized)}`;
     const evidence = insights.map((insight, index) => ({
@@ -258,6 +258,7 @@ export function parseCall(raw, options = {}) {
         text: insight.evidence,
         capturedAt: options.capturedAt,
         metadata: {
+            extractor: options.extractor ?? "deterministic",
             insightType: insight.type,
             speaker: insight.speaker,
             confidence: insight.confidence,
@@ -269,6 +270,7 @@ export function parseCall(raw, options = {}) {
         id,
         title: options.title,
         sourceSystem,
+        extractor: options.extractor ?? "deterministic",
         segments,
         insights,
         evidence,

@@ -49,6 +49,12 @@ In an agent sandbox, prefer rung 1 or 2. Never echo tokens into argv —
 environments — login flows then print verification URLs instead of opening
 the OS browser.
 
+LLM calls (`call parse`, `call score`): set `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY` in the environment, or have the human run
+`echo "$KEY" | fullstackgtm login anthropic` once. Without a key, use
+`call parse --deterministic` (free keyword baseline, no prompt). In
+non-interactive contexts the CLI never prompts — it fails with this guidance.
+
 Provider prerequisites (what the human must create, and which scopes) are in
 the README's **"Connect your CRM"** section: HubSpot needs a private app with
 four `crm.objects.*.read` scopes (plus write scopes only for `apply`);

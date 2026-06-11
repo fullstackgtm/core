@@ -38,7 +38,18 @@ import { createFilePlanStore } from "./planStore.ts";
 import { auditReportToHtml, auditReportToMarkdown, type ReportOptions } from "./report.ts";
 import { builtinAuditRules } from "./rules.ts";
 import { sampleSnapshot } from "./sampleData.ts";
-import { parseCall, suggestCallDeal, type ExtractedCallInsight, type ParsedCall } from "./calls.ts";
+import { normalizeTranscript, parseCall, suggestCallDeal, type ExtractedCallInsight, type ParsedCall } from "./calls.ts";
+import {
+  DEFAULT_RUBRIC,
+  detectProviderFromKey,
+  extractInsightsLlm,
+  parseRubric,
+  resolveLlmCredential,
+  scoreCallLlm,
+  validateLlmKey,
+  type CallScorecard,
+  type LlmProvider,
+} from "./llm.ts";
 import { suggestValues, type ValueSuggestion } from "./suggest.ts";
 import type { FieldMappings } from "./mappings.ts";
 import type {
@@ -59,7 +70,7 @@ Usage:
   fullstackgtm login salesforce --device --client-id <consumer key> [--login-url <url>]
   fullstackgtm login salesforce --instance-url <url> [--no-validate]
   fullstackgtm login stripe [--no-validate]
-  fullstackgtm logout <hubspot|salesforce|stripe|broker>
+  fullstackgtm login anthropic | openai        store an LLM API key for call parse/score\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|broker>
 
   Secrets (tokens, client secrets) are NEVER passed as flags — they leak via
   the process list and shell history. Pipe them on stdin or enter them at the
@@ -70,11 +81,15 @@ Usage:
   fullstackgtm report [source options] [audit options] [report options]
   fullstackgtm diff --before <a.json> --after <b.json> [--json] [--fail-on-new-findings]
   fullstackgtm merge --input <a.json> --input <b.json> [...] --out <merged.json> [--json]
-  fullstackgtm call parse --transcript <file> [--title t] [--source fathom|granola|...] [--json|--ndjson] [--out <path>]
+  fullstackgtm call parse --transcript <file> [--title t] [--source fathom|granola|...] [--model m] [--deterministic] [--json|--ndjson] [--out <path>]
+  fullstackgtm call score --transcript <file>|--call <parsed.json> [--rubric <rubric.json>] [--model m] [--json|--out <path>]
   fullstackgtm call link --attendees <a@x.com,...> | --domain <x.com>  [source options] [--json]
   fullstackgtm call plan --transcript <file>|--call <parsed.json> --deal <id> [source options] [--save|--json]
-                                               calls become evidence: parse dialects (Speaker:/[Me]/Granola JSON),
-                                               link to the right deal, and propose governed next-step writes
+                                               calls become evidence: LLM extraction by default (bring your own
+                                               Anthropic or OpenAI key — captured once on first use, or
+                                               ANTHROPIC_API_KEY/OPENAI_API_KEY, or \`login anthropic|openai\`);
+                                               --deterministic uses the free keyword baseline. Then link the call
+                                               to its deal and propose governed next-step writes.
   fullstackgtm suggest --plan-id <id> | --plan <path>  [source options] [--json] [--out <path>]
                                                derive values for requires_human_* placeholders
                                                from snapshot evidence, with confidence + reasons
@@ -476,7 +491,7 @@ function parseValueOverrides(args: string[]) {
 async function callCommand(args: string[]) {
   const [subcommand, ...rest] = args;
 
-  const loadParsedCall = (): ParsedCall => {
+  const loadParsedCall = async (): Promise<ParsedCall> => {
     const callPath = option(rest, "--call");
     if (callPath) {
       return JSON.parse(readFileSync(resolve(process.cwd(), callPath), "utf8")) as ParsedCall;
@@ -485,15 +500,31 @@ async function callCommand(args: string[]) {
     if (!transcriptPath) throw new Error(`call ${subcommand} requires --transcript <file> or --call <parsed.json>`);
     const raw = readFileSync(resolve(process.cwd(), transcriptPath), "utf8");
     const source = option(rest, "--source") as ParsedCall["sourceSystem"] | undefined;
-    return parseCall(raw, {
+    const base = {
       title: option(rest, "--title") ?? undefined,
       sourceSystem: source,
       capturedAt: new Date().toISOString(),
+    };
+    if (rest.includes("--deterministic")) {
+      return parseCall(raw, base);
+    }
+    // LLM extraction is the default: bring-your-own-key (Anthropic or OpenAI).
+    const credential = await requireLlmCredential();
+    const normalized = normalizeTranscript(raw);
+    const { insights, model } = await extractInsightsLlm(normalized, {
+      ...credential,
+      model: option(rest, "--model") ?? undefined,
+      title: base.title,
+    });
+    return parseCall(raw, {
+      ...base,
+      insights,
+      extractor: `llm:${credential.provider}:${model}`,
     });
   };
 
   if (subcommand === "parse") {
-    const parsed = loadParsedCall();
+    const parsed = await loadParsedCall();
     const outPath = option(rest, "--out");
     if (outPath) writeFileSync(resolve(process.cwd(), outPath), `${JSON.stringify(parsed, null, 2)}\n`);
     if (rest.includes("--ndjson")) {
@@ -551,7 +582,7 @@ async function callCommand(args: string[]) {
   if (subcommand === "plan") {
     const dealId = option(rest, "--deal");
     if (!dealId) throw new Error("call plan requires --deal <dealId> (use `call link` to find it)");
-    const parsed = loadParsedCall();
+    const parsed = await loadParsedCall();
     const snapshot = await readSnapshot(rest);
     const deal = snapshot.deals.find((row) => row.id === dealId);
     if (!deal) throw new Error(`Deal ${dealId} is not in the snapshot — check the id or the snapshot source.`);
@@ -577,7 +608,93 @@ async function callCommand(args: string[]) {
     return;
   }
 
-  throw new Error(`call supports: parse, link, plan (got ${subcommand ?? "nothing"})`);
+  if (subcommand === "score") {
+    const credential = await requireLlmCredential();
+    const rubricPath = option(rest, "--rubric");
+    const rubric = rubricPath
+      ? parseRubric(readFileSync(resolve(process.cwd(), rubricPath), "utf8"))
+      : DEFAULT_RUBRIC;
+    const transcriptPath = option(rest, "--transcript");
+    let transcriptText: string;
+    let title = option(rest, "--title") ?? undefined;
+    if (transcriptPath) {
+      transcriptText = normalizeTranscript(readFileSync(resolve(process.cwd(), transcriptPath), "utf8"));
+    } else {
+      const callPath = option(rest, "--call");
+      if (!callPath) throw new Error("call score requires --transcript <file> or --call <parsed.json>");
+      const parsed = JSON.parse(readFileSync(resolve(process.cwd(), callPath), "utf8")) as ParsedCall;
+      transcriptText = parsed.segments
+        .map((segment) => (segment.speaker ? `${segment.speaker}: ${segment.text}` : segment.text))
+        .join("\n");
+      title = title ?? parsed.title;
+    }
+    const scorecard = await scoreCallLlm(transcriptText, rubric, {
+      ...credential,
+      model: option(rest, "--model") ?? undefined,
+      title,
+    });
+    const outPath = option(rest, "--out");
+    if (outPath) writeFileSync(resolve(process.cwd(), outPath), `${JSON.stringify(scorecard, null, 2)}\n`);
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify(scorecard, null, 2));
+      return;
+    }
+    console.log(renderScorecard(scorecard, title));
+    return;
+  }
+
+  throw new Error(`call supports: parse, link, plan, score (got ${subcommand ?? "nothing"})`);
+}
+
+/**
+ * First-touch key onboarding: env vars win, then the credential store; on a
+ * TTY a missing key is captured once (validated, stored 0600 like provider
+ * logins). Non-interactive contexts get an actionable error instead.
+ */
+async function requireLlmCredential(): Promise<{ provider: LlmProvider; apiKey: string }> {
+  const resolved = resolveLlmCredential();
+  if (resolved) return resolved;
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      "LLM extraction needs an API key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, run `echo \"$KEY\" | fullstackgtm login anthropic` (or `login openai`) once, or pass --deterministic for the free keyword baseline.",
+    );
+  }
+  console.error("LLM parsing needs an API key (Anthropic or OpenAI) — yours, used directly with the provider.");
+  console.error(`Paste it once; it is validated and stored at ${credentialsPath()} (file mode 0600), like CRM logins.`);
+  console.error("(Alternatives: set ANTHROPIC_API_KEY / OPENAI_API_KEY, or pass --deterministic for the free keyword baseline.)\n");
+  const apiKey = await readSecret("API key (sk-ant-... or sk-...): ");
+  const provider = detectProviderFromKey(apiKey);
+  const validation = await validateLlmKey(provider, apiKey);
+  if (!validation.ok) throw new Error(`${provider} rejected the key: ${validation.detail}`);
+  const now = new Date().toISOString();
+  storeCredential(provider, { kind: "api_key", accessToken: apiKey, createdAt: now, updatedAt: now });
+  console.error(`Stored ${provider} key (${validation.detail}). Future runs use it automatically; remove with \`fullstackgtm logout ${provider}\`.\n`);
+  return { provider, apiKey };
+}
+
+function renderScorecard(scorecard: CallScorecard, title?: string): string {
+  const lines = [
+    `# Coaching Scorecard${title ? ` — ${title}` : ""}`,
+    "",
+    `**Overall: ${scorecard.overallScore}/${scorecard.scale}** (model: ${scorecard.model})`,
+    "",
+    "| Dimension | Score | | Coaching note |",
+    "| --- | --- | --- | --- |",
+  ];
+  for (const dim of scorecard.dimensions) {
+    const filled = Math.round((dim.score / dim.maxScore) * 5);
+    const bar = "█".repeat(filled) + "░".repeat(5 - filled);
+    lines.push(`| ${dim.name} | ${dim.score}/${dim.maxScore} | ${bar} | ${dim.coachingNote} |`);
+  }
+  if (scorecard.highlights.length) {
+    lines.push("", "**Highlights**");
+    for (const h of scorecard.highlights) lines.push(`- ${h}`);
+  }
+  if (scorecard.missedItems.length) {
+    lines.push("", "**Missed**");
+    for (const m of scorecard.missedItems) lines.push(`- ${m}`);
+  }
+  return lines.join("\n");
 }
 
 function buildCallPlan(
@@ -1207,9 +1324,22 @@ async function login(args: string[]) {
     console.log(`Logged in to Stripe. Credentials stored in ${credentialsPath()}.`);
     return;
   }
+  if (provider === "anthropic" || provider === "openai") {
+    const key = await readSecret(`${provider} API key (${provider === "anthropic" ? "sk-ant-..." : "sk-..."})`);
+    if (!key) throw new Error(`No ${provider} key provided.`);
+    if (!args.includes("--no-validate")) {
+      const validation = await validateLlmKey(provider, key);
+      if (!validation.ok) throw new Error(`${provider} rejected the key: ${validation.detail}`);
+      console.log(validation.detail);
+    }
+    const stamp = new Date().toISOString();
+    storeCredential(provider, { kind: "api_key", accessToken: key, createdAt: stamp, updatedAt: stamp });
+    console.log(`Stored ${provider} API key in ${credentialsPath()}. \`fullstackgtm call parse\` and \`call score\` use it automatically.`);
+    return;
+  }
   if (provider !== "hubspot") {
     throw new Error(
-      "login supports: hubspot, salesforce, stripe, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com",
+      "login supports: hubspot, salesforce, stripe, anthropic, openai, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com",
     );
   }
   const now = new Date().toISOString();
@@ -1302,6 +1432,7 @@ export function doctorReport(env: Record<string, string | undefined> = process.e
       : providerStatus("stripe", broker),
   };
 
+  const llm = resolveLlmCredential(env);
   const missingPeers = ["@modelcontextprotocol/sdk", "zod"].filter((name) => {
     try {
       import.meta.resolve(name);
@@ -1328,6 +1459,9 @@ export function doctorReport(env: Record<string, string | undefined> = process.e
     config: { path: configPath, exists: existsSync(configPath) },
     providers,
     broker: broker ? { paired: true, baseUrl: broker.baseUrl ?? "unknown" } : { paired: false },
+    llm: llm
+      ? { configured: true, provider: llm.provider, source: llm.source }
+      : { configured: false, detail: "call parse/score will prompt once, or set ANTHROPIC_API_KEY / OPENAI_API_KEY" },
     mcp: { peersInstalled: missingPeers.length === 0, missing: missingPeers },
     nextSteps,
   };
@@ -1374,6 +1508,7 @@ function doctorCommand(args: string[]) {
       `  ${provider.padEnd(11)} ${status.source === "none" ? `not connected (${status.detail})` : `${status.source}: ${status.detail}`}`,
     ),
     `  ${"broker".padEnd(11)} ${report.broker.paired ? `paired with ${report.broker.baseUrl}` : "not paired (fullstackgtm login --via <hosted url>)"}`,
+    `  ${"llm".padEnd(11)} ${report.llm.configured ? `${report.llm.provider} key (${report.llm.source}) — call parse/score ready` : `not configured (${report.llm.detail})`}`,
     "",
     report.mcp.peersInstalled
       ? "MCP:        peers installed — `fullstackgtm-mcp` is ready"

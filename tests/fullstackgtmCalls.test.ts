@@ -129,7 +129,7 @@ test("CLI chain: call parse --out, call plan --save produces an approvable next-
     writeFileSync(snapPath, JSON.stringify(snapshot()));
     const parsedPath = join(home, "parsed.json");
 
-    await runCli(["call", "parse", "--transcript", transcriptPath, "--title", "Disco", "--out", parsedPath]);
+    await runCli(["call", "parse", "--deterministic", "--transcript", transcriptPath, "--title", "Disco", "--out", parsedPath]);
     await runCli(["call", "plan", "--call", parsedPath, "--deal", "d1", "--input", snapPath, "--save"]);
 
     const store = createFilePlanStore();

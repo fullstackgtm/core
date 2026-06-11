@@ -5,6 +5,41 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.14.0] — 2026-06-11
+
+LLM-powered call intelligence, bring-your-own-key. The dry-run replications
+of two real client pipelines proved the deterministic baseline is an
+analytics floor, not what call workflows actually run on — so the no-LLM
+guardrail is consciously retired for the `call` commands (and only there).
+
+### Added
+
+- **LLM extraction is the default for `call parse`** — constrained tool
+  calls against Anthropic (default claude-haiku-4-5) or OpenAI (default
+  gpt-4o-mini) via raw fetch, no SDK dependency. Mandatory verbatim-quote
+  evidence; next steps carry owner/deadline/commitment; every insight is
+  provenance-marked (`extractor: "llm:<provider>:<model>"` vs
+  `"deterministic"`). `--deterministic` keeps the free keyword baseline.
+- **First-touch key onboarding**: the first LLM command without a key (TTY)
+  explains, captures the key via muted prompt/stdin, auto-detects the
+  provider from the prefix, validates it against the provider's API, and
+  stores it 0600 in the credential store. Non-interactive contexts get an
+  actionable error, never a prompt. Also: `fullstackgtm login anthropic|openai`
+  and `logout`, and a `doctor` row showing LLM key status.
+- **`fullstackgtm call score`**: rubric-driven coaching scorecards —
+  built-in five-dimension rubric or `--rubric rubric.json`
+  ({ scale, dimensions: [{ name, weight, rubric }] }); per-dimension
+  verbatim evidence + coaching notes; the weighted overall is computed
+  deterministically client-side. Markdown table or `--json`.
+- **MCP `fullstackgtm_call_parse` gains `extractor: auto|llm|deterministic`**
+  (auto uses a key when the server has one, else the baseline) and `--model`.
+
+### Security
+
+- LLM keys follow the same discipline as CRM secrets: stdin/prompt only,
+  never argv; 0600 store; provider error bodies never echoed (status line
+  only); keys go directly to api.anthropic.com / api.openai.com.
+
 ## [0.13.1] — 2026-06-11
 
 ### Fixed

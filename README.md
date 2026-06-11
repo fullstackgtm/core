@@ -49,22 +49,30 @@ Nothing is ever written without an explicit `--approve`. Operations whose value 
 
 ## Call workflows: calls become governed evidence
 
-Calls are where pipeline truth lives. `call parse` normalizes any transcript dialect — `Speaker: text` lines (Fathom, Gong exports), `[Speaker]:` labels, or raw Granola utterance JSON — into canonical segments, deterministic keyword-derived insights (next steps, objections, pricing, risks, competitor mentions…), and `GtmEvidence` records, all LLM-free and byte-stable per transcript. `call link` answers "which deal was this call about" from attendee domains (account domain or contact emails → open deals, most recent activity first, with confidence + reason). `call plan` turns next-step insights into the same governed plan lifecycle as everything else.
+Calls are where pipeline truth lives. `call parse` normalizes any transcript dialect — `Speaker: text` lines (Fathom, Gong exports), `[Speaker]:` labels, or raw Granola utterance JSON — into canonical segments, insights, and `GtmEvidence` records.
+
+**Extraction is LLM-powered by default, with your own key.** The first time you run `call parse` or `call score`, the CLI asks for an Anthropic or OpenAI API key (auto-detected from the prefix), validates it against the provider, and stores it in the 0600 credential store — same treatment as CRM logins. Or skip the prompt: set `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, or `echo "$KEY" | fullstackgtm login anthropic` (or `openai`). The key talks directly to your provider — raw fetch, no SDK, no middleman. `--model` overrides the defaults (claude-haiku-4-5 / gpt-4o-mini). LLM insights carry verbatim-quote evidence and, for next steps, owner/deadline/commitment. Pass `--deterministic` for the free, instant, byte-stable keyword baseline (no key needed — right for CI and warehouse bulk loads). Every insight is provenance-marked (`extractor: "llm:anthropic:…"` vs `"deterministic"`).
+
+**`call score`** rates the call against a coaching rubric — five built-in dimensions (discovery, next steps, stakeholders, value, objections) or your own via `--rubric rubric.json` (`{ scale, dimensions: [{ name, weight, rubric }] }`); the weighted overall is computed deterministically client-side, every dimension score is evidence-quoted, and the rubric file is where your client-specific coaching framework lives.
+
+`call link` answers "which deal was this call about" from attendee domains (account domain or contact emails → open deals, most recent activity first, with confidence + reason). `call plan` turns next-step insights into the same governed plan lifecycle as everything else.
 
 ```bash
-# Coaching/score pipeline (Slack + CRM): parse → link → govern the writeback
-fullstackgtm call parse --transcript call.txt --title "Acme disco" --out parsed.json
-fullstackgtm call link --attendees jane@acme.com --provider hubspot          # → deal id + reason
+# Coaching pipeline (Slack + CRM): parse → score → link → govern the writeback
+fullstackgtm call parse --transcript call.txt --title "Acme disco" --out parsed.json   # LLM extraction
+fullstackgtm call score --call parsed.json --rubric team-rubric.json                   # evidence-quoted scorecard
+fullstackgtm call link --attendees jane@acme.com --provider hubspot                    # → deal id + reason
 fullstackgtm call plan --call parsed.json --deal 123 --provider hubspot --save
 # review → plans approve → apply: deal.next_step + follow-up tasks, compare-and-set protected
-# (LLM scoring/extraction stays in your own pipeline; pipe parsed.json into it and into Slack)
+# (pipe the parse/score JSON into Slack/Notion however you like)
 
 # Analytics pipeline (warehouse): one flat NDJSON row per insight
-for t in transcripts/*; do fullstackgtm call parse --transcript "$t" --ndjson; done > insights.ndjson
+for t in transcripts/*; do fullstackgtm call parse --transcript "$t" --ndjson --deterministic; done > insights.ndjson
+# free keyword baseline for bulk loads; drop --deterministic for LLM-quality rows
 # COPY into your warehouse (stable call/evidence ids make reloads idempotent)
 ```
 
-The deliberate boundary: parsing, linking, and governed writeback are deterministic CLI primitives; LLM scoring, rubric extraction, and Slack/Notion/warehouse sinks are *your* pipeline, composed around the JSON.
+The boundary that remains: Slack/Notion/warehouse sinks are *your* pipeline, composed around the JSON — and your rubrics and keys stay yours.
 
 ## From findings to fixes: the suggest chain
 

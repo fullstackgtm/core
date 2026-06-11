@@ -23,7 +23,7 @@ export declare function baseHomeDir(): string;
  */
 export declare function listProfiles(): string[];
 export type StoredCredential = {
-    kind: "private_app" | "oauth" | "broker";
+    kind: "private_app" | "oauth" | "broker" | "api_key";
     accessToken: string;
     refreshToken?: string;
     /** Epoch ms when the access token expires (oauth only). */

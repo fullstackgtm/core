@@ -17,4 +17,5 @@ export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mapp
 export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, duplicateOpenDealRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, requiresHumanInput, staleDealRule, } from "./rules.js";
 export { extractCallInsights, normalizeTranscript, parseCall, parseTranscript, suggestCallDeal, summarizeInsights, } from "./calls.js";
 export { sampleSnapshot } from "./sampleData.js";
+export { DEFAULT_MODELS, DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
 export { suggestValues } from "./suggest.js";

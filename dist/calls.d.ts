@@ -36,6 +36,8 @@ export type ParsedCall = {
     id: string;
     title?: string;
     sourceSystem: GtmEvidenceSourceSystem;
+    /** What produced the insights: "deterministic" or "llm:<provider>:<model>". */
+    extractor: string;
     segments: ParsedTranscriptSegment[];
     insights: ExtractedCallInsight[];
     evidence: GtmEvidence[];
@@ -52,6 +54,9 @@ export declare function parseCall(raw: string, options?: {
     title?: string;
     sourceSystem?: GtmEvidenceSourceSystem;
     capturedAt?: string;
+    /** Pre-extracted insights (e.g. LLM); skips the deterministic extractor. */
+    insights?: ExtractedCallInsight[];
+    extractor?: string;
 }): ParsedCall;
 export type CallDealSuggestion = {
     dealId: string | null;

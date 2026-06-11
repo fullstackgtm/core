@@ -1,3 +1,4 @@
+import { type LlmProvider } from "./llm.ts";
 type ProviderDoctorStatus = {
     source: "env" | "stored" | "broker" | "none";
     detail: string;
@@ -28,6 +29,17 @@ export declare function doctorReport(env?: Record<string, string | undefined>): 
     } | {
         paired: boolean;
         baseUrl?: undefined;
+    };
+    llm: {
+        configured: boolean;
+        provider: LlmProvider;
+        source: "env" | "stored";
+        detail?: undefined;
+    } | {
+        configured: boolean;
+        detail: string;
+        provider?: undefined;
+        source?: undefined;
     };
     mcp: {
         peersInstalled: boolean;

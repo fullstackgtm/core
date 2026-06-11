@@ -45,7 +45,8 @@ import { generateDemoSnapshot } from "./demo.js";
 import { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
 import { builtinAuditRules } from "./rules.js";
 import { sampleSnapshot } from "./sampleData.js";
-import { parseCall } from "./calls.js";
+import { normalizeTranscript, parseCall } from "./calls.js";
+import { extractInsightsLlm, resolveLlmCredential } from "./llm.js";
 import { suggestValues } from "./suggest.js";
 function content(value) {
     return {
@@ -162,21 +163,38 @@ export async function startMcpServer() {
     });
     server.registerTool("fullstackgtm_call_parse", {
         title: "Parse Call Transcript",
-        description: "Deterministically parse a call transcript (Speaker:/[Speaker]: lines or Granola " +
-            "utterance JSON) into canonical segments, keyword-derived insights (next steps, " +
-            "objections, pricing, risks, competitor mentions...), and GtmEvidence records. " +
-            "Read-only and LLM-free; pair with fullstackgtm_audit/apply for governed writes.",
+        description: "Parse a call transcript (Speaker:/[Speaker]: lines or Granola utterance JSON) into " +
+            "canonical segments, insights, and GtmEvidence records. extractor: 'auto' (default) " +
+            "uses LLM extraction when an Anthropic/OpenAI key is configured in the server " +
+            "environment or credential store, else the free deterministic keyword baseline; " +
+            "'llm' and 'deterministic' force either. Read-only; every insight is provenance-marked.",
         inputSchema: {
             transcript: z.string().optional(),
             transcriptPath: z.string().optional(),
             title: z.string().optional(),
             source: z.enum(["gong", "chorus", "fathom", "manual", "csv", "unknown"]).optional(),
+            extractor: z.enum(["auto", "llm", "deterministic"]).optional(),
+            model: z.string().optional(),
         },
-    }, async ({ transcript, transcriptPath, title, source }) => {
+    }, async ({ transcript, transcriptPath, title, source, extractor, model }) => {
         const raw = transcript ??
             (transcriptPath ? readFileSync(resolve(process.cwd(), transcriptPath), "utf8") : null);
         if (!raw)
             throw new Error("Provide transcript (text) or transcriptPath (file).");
+        const mode = extractor ?? "auto";
+        const credential = mode === "deterministic" ? null : resolveLlmCredential();
+        if (mode === "llm" && !credential) {
+            throw new Error("extractor 'llm' needs an API key: set ANTHROPIC_API_KEY or OPENAI_API_KEY in the MCP server environment, or store one with `fullstackgtm login anthropic|openai`.");
+        }
+        if (credential) {
+            const normalized = normalizeTranscript(raw);
+            const { insights, model: used } = await extractInsightsLlm(normalized, {
+                ...credential,
+                model,
+                title,
+            });
+            return content(parseCall(raw, { title, sourceSystem: source, insights, extractor: `llm:${credential.provider}:${used}` }));
+        }
         return content(parseCall(raw, { title, sourceSystem: source }));
     });
     server.registerTool("fullstackgtm_rules", {

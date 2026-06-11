@@ -20,8 +20,10 @@ at/above `--fail-on`.
 
 ## Key invariants (calls)
 
-`fullstackgtm call parse` (and MCP fullstackgtm_call_parse) is deterministic
-and LLM-free; `call link` suggests the deal with confidence + reason;
+`fullstackgtm call parse` defaults to LLM extraction (BYO Anthropic/OpenAI
+key; env or stored via `login anthropic|openai`); `--deterministic` is the
+free keyword baseline; `call score --rubric` produces evidence-quoted
+coaching scorecards; `call link` suggests the deal with confidence + reason;
 `call plan` proposes governed next-step writes through the standard
 approve/apply lifecycle.
 

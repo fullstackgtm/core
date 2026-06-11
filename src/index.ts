@@ -112,6 +112,22 @@ export {
   type ParsedTranscriptSegment,
 } from "./calls.ts";
 export { sampleSnapshot } from "./sampleData.ts";
+export {
+  DEFAULT_MODELS,
+  DEFAULT_RUBRIC,
+  detectProviderFromKey,
+  extractInsightsLlm,
+  parseRubric,
+  resolveLlmCredential,
+  scoreCallLlm,
+  validateLlmKey,
+  type CallScorecard,
+  type LlmCredential,
+  type LlmExtractedInsight,
+  type LlmProvider,
+  type Rubric,
+  type ScoredDimension,
+} from "./llm.ts";
 export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type {
   ApprovalStatus,

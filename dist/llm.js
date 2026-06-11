@@ -1,0 +1,241 @@
+import { getCredential } from "./credentials.js";
+export const DEFAULT_MODELS = {
+    anthropic: "claude-haiku-4-5",
+    openai: "gpt-4o-mini",
+};
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+// Bound cost and context: long calls keep the head and tail.
+const MAX_TRANSCRIPT_CHARS = 28_000;
+export function detectProviderFromKey(apiKey) {
+    return apiKey.startsWith("sk-ant-") ? "anthropic" : "openai";
+}
+/** Env first (ANTHROPIC_API_KEY, then OPENAI_API_KEY), then the credential store. */
+export function resolveLlmCredential(env = process.env) {
+    if (env.ANTHROPIC_API_KEY)
+        return { provider: "anthropic", apiKey: env.ANTHROPIC_API_KEY, source: "env" };
+    if (env.OPENAI_API_KEY)
+        return { provider: "openai", apiKey: env.OPENAI_API_KEY, source: "env" };
+    for (const provider of ["anthropic", "openai"]) {
+        const stored = getCredential(provider);
+        if (stored?.accessToken)
+            return { provider, apiKey: stored.accessToken, source: "stored" };
+    }
+    return null;
+}
+const INSIGHT_TYPES = [
+    "pain_point",
+    "objection",
+    "competitor_mention",
+    "next_step",
+    "feature_request",
+    "pricing",
+    "decision_criteria",
+    "risk",
+    "coaching_moment",
+];
+const EXTRACT_SCHEMA = {
+    type: "object",
+    required: ["insights"],
+    properties: {
+        insights: {
+            type: "array",
+            items: {
+                type: "object",
+                required: ["type", "text", "evidence", "importance", "confidence"],
+                properties: {
+                    type: { type: "string", enum: INSIGHT_TYPES },
+                    text: { type: "string", description: "The insight, concise and specific (one sentence)." },
+                    evidence: { type: "string", description: "VERBATIM quote from the transcript that grounds this insight. Never paraphrase." },
+                    speaker: { type: "string", description: "Who said the evidence, exactly as named in the transcript." },
+                    importance: { type: "integer", minimum: 1, maximum: 5 },
+                    confidence: { type: "number", minimum: 0, maximum: 1 },
+                    owner: { type: "string", description: "next_step only: who committed to the action." },
+                    deadline: { type: "string", description: "next_step only: when, as stated (e.g. 'Thursday 2 PM')." },
+                    commitment: { type: "string", enum: ["firm", "tentative", "exploratory"], description: "next_step only." },
+                },
+            },
+        },
+    },
+};
+const EXTRACT_INSTRUCTIONS = `Extract GTM insights from this sales call transcript.
+Rules:
+- evidence MUST be a verbatim quote from the transcript. If you cannot quote it, do not emit the insight.
+- text is your concise restatement; one sentence, specific (names, numbers, dates).
+- next_step insights are concrete commitments: include owner, deadline (as stated), and commitment level.
+- importance: 5 = affects the deal outcome directly, 1 = color.
+- Emit nothing for small talk. Quality over quantity.`;
+export async function extractInsightsLlm(transcript, options) {
+    const model = options.model ?? DEFAULT_MODELS[options.provider];
+    const text = truncateTranscript(transcript);
+    const prompt = `${EXTRACT_INSTRUCTIONS}\n\n${options.title ? `Call: ${options.title}\n` : ""}Transcript:\n${text}`;
+    const result = (await forcedToolCall(prompt, "extract_call_insights", EXTRACT_SCHEMA, model, options));
+    const insights = (result.insights ?? [])
+        .filter((insight) => INSIGHT_TYPES.includes(insight.type))
+        .map((insight) => ({
+        ...insight,
+        title: insight.type.replace(/_/g, " "),
+        importance: clamp(Math.round(insight.importance ?? 3), 1, 5),
+        confidence: clamp(insight.confidence ?? 0.7, 0, 1),
+    }))
+        .sort((a, b) => b.importance - a.importance || b.confidence - a.confidence);
+    return { insights, model };
+}
+export const DEFAULT_RUBRIC = {
+    scale: 5,
+    dimensions: [
+        { name: "Depth of Discovery", weight: 1.2, rubric: "Did the rep uncover concrete pain, current process, and cost of inaction with specifics — 5 — or stay at surface level — 1?" },
+        { name: "Next Steps & Commitment", weight: 1.2, rubric: "Did the call end with a specific, time-bound, mutually agreed next step (5) or vague intentions (1)?" },
+        { name: "Stakeholder Engagement", weight: 1.0, rubric: "Were decision makers and influencers identified and engaged (5) or is the rep single-threaded with an unknown buying group (1)?" },
+        { name: "Value Articulation", weight: 1.0, rubric: "Was value tied to the prospect's own stated problems and numbers (5) or generic feature talk (1)?" },
+        { name: "Objection Handling", weight: 1.0, rubric: "Were concerns surfaced, acknowledged, and resolved with evidence (5), or dismissed/avoided (1)?" },
+    ],
+};
+const SCORE_SCHEMA = (scale, dimensions) => ({
+    type: "object",
+    required: ["dimensions", "highlights", "missed_items"],
+    properties: {
+        dimensions: {
+            type: "array",
+            items: {
+                type: "object",
+                required: ["name", "score", "evidence", "coaching_note"],
+                properties: {
+                    name: { type: "string", enum: dimensions.map((d) => d.name) },
+                    score: { type: "integer", minimum: 1, maximum: scale },
+                    evidence: { type: "array", items: { type: "string" }, description: "Verbatim quotes supporting the score." },
+                    coaching_note: { type: "string", description: "One actionable sentence, max 25 words." },
+                },
+            },
+        },
+        highlights: { type: "array", items: { type: "string" } },
+        missed_items: { type: "array", items: { type: "string" } },
+    },
+});
+export async function scoreCallLlm(transcript, rubric, options) {
+    const model = options.model ?? DEFAULT_MODELS[options.provider];
+    const text = truncateTranscript(transcript);
+    const rubricText = rubric.dimensions
+        .map((d) => `- ${d.name} (weight ${d.weight}): ${d.rubric}`)
+        .join("\n");
+    const prompt = `Score this sales call against the rubric. Score every dimension 1-${rubric.scale}. Ground every score in verbatim quotes; if the transcript gives no signal for a dimension, score it low and say why in the coaching note.\n\nRubric:\n${rubricText}\n\n${options.title ? `Call: ${options.title}\n` : ""}Transcript:\n${text}`;
+    const result = (await forcedToolCall(prompt, "score_call", SCORE_SCHEMA(rubric.scale, rubric.dimensions), model, options));
+    const byName = new Map((result.dimensions ?? []).map((d) => [d.name, d]));
+    const dimensions = rubric.dimensions.map((dim) => {
+        const scored = byName.get(dim.name);
+        return {
+            name: dim.name,
+            score: clamp(Math.round(scored?.score ?? 1), 1, rubric.scale),
+            maxScore: rubric.scale,
+            weight: dim.weight,
+            evidence: scored?.evidence ?? [],
+            coachingNote: scored?.coaching_note ?? "No signal for this dimension in the transcript.",
+        };
+    });
+    const totalWeight = dimensions.reduce((sum, d) => sum + d.weight, 0);
+    const overallScore = Math.round((dimensions.reduce((sum, d) => sum + d.score * d.weight, 0) / totalWeight) * 100) / 100;
+    return {
+        dimensions,
+        overallScore,
+        scale: rubric.scale,
+        highlights: result.highlights ?? [],
+        missedItems: result.missed_items ?? [],
+        model,
+    };
+}
+export function parseRubric(json) {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed.dimensions) || parsed.dimensions.length === 0) {
+        throw new Error("Rubric needs a dimensions array: { scale, dimensions: [{ name, weight, rubric }] }");
+    }
+    return {
+        scale: parsed.scale ?? 5,
+        dimensions: parsed.dimensions.map((d) => ({
+            name: String(d.name),
+            weight: typeof d.weight === "number" ? d.weight : 1,
+            rubric: String(d.rubric ?? ""),
+        })),
+    };
+}
+// ── Provider plumbing (raw fetch, forced tool calls) ───────────────────────
+async function forcedToolCall(prompt, toolName, schema, model, options) {
+    const fetchImpl = options.fetchImpl ?? fetch;
+    if (options.provider === "anthropic") {
+        const response = await llmFetch(fetchImpl, ANTHROPIC_URL, {
+            method: "POST",
+            headers: {
+                "x-api-key": options.apiKey,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                model,
+                max_tokens: 4096,
+                tools: [{ name: toolName, description: `Return the ${toolName} result.`, input_schema: schema }],
+                tool_choice: { type: "tool", name: toolName },
+                messages: [{ role: "user", content: prompt }],
+            }),
+        });
+        const block = response.content?.find((item) => item.type === "tool_use");
+        if (!block?.input)
+            throw new Error("Anthropic returned no tool call — try again or a different --model.");
+        return block.input;
+    }
+    const response = await llmFetch(fetchImpl, OPENAI_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+            model,
+            messages: [{ role: "user", content: prompt }],
+            tools: [{ type: "function", function: { name: toolName, parameters: schema } }],
+            tool_choice: { type: "function", function: { name: toolName } },
+        }),
+    });
+    const call = response
+        .choices?.[0]?.message?.tool_calls?.[0];
+    if (!call?.function?.arguments)
+        throw new Error("OpenAI returned no tool call — try again or a different --model.");
+    return JSON.parse(call.function.arguments);
+}
+async function llmFetch(fetchImpl, url, init) {
+    let response;
+    try {
+        response = await fetchImpl(url, init);
+    }
+    catch (error) {
+        const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+        throw new Error(`Cannot reach ${new URL(url).hostname}${cause}. Check network access.`);
+    }
+    if (!response.ok) {
+        // Status line only — provider error bodies can reflect request content.
+        throw new Error(`LLM API error ${response.status} ${response.statusText} from ${new URL(url).hostname}. Check the API key (\`fullstackgtm login anthropic|openai\`) and model name.`);
+    }
+    return response.json();
+}
+function truncateTranscript(transcript) {
+    if (transcript.length <= MAX_TRANSCRIPT_CHARS)
+        return transcript;
+    const half = MAX_TRANSCRIPT_CHARS / 2;
+    return `${transcript.slice(0, half)}\n[... middle of transcript truncated ...]\n${transcript.slice(-half)}`;
+}
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+/** Cheap key validation against the provider's model-list endpoint. Status line only. */
+export async function validateLlmKey(provider, apiKey, fetchImpl = fetch) {
+    const url = provider === "anthropic" ? "https://api.anthropic.com/v1/models" : "https://api.openai.com/v1/models";
+    const headers = provider === "anthropic"
+        ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+        : { Authorization: `Bearer ${apiKey}` };
+    let response;
+    try {
+        response = await fetchImpl(url, { headers });
+    }
+    catch (error) {
+        const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+        return { ok: false, detail: `Cannot reach ${new URL(url).hostname}${cause}.` };
+    }
+    return response.ok
+        ? { ok: true, detail: `Key accepted by the ${provider} API.` }
+        : { ok: false, detail: `HTTP ${response.status} ${response.statusText}`.trim() };
+}
