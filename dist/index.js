@@ -15,5 +15,6 @@ export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
 export { auditReportToHtml, auditReportToMarkdown } from "./report.js";
 export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, normalizeFieldMappings, readMappedValue, } from "./mappings.js";
 export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, duplicateOpenDealRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, requiresHumanInput, staleDealRule, } from "./rules.js";
+export { extractCallInsights, normalizeTranscript, parseCall, parseTranscript, suggestCallDeal, summarizeInsights, } from "./calls.js";
 export { sampleSnapshot } from "./sampleData.js";
 export { suggestValues } from "./suggest.js";

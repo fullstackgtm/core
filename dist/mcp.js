@@ -45,6 +45,7 @@ import { generateDemoSnapshot } from "./demo.js";
 import { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
 import { builtinAuditRules } from "./rules.js";
 import { sampleSnapshot } from "./sampleData.js";
+import { parseCall } from "./calls.js";
 import { suggestValues } from "./suggest.js";
 function content(value) {
     return {
@@ -155,6 +156,25 @@ export async function startMcpServer() {
         const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
         const snapshot = await readSnapshot(provider, inputPath);
         return content({ suggestions: suggestValues(plan, snapshot) });
+    });
+    server.registerTool("fullstackgtm_call_parse", {
+        title: "Parse Call Transcript",
+        description: "Deterministically parse a call transcript (Speaker:/[Speaker]: lines or Granola " +
+            "utterance JSON) into canonical segments, keyword-derived insights (next steps, " +
+            "objections, pricing, risks, competitor mentions...), and GtmEvidence records. " +
+            "Read-only and LLM-free; pair with fullstackgtm_audit/apply for governed writes.",
+        inputSchema: {
+            transcript: z.string().optional(),
+            transcriptPath: z.string().optional(),
+            title: z.string().optional(),
+            source: z.enum(["gong", "chorus", "fathom", "manual", "csv", "unknown"]).optional(),
+        },
+    }, async ({ transcript, transcriptPath, title, source }) => {
+        const raw = transcript ??
+            (transcriptPath ? readFileSync(resolve(process.cwd(), transcriptPath), "utf8") : null);
+        if (!raw)
+            throw new Error("Provide transcript (text) or transcriptPath (file).");
+        return content(parseCall(raw, { title, sourceSystem: source }));
     });
     server.registerTool("fullstackgtm_rules", {
         title: "List Audit Rules",

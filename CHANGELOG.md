@@ -5,6 +5,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.13.0] — 2026-06-11
+
+Calls become evidence: the deterministic skeleton of every call workflow —
+normalize, link, govern the writeback — as chainable primitives. Born from
+two real client pipelines that each hand-rolled all three.
+
+### Added
+
+- **`fullstackgtm call parse`**: normalizes any transcript dialect
+  (`Speaker: text`, `[Speaker]:` labels, or raw Granola utterance JSON) into
+  canonical segments, nine types of deterministic keyword-derived insights,
+  and `GtmEvidence` records with stable ids. `--json`, `--out`, and
+  `--ndjson` (one flat row per insight — warehouse-ready). LLM-free.
+- **`fullstackgtm call link`**: attendee emails/domain → account (by domain
+  or contact email) → open deals ranked by recent activity, with
+  confidence + written reason — the heuristic every call pipeline
+  hand-rolls, as one command.
+- **`fullstackgtm call plan`**: next-step insights become a saved patch
+  plan — `deal.next_step` (compare-and-set protected) plus follow-up tasks
+  (idempotent), with the call evidence attached — flowing into the standard
+  suggest/approve/apply lifecycle. Implements the
+  `call_next_step_not_reflected_in_crm` finding declared since the MVP.
+- **MCP `fullstackgtm_call_parse`** tool; `parseCall`, `normalizeTranscript`,
+  `suggestCallDeal`, `parseTranscript`, `extractCallInsights`,
+  `summarizeInsights` exported from the package (the extraction library
+  moved out of the proprietary app — the boundary moves outward).
+
 ## [0.12.0] — 2026-06-11
 
 Governed merges: the Remediate layer of the

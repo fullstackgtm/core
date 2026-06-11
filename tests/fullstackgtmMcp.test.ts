@@ -34,7 +34,7 @@ test("mcp server exposes the audit, rules, and apply tools over stdio", () =>
     const tools = await client.listTools();
     assert.deepEqual(
       tools.tools.map((tool) => tool.name).sort(),
-      ["fullstackgtm_apply", "fullstackgtm_audit", "fullstackgtm_rules", "fullstackgtm_suggest"],
+      ["fullstackgtm_apply", "fullstackgtm_audit", "fullstackgtm_call_parse", "fullstackgtm_rules", "fullstackgtm_suggest"],
     );
   }));
 

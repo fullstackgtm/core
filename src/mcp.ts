@@ -46,6 +46,7 @@ import type { FieldMappings } from "./mappings.ts";
 import { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
 import { builtinAuditRules } from "./rules.ts";
 import { sampleSnapshot } from "./sampleData.ts";
+import { parseCall } from "./calls.ts";
 import { suggestValues } from "./suggest.ts";
 import type { CanonicalGtmSnapshot, GtmConnector, PatchPlan } from "./types.ts";
 
@@ -185,6 +186,31 @@ export async function startMcpServer() {
       const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8")) as PatchPlan;
       const snapshot = await readSnapshot(provider, inputPath);
       return content({ suggestions: suggestValues(plan, snapshot) });
+    },
+  );
+
+  server.registerTool(
+    "fullstackgtm_call_parse",
+    {
+      title: "Parse Call Transcript",
+      description:
+        "Deterministically parse a call transcript (Speaker:/[Speaker]: lines or Granola " +
+        "utterance JSON) into canonical segments, keyword-derived insights (next steps, " +
+        "objections, pricing, risks, competitor mentions...), and GtmEvidence records. " +
+        "Read-only and LLM-free; pair with fullstackgtm_audit/apply for governed writes.",
+      inputSchema: {
+        transcript: z.string().optional(),
+        transcriptPath: z.string().optional(),
+        title: z.string().optional(),
+        source: z.enum(["gong", "chorus", "fathom", "manual", "csv", "unknown"]).optional(),
+      },
+    },
+    async ({ transcript, transcriptPath, title, source }) => {
+      const raw =
+        transcript ??
+        (transcriptPath ? readFileSync(resolve(process.cwd(), transcriptPath), "utf8") : null);
+      if (!raw) throw new Error("Provide transcript (text) or transcriptPath (file).");
+      return content(parseCall(raw, { title, sourceSystem: source }));
     },
   );
 

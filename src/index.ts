@@ -98,6 +98,19 @@ export {
   requiresHumanInput,
   staleDealRule,
 } from "./rules.ts";
+export {
+  extractCallInsights,
+  normalizeTranscript,
+  parseCall,
+  parseTranscript,
+  suggestCallDeal,
+  summarizeInsights,
+  type CallDealSuggestion,
+  type CallInsightType,
+  type ExtractedCallInsight,
+  type ParsedCall,
+  type ParsedTranscriptSegment,
+} from "./calls.ts";
 export { sampleSnapshot } from "./sampleData.ts";
 export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type {

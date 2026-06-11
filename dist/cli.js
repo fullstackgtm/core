@@ -17,6 +17,7 @@ import { createFilePlanStore } from "./planStore.js";
 import { auditReportToHtml, auditReportToMarkdown } from "./report.js";
 import { builtinAuditRules } from "./rules.js";
 import { sampleSnapshot } from "./sampleData.js";
+import { parseCall, suggestCallDeal } from "./calls.js";
 import { suggestValues } from "./suggest.js";
 function usage() {
     return `FullStackGTM — audit GTM data across providers, propose reviewable patch plans,
@@ -40,6 +41,11 @@ Usage:
   fullstackgtm report [source options] [audit options] [report options]
   fullstackgtm diff --before <a.json> --after <b.json> [--json] [--fail-on-new-findings]
   fullstackgtm merge --input <a.json> --input <b.json> [...] --out <merged.json> [--json]
+  fullstackgtm call parse --transcript <file> [--title t] [--source fathom|granola|...] [--json|--ndjson] [--out <path>]
+  fullstackgtm call link --attendees <a@x.com,...> | --domain <x.com>  [source options] [--json]
+  fullstackgtm call plan --transcript <file>|--call <parsed.json> --deal <id> [source options] [--save|--json]
+                                               calls become evidence: parse dialects (Speaker:/[Me]/Granola JSON),
+                                               link to the right deal, and propose governed next-step writes
   fullstackgtm suggest --plan-id <id> | --plan <path>  [source options] [--json] [--out <path>]
                                                derive values for requires_human_* placeholders
                                                from snapshot evidence, with confidence + reasons
@@ -402,6 +408,175 @@ function parseValueOverrides(args) {
         valueOverrides[pair.slice(0, separator)] = pair.slice(separator + 1);
     }
     return valueOverrides;
+}
+async function callCommand(args) {
+    const [subcommand, ...rest] = args;
+    const loadParsedCall = () => {
+        const callPath = option(rest, "--call");
+        if (callPath) {
+            return JSON.parse(readFileSync(resolve(process.cwd(), callPath), "utf8"));
+        }
+        const transcriptPath = option(rest, "--transcript");
+        if (!transcriptPath)
+            throw new Error(`call ${subcommand} requires --transcript <file> or --call <parsed.json>`);
+        const raw = readFileSync(resolve(process.cwd(), transcriptPath), "utf8");
+        const source = option(rest, "--source");
+        return parseCall(raw, {
+            title: option(rest, "--title") ?? undefined,
+            sourceSystem: source,
+            capturedAt: new Date().toISOString(),
+        });
+    };
+    if (subcommand === "parse") {
+        const parsed = loadParsedCall();
+        const outPath = option(rest, "--out");
+        if (outPath)
+            writeFileSync(resolve(process.cwd(), outPath), `${JSON.stringify(parsed, null, 2)}\n`);
+        if (rest.includes("--ndjson")) {
+            // One flat row per insight — warehouse-friendly (e.g. Snowflake COPY).
+            for (const insight of parsed.insights) {
+                console.log(JSON.stringify({
+                    call_id: parsed.id,
+                    call_title: parsed.title ?? null,
+                    source_system: parsed.sourceSystem,
+                    type: insight.type,
+                    title: insight.title,
+                    text: insight.text,
+                    evidence: insight.evidence,
+                    speaker: insight.speaker ?? null,
+                    confidence: insight.confidence,
+                    importance: insight.importance,
+                }));
+            }
+            return;
+        }
+        if (rest.includes("--json") || outPath) {
+            if (!outPath)
+                console.log(JSON.stringify(parsed, null, 2));
+            return;
+        }
+        console.log(`Call ${parsed.id}${parsed.title ? ` — ${parsed.title}` : ""} (${parsed.sourceSystem})`);
+        console.log(`${parsed.segments.length} segments · ${parsed.insights.length} insights (${parsed.summary.highImportance} high-importance)\n`);
+        for (const insight of parsed.insights) {
+            console.log(`[${insight.type}] (importance ${insight.importance}) ${insight.text}`);
+        }
+        return;
+    }
+    if (subcommand === "link") {
+        const attendees = option(rest, "--attendees");
+        const domain = option(rest, "--domain");
+        if (!attendees && !domain)
+            throw new Error("call link requires --attendees <emails,comma-separated> and/or --domain <example.com>");
+        const snapshot = await readSnapshot(rest);
+        const suggestion = suggestCallDeal(snapshot, {
+            attendeeEmails: attendees?.split(",").map((e) => e.trim()).filter(Boolean),
+            domain: domain ?? undefined,
+        });
+        if (rest.includes("--json")) {
+            console.log(JSON.stringify(suggestion, null, 2));
+        }
+        else {
+            const marker = suggestion.confidence === "high" ? "✓" : suggestion.confidence === "low" ? "~" : "✗";
+            console.log(`${marker} [${suggestion.confidence}] ${suggestion.dealId ?? "no match"}${suggestion.dealName ? ` — ${suggestion.dealName}` : ""}`);
+            console.log(`    ${suggestion.reason}`);
+        }
+        if (suggestion.confidence === "none")
+            process.exitCode = 1;
+        return;
+    }
+    if (subcommand === "plan") {
+        const dealId = option(rest, "--deal");
+        if (!dealId)
+            throw new Error("call plan requires --deal <dealId> (use `call link` to find it)");
+        const parsed = loadParsedCall();
+        const snapshot = await readSnapshot(rest);
+        const deal = snapshot.deals.find((row) => row.id === dealId);
+        if (!deal)
+            throw new Error(`Deal ${dealId} is not in the snapshot — check the id or the snapshot source.`);
+        const nextSteps = parsed.insights.filter((insight) => insight.type === "next_step");
+        if (nextSteps.length === 0) {
+            console.log("No next-step insights in this call — nothing to plan. (Other insight types are evidence, not writes.)");
+            return;
+        }
+        const [top, ...others] = nextSteps;
+        const proposed = top.text.trim().slice(0, 255);
+        const current = deal.nextStep?.trim() ?? "";
+        const plan = buildCallPlan(parsed, deal, proposed, current, others.slice(0, 3));
+        if (rest.includes("--save")) {
+            await createFilePlanStore().save(plan);
+            console.log(`Saved plan ${plan.id}. Review with \`fullstackgtm plans show ${plan.id}\`, approve with \`fullstackgtm plans approve ${plan.id} --operations <ids|all>\`, then \`fullstackgtm apply --plan-id ${plan.id} --provider <name>\`.`);
+            return;
+        }
+        console.log(rest.includes("--json") ? JSON.stringify(plan, null, 2) : patchPlanToMarkdown(plan));
+        return;
+    }
+    throw new Error(`call supports: parse, link, plan (got ${subcommand ?? "nothing"})`);
+}
+function buildCallPlan(parsed, deal, proposed, current, extraNextSteps) {
+    const findings = [];
+    const operations = [];
+    const nextStepEvidence = parsed.evidence.filter((item) => item.metadata?.insightType === "next_step");
+    const evidenceIds = nextStepEvidence.map((item) => item.id);
+    if (current.toLowerCase() !== proposed.toLowerCase()) {
+        findings.push({
+            id: `finding_${parsed.id.replace(/^call_/, "")}_${deal.id}`,
+            objectType: "deal",
+            objectId: deal.id,
+            ruleId: "call-next-step-not-reflected-in-crm",
+            type: "call_next_step_not_reflected_in_crm",
+            title: "Call agreed a next step the CRM does not reflect",
+            severity: "warning",
+            summary: current
+                ? `The call produced "${proposed}" but ${deal.name}'s next step still reads "${current}".`
+                : `The call produced "${proposed}" but ${deal.name} has no next step set.`,
+            recommendation: "Review the evidence and approve the next-step update.",
+            evidenceIds,
+            currentCrmValue: current || null,
+            proposedValue: proposed,
+        });
+        operations.push({
+            id: `op_${parsed.id.replace(/^call_/, "")}_next`,
+            objectType: "deal",
+            objectId: deal.id,
+            operation: "set_field",
+            field: "nextStep",
+            beforeValue: current || null,
+            afterValue: proposed,
+            reason: `Call evidence: ${nextStepEvidence[0]?.text.slice(0, 200) ?? proposed}`,
+            sourceRuleOrPolicy: "call_intelligence.next_step",
+            riskLevel: "high",
+            approvalRequired: true,
+            rollback: "Restore the previous deal next step (the before value) if the update is wrong.",
+            evidenceIds,
+        });
+    }
+    for (const [index, extra] of extraNextSteps.entries()) {
+        operations.push({
+            id: `op_${parsed.id.replace(/^call_/, "")}_task${index}`,
+            objectType: "deal",
+            objectId: deal.id,
+            operation: "create_task",
+            field: "follow_up_task",
+            beforeValue: null,
+            afterValue: extra.text.trim().slice(0, 255),
+            reason: `Additional commitment from the call: ${extra.evidence.slice(0, 160)}`,
+            sourceRuleOrPolicy: "call_intelligence.follow_up",
+            riskLevel: "low",
+            approvalRequired: true,
+            rollback: "Close or delete the created task.",
+        });
+    }
+    return {
+        id: `patch_plan_${parsed.id.replace(/^call_/, "")}${deal.id.slice(-4)}`,
+        title: `Call evidence plan${parsed.title ? ` — ${parsed.title}` : ""} → ${deal.name}`,
+        createdAt: new Date().toISOString(),
+        status: "needs_approval",
+        dryRun: true,
+        summary: `${findings.length} finding(s) and ${operations.length} proposed operation(s) from call ${parsed.id}.`,
+        findings,
+        evidence: parsed.evidence,
+        operations,
+    };
 }
 async function suggest(args) {
     const planId = option(args, "--plan-id");
@@ -1121,6 +1296,10 @@ export async function runCli(argv) {
     }
     if (command === "suggest") {
         await suggest(args);
+        return;
+    }
+    if (command === "call") {
+        await callCommand(args);
         return;
     }
     if (command === "profiles") {

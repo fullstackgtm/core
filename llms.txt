@@ -18,6 +18,13 @@ at/above `--fail-on`.
 - [CRM-health lifecycle](https://github.com/fullstackgtm/core/blob/main/docs/crm-health-lifecycle.md): the Prevent → Detect → Remediate → Verify/Attribute model; no-new-dupes design
 - [CHANGELOG](https://github.com/fullstackgtm/core/blob/main/CHANGELOG.md): release history
 
+## Key invariants (calls)
+
+`fullstackgtm call parse` (and MCP fullstackgtm_call_parse) is deterministic
+and LLM-free; `call link` suggests the deal with confidence + reason;
+`call plan` proposes governed next-step writes through the standard
+approve/apply lifecycle.
+
 ## Key invariants
 
 - Reads are safe by default; nothing is written without explicit `--approve`

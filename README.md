@@ -47,6 +47,25 @@ HUBSPOT_ACCESS_TOKEN=pat-... npx fullstackgtm apply \
 
 Nothing is ever written without an explicit `--approve`. Operations whose value is a human decision (`requires_human_*` placeholders, e.g. which owner to assign) are refused unless you supply a concrete `--value` override.
 
+## Call workflows: calls become governed evidence
+
+Calls are where pipeline truth lives. `call parse` normalizes any transcript dialect — `Speaker: text` lines (Fathom, Gong exports), `[Speaker]:` labels, or raw Granola utterance JSON — into canonical segments, deterministic keyword-derived insights (next steps, objections, pricing, risks, competitor mentions…), and `GtmEvidence` records, all LLM-free and byte-stable per transcript. `call link` answers "which deal was this call about" from attendee domains (account domain or contact emails → open deals, most recent activity first, with confidence + reason). `call plan` turns next-step insights into the same governed plan lifecycle as everything else.
+
+```bash
+# Coaching/score pipeline (Slack + CRM): parse → link → govern the writeback
+fullstackgtm call parse --transcript call.txt --title "Acme disco" --out parsed.json
+fullstackgtm call link --attendees jane@acme.com --provider hubspot          # → deal id + reason
+fullstackgtm call plan --call parsed.json --deal 123 --provider hubspot --save
+# review → plans approve → apply: deal.next_step + follow-up tasks, compare-and-set protected
+# (LLM scoring/extraction stays in your own pipeline; pipe parsed.json into it and into Slack)
+
+# Analytics pipeline (warehouse): one flat NDJSON row per insight
+for t in transcripts/*; do fullstackgtm call parse --transcript "$t" --ndjson; done > insights.ndjson
+# COPY into your warehouse (stable call/evidence ids make reloads idempotent)
+```
+
+The deliberate boundary: parsing, linking, and governed writeback are deterministic CLI primitives; LLM scoring, rubric extraction, and Slack/Notion/warehouse sinks are *your* pipeline, composed around the JSON.
+
 ## From findings to fixes: the suggest chain
 
 Most placeholder answers are already derivable from your own CRM data. `suggest` computes them deterministically — account-name matching cross-checked against contact associations — with a confidence level and a written reason per operation, so you (or an agent) approve evidence, not guesses:
