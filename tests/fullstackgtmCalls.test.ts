@@ -154,3 +154,54 @@ test("CLI chain: call parse --out, call plan --save produces an approvable next-
     else process.env.FSGTM_HOME = previous;
   }
 });
+
+test("ndjson rows carry extractor provenance; score-specific no-key error; call --help works", async () => {
+  const home = mkdtempSync(join(tmpdir(), "fsgtm-calls2-"));
+  const previous = process.env.FSGTM_HOME;
+  process.env.FSGTM_HOME = home;
+  const prevAnthropic = process.env.ANTHROPIC_API_KEY;
+  const prevOpenai = process.env.OPENAI_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  try {
+    const transcriptPath = join(home, "call.txt");
+    writeFileSync(transcriptPath, SPEAKER_TRANSCRIPT);
+
+    // NDJSON rows include extractor.
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: unknown) => logs.push(String(msg));
+    try {
+      await runCli(["call", "parse", "--deterministic", "--transcript", transcriptPath, "--ndjson"]);
+    } finally {
+      console.log = origLog;
+    }
+    assert.ok(logs.length > 0);
+    for (const line of logs) assert.equal(JSON.parse(line).extractor, "deterministic");
+
+    // score has no --deterministic mode and says so (no misleading suggestion).
+    await assert.rejects(
+      runCli(["call", "score", "--transcript", transcriptPath]),
+      (error: Error) => {
+        assert.match(error.message, /no non-LLM mode/);
+        assert.doesNotMatch(error.message, /--deterministic for the free keyword baseline/);
+        return true;
+      },
+    );
+
+    // call --help prints help instead of executing.
+    const helpLogs: string[] = [];
+    console.log = (msg: unknown) => helpLogs.push(String(msg));
+    try {
+      await runCli(["call", "score", "--help"]);
+    } finally {
+      console.log = origLog;
+    }
+    assert.match(helpLogs.join("\n"), /score always needs a key/);
+  } finally {
+    if (previous === undefined) delete process.env.FSGTM_HOME;
+    else process.env.FSGTM_HOME = previous;
+    if (prevAnthropic !== undefined) process.env.ANTHROPIC_API_KEY = prevAnthropic;
+    if (prevOpenai !== undefined) process.env.OPENAI_API_KEY = prevOpenai;
+  }
+});

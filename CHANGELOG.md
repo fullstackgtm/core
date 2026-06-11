@@ -5,6 +5,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.14.1] — 2026-06-11
+
+Fixes from the 0.14.0 journey verification (4 agents, 21 checks).
+
+### Fixed
+
+- **`call score` no longer suggests a flag it rejects**: the keyless error
+  said "pass --deterministic" but score has no non-LLM mode — its error now
+  says exactly that. Rubric files are also validated *before* the
+  credential check (keyless users see rubric errors), and a non-JSON rubric
+  names the file and the expected shape instead of a raw parse error.
+- **NDJSON rows carry `extractor`** — LLM and deterministic rows were
+  per-row indistinguishable in warehouse loads, contradicting the
+  provenance claim. (Docs wording was right at the parse-result and
+  evidence level; now it is true per-row too.)
+- **`call … --help` prints help** instead of being shadowed by argument
+  and credential checks.
+- `login anthropic|openai` gets the same explicit argv-secret rejection
+  (`--token`/`--key`/`--api-key`) as the CRM providers.
+
 ## [0.14.0] — 2026-06-11
 
 LLM-powered call intelligence, bring-your-own-key. The dry-run replications

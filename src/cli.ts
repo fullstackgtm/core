@@ -490,6 +490,17 @@ function parseValueOverrides(args: string[]) {
 
 async function callCommand(args: string[]) {
   const [subcommand, ...rest] = args;
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`call parse --transcript <file> [--title t] [--source s] [--model m] [--deterministic] [--json|--ndjson] [--out <path>]
+call score --transcript <file>|--call <parsed.json> [--rubric <rubric.json>] [--model m] [--json|--out <path>]
+call link --attendees <a@x.com,...> | --domain <x.com>  [source options] [--json]
+call plan --transcript <file>|--call <parsed.json> --deal <id> [source options] [--save|--json]
+
+parse/score default to LLM extraction (Anthropic or OpenAI key via env,
+\`login anthropic|openai\`, or a one-time prompt). parse --deterministic is
+the free keyword baseline; score always needs a key (scoring is LLM work).`);
+    return;
+  }
 
   const loadParsedCall = async (): Promise<ParsedCall> => {
     const callPath = option(rest, "--call");
@@ -535,6 +546,7 @@ async function callCommand(args: string[]) {
             call_id: parsed.id,
             call_title: parsed.title ?? null,
             source_system: parsed.sourceSystem,
+            extractor: parsed.extractor,
             type: insight.type,
             title: insight.title,
             text: insight.text,
@@ -609,11 +621,20 @@ async function callCommand(args: string[]) {
   }
 
   if (subcommand === "score") {
-    const credential = await requireLlmCredential();
+    // Rubric problems surface before any credential or API work.
     const rubricPath = option(rest, "--rubric");
-    const rubric = rubricPath
-      ? parseRubric(readFileSync(resolve(process.cwd(), rubricPath), "utf8"))
-      : DEFAULT_RUBRIC;
+    let rubric = DEFAULT_RUBRIC;
+    if (rubricPath) {
+      const rubricRaw = readFileSync(resolve(process.cwd(), rubricPath), "utf8");
+      try {
+        rubric = parseRubric(rubricRaw);
+      } catch (error) {
+        throw new Error(
+          `${rubricPath} is not a valid rubric: ${error instanceof Error ? error.message : String(error)} Expected JSON like { "scale": 5, "dimensions": [{ "name": "...", "weight": 1, "rubric": "..." }] }.`,
+        );
+      }
+    }
+    const credential = await requireLlmCredential("score");
     const transcriptPath = option(rest, "--transcript");
     let transcriptText: string;
     let title = option(rest, "--title") ?? undefined;
@@ -651,12 +672,15 @@ async function callCommand(args: string[]) {
  * TTY a missing key is captured once (validated, stored 0600 like provider
  * logins). Non-interactive contexts get an actionable error instead.
  */
-async function requireLlmCredential(): Promise<{ provider: LlmProvider; apiKey: string }> {
+async function requireLlmCredential(command: "parse" | "score" = "parse"): Promise<{ provider: LlmProvider; apiKey: string }> {
   const resolved = resolveLlmCredential();
   if (resolved) return resolved;
+  // Scoring is inherently LLM work — there is no keyword fallback to suggest.
+  const fallbackHint =
+    command === "parse" ? ", or pass --deterministic for the free keyword baseline" : " (call score has no non-LLM mode)";
   if (!process.stdin.isTTY) {
     throw new Error(
-      "LLM extraction needs an API key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, run `echo \"$KEY\" | fullstackgtm login anthropic` (or `login openai`) once, or pass --deterministic for the free keyword baseline.",
+      `LLM ${command === "score" ? "scoring" : "extraction"} needs an API key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, or run \`echo "$KEY" | fullstackgtm login anthropic\` (or \`login openai\`) once${fallbackHint}.`,
     );
   }
   console.error("LLM parsing needs an API key (Anthropic or OpenAI) — yours, used directly with the provider.");
@@ -1325,6 +1349,7 @@ async function login(args: string[]) {
     return;
   }
   if (provider === "anthropic" || provider === "openai") {
+    rejectArgvSecret(args, "--token", "--key", "--api-key");
     const key = await readSecret(`${provider} API key (${provider === "anthropic" ? "sk-ant-..." : "sk-..."})`);
     if (!key) throw new Error(`No ${provider} key provided.`);
     if (!args.includes("--no-validate")) {
