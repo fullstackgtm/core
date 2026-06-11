@@ -18,6 +18,12 @@ export type ApplyPatchPlanOptions = {
      * `readField`.
      */
     checkConflicts?: boolean;
+    /**
+     * For plans carrying a filter or guards: re-run the snapshot checks after
+     * the first applied write and then every N applied writes, so a record
+     * edited mid-apply is conflicted out instead of overwritten. Default 25.
+     */
+    recheckEvery?: number;
 };
 /**
  * Apply an approved subset of a patch plan through a connector.

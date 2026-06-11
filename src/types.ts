@@ -289,6 +289,20 @@ export type PatchOperation = {
   evidenceIds?: string[];
   findingIds?: string[];
   verification?: PatchVerification;
+  /**
+   * Compare-and-set guards beyond the written field: each precondition is
+   * re-read at apply time and a mismatch turns the operation into a
+   * conflict instead of a write. Guards against a record drifting on a
+   * DIFFERENT field than the one being written (e.g. stage changed while
+   * an owner write was pending).
+   */
+  preconditions?: Array<{ field: string; expectedValue: unknown }>;
+  /**
+   * Operations sharing a groupId are all-or-nothing at apply time: a
+   * conflict (beforeValue or precondition) on any member skips every
+   * member of the group.
+   */
+  groupId?: string;
 };
 
 /**
@@ -306,6 +320,31 @@ export type PatchPlan = {
   pipelineFindings?: PipelineFinding[];
   evidence?: GtmEvidence[];
   operations: PatchOperation[];
+  /**
+   * The filter this plan's operations were selected by. Re-evaluated per
+   * record against a FRESH snapshot at apply time: any operation whose
+   * record no longer matches is reported as a conflict instead of applied.
+   * Unlike per-operation preconditions, this enforces the FULL filter —
+   * negations and relational pseudo-fields included.
+   */
+  filter?: { objectType: "account" | "contact" | "deal"; where: string[] };
+  /**
+   * Plan-level guards re-evaluated against a FRESH snapshot at apply time.
+   * If any guard fails, NO operation in the plan is applied. This is how a
+   * plan expresses cross-record eligibility ("apply only while the account
+   * still has no open deal in contractsent") that per-operation
+   * preconditions cannot reach.
+   */
+  guards?: PlanGuard[];
+};
+
+export type PlanGuard = {
+  objectType: "account" | "contact" | "deal";
+  /** filter expressions in bulk-update --where grammar, AND-ed */
+  where: string[];
+  /** none: guard passes when ZERO records match; some: when at least one matches */
+  expect: "none" | "some";
+  description?: string;
 };
 
 // ── Audit rule engine ──────────────────────────────────────────

@@ -1,4 +1,5 @@
 export { auditSnapshot, defaultPolicy } from "./audit.ts";
+export { buildBulkUpdatePlan, parseWhere, type BulkUpdateOptions } from "./bulkUpdate.ts";
 export { CONFIG_FILE_NAME, loadConfig, mergePolicy, resolveConfiguredRules, type FullstackgtmConfig, type LoadedConfig, } from "./config.ts";
 export { applyPatchPlan, type ApplyPatchPlanOptions } from "./connector.ts";
 export { createHubspotConnector, type HubspotConnectorOptions } from "./connectors/hubspot.ts";

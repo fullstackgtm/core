@@ -24,6 +24,7 @@ import { buildWorksheet, classifyMarket } from "./marketClassify.js";
 import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
 import { DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
 import { resolveRecord } from "./resolve.js";
+import { buildBulkUpdatePlan } from "./bulkUpdate.js";
 import { suggestValues } from "./suggest.js";
 function usage() {
     return `FullStackGTM — audit GTM data across providers, propose reviewable patch plans,
@@ -74,6 +75,18 @@ Usage:
                                                against the stored capture it cites before it's accepted — then
                                                compute deterministic front states and drift, render the field
                                                report. refresh = capture → classify → drift → report in one step
+  fullstackgtm bulk-update <account|contact|deal> --where <expr> [--where …] (--set <field>=<value> [--set …] | --archive | --create-task <text>) [--require <field>=<value> …] [--guard <object>:<where>[;<where>]:<none|some> …] [source options] [--save] [--json] [--out <path>]
+                                               governed generic writes: filter the snapshot
+                                               (field=value, field!=value, field~substr, field!~substr,
+                                               field:empty, field:notempty, '|' = any-of; canonical fields
+                                               like ownerId, stage, closeDate, amount; relational
+                                               pseudo-fields account.name/domain/ownerId/contactCount/
+                                               openDealStages on deals and contacts, contactCount/
+                                               openDealCount/openDealStages on accounts) into a dry-run
+                                               patch plan. The full filter is re-verified per record at
+                                               apply time (incl. mid-apply rechecks); equality filters
+                                               double as preconditions; per-record ops apply
+                                               all-or-nothing; guards assert cross-record conditions.
   fullstackgtm suggest --plan-id <id> | --plan <path>  [source options] [--json] [--out <path>]
                                                derive values for requires_human_* placeholders
                                                from snapshot evidence, with confidence + reasons
@@ -1001,6 +1014,51 @@ async function resolveCommand(args) {
     if (result.verdict !== "safe_to_create")
         process.exitCode = 2;
 }
+/**
+ * Governed generic writes: build a dry-run patch plan from a snapshot filter
+ * plus field assignments (or --archive). Never writes — approve and apply the
+ * plan like any audit plan; compare-and-set protects every operation.
+ */
+async function bulkUpdateCommand(args) {
+    const [objectType, ...rest] = args;
+    if (!objectType || !["account", "contact", "deal"].includes(objectType)) {
+        throw new Error("Usage: fullstackgtm bulk-update <account|contact|deal> --where <field=value|field!=value|field~substr|field:empty|field:notempty> [--where …] (--set <field>=<value> [--set …] | --archive) [source options] [--reason <text>] [--max-operations <n>] [--save] [--out <path>] [--json]");
+    }
+    const where = repeatedOption(rest, "--where");
+    const set = {};
+    for (const pair of repeatedOption(rest, "--set")) {
+        const separator = pair.indexOf("=");
+        if (separator === -1)
+            throw new Error(`--set must look like <field>=<value>, got "${pair}"`);
+        set[pair.slice(0, separator)] = pair.slice(separator + 1);
+    }
+    const snapshot = await readSnapshot(rest);
+    const plan = buildBulkUpdatePlan(snapshot, {
+        objectType: objectType,
+        where,
+        set: Object.keys(set).length > 0 ? set : undefined,
+        archive: rest.includes("--archive"),
+        createTask: option(rest, "--create-task") ?? undefined,
+        require: repeatedOption(rest, "--require"),
+        guard: repeatedOption(rest, "--guard"),
+        reason: option(rest, "--reason") ?? undefined,
+        maxOperations: numericOption(rest, "--max-operations"),
+    });
+    const out = option(rest, "--out");
+    if (out) {
+        writeFileSync(resolve(process.cwd(), out), `${JSON.stringify(plan, null, 2)}\n`);
+    }
+    if (rest.includes("--save")) {
+        await createFilePlanStore().save(plan);
+        console.error(`Saved plan ${plan.id} (${plan.operations.length} operations). Review with \`fullstackgtm plans show ${plan.id}\`, approve with \`fullstackgtm plans approve ${plan.id} --operations <ids|all>\`, then \`fullstackgtm apply --plan-id ${plan.id} --provider <name>\`.`);
+    }
+    if (rest.includes("--json")) {
+        console.log(JSON.stringify(plan, null, 2));
+    }
+    else {
+        console.log(patchPlanToMarkdown(plan));
+    }
+}
 async function suggest(args) {
     const planId = option(args, "--plan-id");
     const planPath = option(args, "--plan");
@@ -1748,6 +1806,10 @@ export async function runCli(argv) {
     }
     if (command === "resolve") {
         await resolveCommand(args);
+        return;
+    }
+    if (command === "bulk-update") {
+        await bulkUpdateCommand(args);
         return;
     }
     if (command === "market") {

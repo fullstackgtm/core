@@ -1,4 +1,5 @@
 export { auditSnapshot, defaultPolicy } from "./audit.ts";
+export { buildBulkUpdatePlan, parseWhere, type BulkUpdateOptions } from "./bulkUpdate.ts";
 export {
   CONFIG_FILE_NAME,
   loadConfig,
