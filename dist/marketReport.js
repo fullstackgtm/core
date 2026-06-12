@@ -79,10 +79,64 @@ export function marketMapToMarkdown(config, set) {
     }
     return `${lines.join("\n")}\n`;
 }
-function svgScatter(points, ax, ay, anchor, mini) {
-    const W = mini ? 330 : 700;
-    const H = mini ? 250 : 460;
-    const PAD = mini ? 34 : 56;
+/**
+ * Okabe–Ito palette: categorical, colorblind-safe, print-stable. Vendors are
+ * numbered in legend order so a dense cluster stays readable — the number in
+ * the bubble resolves what overlapping labels never could.
+ */
+const VENDOR_COLORS = [
+    "#0072b2", "#e69f00", "#009e73", "#d55e00", "#cc79a7",
+    "#56b4e9", "#b8a000", "#717171", "#882255", "#44aa99",
+];
+/** Dark numerals on light fills, white on dark — simple luminance cut. */
+function numeralColor(hex) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#1c1c1c" : "#ffffff";
+}
+/**
+ * Wrap an axis-pole label into at most two short lines. Parentheticals are
+ * dropped first — poles like "REGULATED LEAD-GEN OPERATIONS (sales-led PEO)"
+ * keep their head, and nothing ever runs into the opposite corner.
+ */
+function wrapPole(text, maxChars = 20) {
+    let cleaned = text.replace(/\s*\([^)]*\)/g, "").trim();
+    if (cleaned.length === 0)
+        cleaned = text.trim();
+    const words = cleaned.split(/\s+/);
+    const lines = [];
+    let current = "";
+    for (const word of words) {
+        if (current && (current + " " + word).length > maxChars) {
+            lines.push(current);
+            current = word;
+            if (lines.length === 2)
+                break;
+        }
+        else {
+            current = current ? `${current} ${word}` : word;
+        }
+    }
+    if (lines.length < 2 && current)
+        lines.push(current);
+    if (lines.length === 2 && current && lines[1] !== current)
+        lines[1] = `${lines[1]}…`;
+    return lines;
+}
+function poleText(lines, x, y, anchorMode, fs) {
+    const e = escapeHtml;
+    const spans = lines
+        .map((line, index) => `<tspan x="${x}" dy="${index === 0 ? 0 : fs + 2}">${e(line)}</tspan>`)
+        .join("");
+    return `<text class="ax-label" style="font-size:${fs}px" x="${x}" y="${y}" text-anchor="${anchorMode}">${spans}</text>`;
+}
+function svgScatter(points, ax, ay, anchor, colorByVendor, numberByVendor) {
+    const W = 640;
+    const H = 480;
+    const PAD_X = 56;
+    const PAD_TOP = 44;
+    const PAD_BOTTOM = 56;
     const range = (axis, values) => {
         if (axis.signed)
             return [-1.1, 1.1];
@@ -92,28 +146,46 @@ function svgScatter(points, ax, ay, anchor, mini) {
     };
     const [xLo, xHi] = range(ax, points.map((p) => p.x));
     const [yLo, yHi] = range(ay, points.map((p) => p.y));
-    const sx = (x) => PAD + ((x - xLo) / (xHi - xLo)) * (W - 2 * PAD);
-    const sy = (y) => H - PAD - ((y - yLo) / (yHi - yLo)) * (H - 2 * PAD);
-    const fsLabel = mini ? 8.5 : 10.5;
-    const fsAx = mini ? 8 : 10;
+    const sx = (x) => PAD_X + ((x - xLo) / (xHi - xLo)) * (W - 2 * PAD_X);
+    const sy = (y) => H - PAD_BOTTOM - ((y - yLo) / (yHi - yLo)) * (H - PAD_TOP - PAD_BOTTOM);
     const e = escapeHtml;
-    const dots = points
+    // Big bubbles first so small ones stay clickable/visible on top.
+    const ordered = [...points].sort((a, b) => b.size - a.size);
+    const dots = ordered
         .map((p) => {
-        // Area-proportional: perceived bubble area tracks the size metric.
-        const r = (mini ? 4 + 14 * Math.sqrt(p.size) : 8 + 26 * Math.sqrt(p.size));
-        const cls = p.vendorId === anchor ? "dot-anchor" : "dot";
-        return (`<circle class="${cls}" cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${r.toFixed(1)}"/>` +
-            `<text class="dot-label" style="font-size:${fsLabel}px" x="${sx(p.x).toFixed(1)}" y="${(sy(p.y) - r - 4).toFixed(1)}">${e(p.name)}</text>`);
+        const r = 7 + 24 * Math.sqrt(p.size);
+        const color = colorByVendor.get(p.vendorId) ?? "#717171";
+        const ring = p.vendorId === anchor ? ` stroke="#1c1c1c" stroke-width="2.5"` : ` stroke="#ffffff" stroke-width="1.5"`;
+        const number = numberByVendor.get(p.vendorId) ?? 0;
+        const fs = Math.max(10, Math.min(14, r * 0.9));
+        return (`<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${r.toFixed(1)}" fill="${color}" fill-opacity="0.88"${ring}>` +
+            `<title>${e(p.name)}</title></circle>` +
+            `<text x="${sx(p.x).toFixed(1)}" y="${(sy(p.y) + fs * 0.36).toFixed(1)}" text-anchor="middle" ` +
+            `font-size="${fs.toFixed(1)}" font-weight="700" fill="${numeralColor(color)}" style="pointer-events:none">${number}</text>`);
     })
         .join("");
-    const midX = ax.signed ? `<line class="axis-mid" x1="${sx(0).toFixed(0)}" y1="${PAD}" x2="${sx(0).toFixed(0)}" y2="${H - PAD}"/>` : "";
-    const midY = ay.signed ? `<line class="axis-mid" x1="${PAD}" y1="${sy(0).toFixed(0)}" x2="${W - PAD}" y2="${sy(0).toFixed(0)}"/>` : "";
+    const midX = ax.signed ? `<line class="grid" x1="${sx(0).toFixed(0)}" y1="${PAD_TOP}" x2="${sx(0).toFixed(0)}" y2="${H - PAD_BOTTOM}"/>` : "";
+    const midY = ay.signed ? `<line class="grid" x1="${PAD_X}" y1="${sy(0).toFixed(0)}" x2="${W - PAD_X}" y2="${sy(0).toFixed(0)}"/>` : "";
+    // Pole labels in four positions that cannot collide: x poles horizontal at
+    // the bottom corners; y poles rotated along the left margin (positive
+    // reading up toward the top, negative near the bottom) — the standard
+    // chart convention, wrapped to ≤2 short lines each.
+    const fsPole = 10;
+    const xNeg = poleText(wrapPole(ax.negativePole), PAD_X, H - PAD_BOTTOM + 20, "start", fsPole);
+    const xPos = poleText(wrapPole(ax.positivePole), W - PAD_X, H - PAD_BOTTOM + 20, "end", fsPole);
+    const yLabel = (lines, yEdge, anchorMode) => {
+        const spans = lines
+            .map((line, index) => `<tspan x="${-yEdge}" dy="${index === 0 ? 0 : fsPole + 2}">${e(line)}</tspan>`)
+            .join("");
+        return `<text class="ax-label" style="font-size:${fsPole}px" transform="rotate(-90)" x="${-yEdge}" y="16" text-anchor="${anchorMode}">${spans}</text>`;
+    };
+    const yPos = yLabel(wrapPole(ay.positivePole, 26), PAD_TOP, "end");
+    const yNeg = ay.signed ? yLabel(wrapPole(ay.negativePole, 26), H - PAD_BOTTOM, "start") : "";
     return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${e(ax.label)} vs ${e(ay.label)}">
-    <line class="axis" x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}"/>
-    <line class="axis" x1="${PAD}" y1="${PAD}" x2="${PAD}" y2="${H - PAD}"/>${midX}${midY}
-    <text class="ax-label" style="font-size:${fsAx}px" x="${PAD}" y="${H - 14}">&#8592; ${e(ax.negativePole)}</text>
-    <text class="ax-label" style="font-size:${fsAx}px" x="${W - PAD}" y="${H - 14}" text-anchor="end">${e(ax.positivePole)} &#8594;</text>
-    <text class="ax-label" style="font-size:${fsAx}px" x="${PAD}" y="${PAD - 10}">&#8593; ${e(ay.positivePole)}${ay.signed ? ` &#183; &#8595; ${e(ay.negativePole)}` : ""}</text>
+    <rect x="${PAD_X}" y="${PAD_TOP}" width="${W - 2 * PAD_X}" height="${H - PAD_TOP - PAD_BOTTOM}" class="plot"/>
+    ${midX}${midY}
+    ${xNeg}${xPos}
+    ${yPos}${yNeg}
     ${dots}</svg>`;
 }
 function axisSectionsHtml(config, set) {
@@ -181,9 +253,32 @@ function axisSectionsHtml(config, set) {
     const axInfo = axisInfo.get(px);
     const ayInfo = axisInfo.get(py);
     const statusOf = (id) => axes.find((axis) => axis.id === id)?.status ?? (id === "breadth" ? "derived" : "");
+    // Legend order doubles as bubble numbering: largest first, anchor bolded.
+    // The number inside each bubble resolves dense clusters that name labels
+    // never could; color is Okabe–Ito (colorblind-safe) keyed in the legend.
+    const points = pointsFor(px, py);
+    const legendOrder = [...points].sort((a, b) => b.size - a.size || a.name.localeCompare(b.name));
+    const numberByVendor = new Map(legendOrder.map((point, index) => [point.vendorId, index + 1]));
+    const colorByVendor = new Map(legendOrder.map((point, index) => [point.vendorId, VENDOR_COLORS[index % VENDOR_COLORS.length]]));
+    const legendRows = legendOrder
+        .map((point) => {
+        const number = numberByVendor.get(point.vendorId);
+        const color = colorByVendor.get(point.vendorId);
+        const isAnchor = point.vendorId === config.anchorVendor;
+        const measure = useScale
+            ? `${((scaleIndex.get(point.vendorId) ?? 0) * 100).toFixed(1)}%`
+            : `${loudCounts.get(point.vendorId) ?? 0} loud`;
+        return `<tr${isAnchor ? ' class="anchor-row"' : ""}><td><span class="swatch" style="background:${color};color:${numeralColor(color)}">${number}</span></td><td>${e(point.name)}${isAnchor ? " ·&nbsp;anchor" : ""}</td><td class="num">${measure}</td></tr>`;
+    })
+        .join("");
+    const legendMeasureHead = useScale ? "est. share" : "loud";
     const strategicMap = `<section>
-  <h2><span class="no">03</span> Strategic map — ${e(axInfo.label)} &#215; ${e(ayInfo.label)}</h2>
-  <figure>${svgScatter(pointsFor(px, py), axInfo, ayInfo, config.anchorVendor, false)}
+  <h2>Strategic map: ${e(axInfo.label)} &#215; ${e(ayInfo.label)}</h2>
+  <figure class="map">
+    <div class="map-row">
+      ${svgScatter(points, axInfo, ayInfo, config.anchorVendor, colorByVendor, numberByVendor)}
+      <table class="legend"><thead><tr><th></th><th>vendor</th><th class="num">${legendMeasureHead}</th></tr></thead><tbody>${legendRows}</tbody></table>
+    </div>
   <figcaption>Positions computed from run ${e(set.runLabel)} observations: each axis is a per-claim scoring rubric
   in the market config; a vendor sits at the intensity-weighted mean (loud=1, quiet=&#189;) of the claims it
   voices. ${sizeCaption}. Axis status — ${e(axInfo.label)}: ${e(statusOf(px))}; ${e(ayInfo.label)}: ${e(statusOf(py))}.</figcaption>
@@ -206,7 +301,6 @@ export function marketMapToHtml(config, set) {
     const anchor = config.anchorVendor;
     const e = escapeHtml;
     const axisHtml = axisSectionsHtml(config, set);
-    const appendixNo = axisHtml.report ? "04" : "03";
     const matrixRows = model.orderedClaimIds
         .map((claimId) => {
         const claim = claimsById.get(claimId);
@@ -253,81 +347,78 @@ export function marketMapToHtml(config, set) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Market map — ${e(config.category)} — ${e(set.runLabel)}</title>
 <style>
-:root { --paper:#f4efe4; --ink:#211d16; --ink-soft:#5a5244; --line:#c9bfa9; --accent:#b4441b; --green:#2e5339; --quiet:#8a7d63; }
+:root { --ink:#1c1c1c; --soft:#6b6b6b; --line:#e3e1dc; --faint:#f7f6f4; --accent:#b3491f; --green:#2e5e43; }
 * { box-sizing:border-box; margin:0; }
-body { font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif; color:var(--ink); background:var(--paper);
-  max-width:1080px; margin:0 auto; padding:0 48px 96px;
-  background-image:radial-gradient(rgba(33,29,22,.028) 1px, transparent 1.2px); background-size:5px 5px; }
-.chip,.claim-meta,.ev-src,.lg,.stamp,.meta,th.vh span { font-family:"SF Mono",Menlo,Consolas,monospace; }
-header { padding:56px 0 28px; border-bottom:3px double var(--ink); position:relative; }
-.kicker { font-size:11px; letter-spacing:.32em; color:var(--accent); text-transform:uppercase; }
-h1 { font-size:44px; line-height:1.05; font-weight:600; margin:10px 0 6px; }
-h1 em { font-style:italic; color:var(--green); }
-.meta { font-size:11.5px; color:var(--ink-soft); display:flex; gap:24px; flex-wrap:wrap; margin-top:14px; }
-.stamp { position:absolute; right:0; top:58px; border:2px solid var(--accent); color:var(--accent); padding:7px 13px;
-  font-size:11px; letter-spacing:.22em; transform:rotate(3.5deg); text-transform:uppercase; }
-section { margin-top:56px; }
-h2 { font-size:13px; letter-spacing:.26em; text-transform:uppercase; color:var(--ink-soft);
-  border-bottom:1px solid var(--line); padding-bottom:9px; display:flex; gap:14px; align-items:baseline; }
-h2 .no { color:var(--accent); font-style:italic; font-size:15px; letter-spacing:0; }
-.fronts { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line); border:1px solid var(--line); margin-top:22px; }
-.fcard { background:var(--paper); padding:18px 18px 14px; }
-.fcard b { display:block; font-size:42px; font-weight:600; line-height:1; }
-.fcard span { font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-soft); }
+body { font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif; color:var(--ink); background:#fff;
+  max-width:1060px; margin:0 auto; padding:0 44px 80px; font-size:15px; line-height:1.5; }
+.mono,.claim-meta,.ev-src,.key,.meta,th.vh span,.chip,.legend { font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+header { padding:44px 0 20px; border-bottom:1px solid var(--ink); }
+h1 { font-size:27px; font-weight:600; line-height:1.2; }
+.meta { font-size:11px; color:var(--soft); display:flex; gap:18px; flex-wrap:wrap; margin-top:8px; }
+section { margin-top:44px; }
+h2 { font-size:17px; font-weight:600; border-bottom:1px solid var(--line); padding-bottom:7px; margin-bottom:4px; }
+.fronts { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line); border:1px solid var(--line); margin-top:16px; }
+.fcard { background:#fff; padding:14px 16px 12px; }
+.fcard b { display:block; font-size:30px; font-weight:600; line-height:1.1; }
+.fcard span { font-size:11px; color:var(--soft); }
 .fcard.open b { color:var(--accent); }
-.openlist { margin-top:18px; font-size:15.5px; line-height:1.55; }
-.openlist li { margin:4px 0 4px 20px; }
-.openlist .why { color:var(--ink-soft); font-size:13px; font-style:italic; }
-.legend { display:flex; gap:22px; flex-wrap:wrap; margin:18px 0 10px; font-size:10.5px; color:var(--ink-soft); }
-.lg { display:inline-flex; align-items:center; gap:7px; }
+.openlist { margin-top:14px; font-size:14.5px; line-height:1.55; }
+.openlist li { margin:3px 0 3px 20px; }
+.openlist .why { color:var(--soft); font-size:13px; }
+.key { display:flex; gap:20px; flex-wrap:wrap; margin:14px 0 8px; font-size:10.5px; color:var(--soft); }
+.lg { display:inline-flex; align-items:center; gap:6px; }
 table { border-collapse:collapse; width:100%; margin-top:6px; }
-thead th { border-bottom:2px solid var(--ink); padding:6px 2px 10px; }
-th.vh span { writing-mode:vertical-rl; transform:rotate(195deg); font-size:10.5px; letter-spacing:.12em;
-  text-transform:uppercase; color:var(--ink-soft); display:inline-block; }
+thead th { border-bottom:1.5px solid var(--ink); padding:6px 2px 8px; font-weight:600; }
+th.vh span { writing-mode:vertical-rl; transform:rotate(195deg); font-size:10.5px; color:var(--soft); display:inline-block; }
 th.vh.anchor-col span { color:var(--green); font-weight:700; }
-tbody th { text-align:left; font-weight:400; padding:7px 14px 7px 0; border-bottom:1px solid var(--line); max-width:330px; }
-.claim-cap { display:block; font-size:14.5px; }
-.claim-meta { display:block; font-size:9.5px; color:var(--quiet); letter-spacing:.08em; margin-top:2px; }
+tbody th { text-align:left; font-weight:400; padding:6px 14px 6px 0; border-bottom:1px solid var(--line); max-width:330px; }
+.claim-cap { display:block; font-size:14px; }
+.claim-meta { display:block; font-size:9.5px; color:var(--soft); margin-top:1px; }
 td.cell { text-align:center; border-bottom:1px solid var(--line); padding:4px 2px; }
-td.cell.anchor-col { background:rgba(46,83,57,.06); }
+td.cell.anchor-col { background:var(--faint); }
 td.front { border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
-.g { display:inline-block; width:15px; height:15px; vertical-align:middle; }
+.g { display:inline-block; width:14px; height:14px; vertical-align:middle; }
 .g-loud { background:var(--ink); }
-.g-quiet { box-shadow:inset 0 0 0 2px var(--quiet); }
-.g-absent { background:radial-gradient(circle at center, var(--line) 0 2.5px, transparent 3px); }
-.g-unobservable { background:repeating-linear-gradient(45deg, var(--line) 0 2px, transparent 2px 5px); }
+.g-quiet { box-shadow:inset 0 0 0 2px #9a9a9a; }
+.g-absent { background:radial-gradient(circle at center, #cfcdc8 0 2.5px, transparent 3px); }
+.g-unobservable { background:repeating-linear-gradient(45deg, #cfcdc8 0 2px, transparent 2px 5px); }
 tr.front-open th .claim-cap { color:var(--accent); font-weight:600; }
-.chip { font-size:9px; letter-spacing:.16em; padding:3px 8px; border:1px solid currentColor; }
-.chip-open { color:var(--accent); } .chip-contested { color:#7a5a12; }
-.chip-owned { color:var(--green); } .chip-saturated { color:var(--ink-soft); } .chip-vacant { color:var(--quiet); }
-.ev { border-bottom:1px solid var(--line); padding:12px 0; }
-.ev-head { font-size:10.5px; letter-spacing:.1em; color:var(--accent); }
-.ev blockquote { font-style:italic; margin:6px 0; font-size:13.5px; line-height:1.5; }
-.ev-src { font-size:10px; color:var(--ink-soft); word-break:break-all; }
-figure { margin-top:22px; border:1px solid var(--line); background:rgba(255,255,255,.35); }
-.axis { stroke:var(--ink); stroke-width:1.5; }
-.axis-mid { stroke:var(--line); stroke-dasharray:3 5; }
-.ax-label { letter-spacing:.16em; fill:var(--ink-soft); font-family:"SF Mono",Menlo,Consolas,monospace; }
-.dot { fill:rgba(33,29,22,.78); }
-.dot-anchor { fill:var(--green); stroke:var(--ink); stroke-width:1.5; }
-.dot-label { fill:var(--ink); text-anchor:middle; letter-spacing:.04em; font-family:"SF Mono",Menlo,Consolas,monospace; }
-figcaption { font-size:12px; color:var(--ink-soft); padding:12px 16px 14px; font-style:italic; border-top:1px solid var(--line); line-height:1.5; }
-footer { margin-top:72px; border-top:3px double var(--ink); padding-top:14px; font-size:11px; color:var(--ink-soft);
+.chip { font-size:9px; padding:2px 7px; border:1px solid currentColor; border-radius:2px; }
+.chip-open { color:var(--accent); } .chip-contested { color:#8a6d1c; }
+.chip-owned { color:var(--green); } .chip-saturated { color:var(--soft); } .chip-vacant { color:#9a9a9a; }
+.ev { border-bottom:1px solid var(--line); padding:10px 0; }
+.ev-head { font-size:10.5px; color:var(--soft); font-weight:600; }
+.ev blockquote { margin:5px 0; font-size:13.5px; line-height:1.5; }
+.ev-src { font-size:10px; color:var(--soft); word-break:break-all; }
+figure.map { margin-top:16px; border:1px solid var(--line); }
+.map-row { display:flex; gap:8px; align-items:flex-start; padding:10px 12px 0; }
+.map-row svg { flex:1 1 62%; min-width:0; }
+.plot { fill:var(--faint); stroke:var(--line); }
+.grid { stroke:#d6d4cf; stroke-dasharray:3 5; }
+.ax-label { fill:var(--soft); font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+table.legend { flex:0 0 auto; width:auto; margin:8px 0 12px; font-size:12px; }
+table.legend thead th { font-size:10px; color:var(--soft); font-weight:600; border-bottom:1px solid var(--line); padding:2px 8px 5px 0; text-align:left; }
+table.legend td { padding:4px 8px 4px 0; border-bottom:1px solid var(--faint); white-space:nowrap; }
+table.legend td.num, table.legend th.num { text-align:right; }
+table.legend tr.anchor-row td { font-weight:700; }
+.swatch { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%;
+  color:#fff; font-size:10.5px; font-weight:700; }
+figcaption { font-size:11.5px; color:var(--soft); padding:10px 14px 12px; border-top:1px solid var(--line); line-height:1.5; }
+footer { margin-top:60px; border-top:1px solid var(--ink); padding-top:12px; font-size:11px; color:var(--soft);
   display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; }
-@media print { body { max-width:none; padding:0 8mm; background:white; } section { break-inside:avoid-page; } tr { break-inside:avoid; } }
+@media print { body { max-width:none; padding:0 8mm; } section { break-inside:avoid-page; } tr { break-inside:avoid; } .map-row { display:block; } }
+@media (max-width:760px) { .map-row { display:block; } }
 </style></head><body>
 <header>
-  <div class="kicker">Full Stack GTM · Market Map</div>
-  <h1>The <em>${e(config.category.replace(/-/g, " "))}</em> front map</h1>
+  <h1>Market map — ${e(config.category.replace(/-/g, " "))}</h1>
   <div class="meta">
-    <span>RUN ${e(set.runLabel.toUpperCase())}</span><span>OBSERVED ${e(set.runAt)}</span>
-    <span>${config.vendors.length} VENDORS · ${config.claims.length} CLAIMS · ${set.observations.length} READINGS</span>
-    <span>${unobservable} UNOBSERVABLE · EXTRACTOR ${e(set.extractor)}</span>
+    <span>run ${e(set.runLabel)}</span><span>observed ${e(set.runAt)}</span>
+    <span>${config.vendors.length} vendors · ${config.claims.length} claims · ${set.observations.length} readings · ${unobservable} unobservable</span>
+    <span>extractor: ${e(set.extractor)}</span>
   </div>
-  <div class="stamp">Field Report</div>
 </header>
 <section>
-  <h2><span class="no">01</span> Front summary</h2>
+  <h2>Front summary</h2>
   <div class="fronts">
     <div class="fcard open"><b>${counts.open + counts.vacant}</b><span>Open / vacant</span></div>
     <div class="fcard"><b>${counts.contested}</b><span>Contested</span></div>
@@ -337,8 +428,8 @@ footer { margin-top:72px; border-top:3px double var(--ink); padding-top:14px; fo
   <ul class="openlist">${openList}</ul>
 </section>
 <section>
-  <h2><span class="no">02</span> Claim × vendor intensity matrix</h2>
-  <div class="legend">
+  <h2>Claim × vendor intensity matrix</h2>
+  <div class="key">
     <span class="lg"><i class="g g-loud"></i>LOUD — hero-level claim</span>
     <span class="lg"><i class="g g-quiet"></i>QUIET — shipped, buried</span>
     <span class="lg"><i class="g g-absent"></i>ABSENT</span>
@@ -351,7 +442,7 @@ footer { margin-top:72px; border-top:3px double var(--ink); padding-top:14px; fo
 </section>
 ${axisHtml.strategicMap}
 <section>
-  <h2><span class="no">${appendixNo}</span> Evidence appendix</h2>
+  <h2>Evidence appendix</h2>
   ${appendix}
 </section>
 <footer>
