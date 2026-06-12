@@ -87,6 +87,25 @@ CAS). Conflict policy MVP is `never`; `system-only`/`always` are phase 2 and
 refused explicitly. Run store (checkpoint + staleness ledger + `status`) is
 profile-scoped under `<home>/enrich/runs`. No cron — scheduling is horizontal.
 
+## Key invariants (schedule)
+
+`fullstackgtm schedule` is the horizontal scheduler — no feature namespace
+owns cron logic. `add "<command>" --cron "<expr>"` validates the command
+against the read/plan-side allowlist (audit, snapshot, enrich append|refresh,
+market capture|refresh, suggest, report, doctor) and the 5-field cron
+expression, but touches no crontab; `install` materializes enabled entries
+into a sentinel-delimited managed block (`# >>> fullstackgtm <profile> >>>`)
+replaced wholesale on re-install, lines outside it untouched; `uninstall`
+removes only the block. Scheduling never auto-approves: `apply` is
+schedulable ONLY as `apply --plan-id <id>` and every firing re-checks the
+plan is approved — unapproved plans record a `plan_not_approved` no-op run,
+no flag relaxes this. `schedule run <id>` is the single provider entry point
+(in-process dispatch, never shell); run records (exit code, output tail,
+artifacts: plan ids / enrich run labels, trigger cron|manual) land under
+`<home>/schedule/runs/<id>/`. `status` shows next firing and surfaces missed
+firings (visibility only — local cron has no catch-up). Providers beyond
+`local` are not yet implemented (future: codegen scaffolds, same contract).
+
 ## Key invariants
 
 - Reads are safe by default; nothing is written without explicit `--approve`

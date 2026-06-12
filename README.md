@@ -159,6 +159,24 @@ fullstackgtm enrich status --runs                           # last run per sourc
 
 Matching is deterministic: ordered keys, unique hit wins, zero hits falls through to the next key, and multiple hits are never guessed away — they skip (recorded with candidate ids) or flow into the existing `suggest` → `plans approve` chain as `requires_human_record_selection` placeholders. The MVP conflict policy is `never`: enrich only fills blank fields, and `refresh` only re-touches fields its own run-store ledger proves it stamped (per-record/per-field `enrichedAt`, profile-scoped, never written into your portal as custom properties). The `system-only` and `always` rungs of the ladder are phase 2 and are refused explicitly, not silently accepted. Recurring execution belongs to the scheduler — enrich owns no cron logic.
 
+## Schedules: declare a cadence once, keep the governance contract under automation
+
+Everything the CLI produces is accurate the moment it runs and silently stale afterward. The **schedule layer** is the horizontal fix — any read/plan-side command on a cron cadence, one component, every verb (no feature owns its own cron logic):
+
+```bash
+fullstackgtm schedule add "enrich refresh --source apollo --save" --cron "0 6 * * 1" --label weekly-apollo
+fullstackgtm schedule add "audit --provider hubspot --save" --cron "0 2 * * *"   # nightly drift baseline
+fullstackgtm schedule list                       # declarative entries; nothing runs yet
+fullstackgtm schedule install                    # materialize enabled entries into a managed crontab block
+fullstackgtm schedule run <id>                   # execute now; same run record a cron firing produces
+fullstackgtm schedule status --runs 5            # last runs, exit codes, artifacts, next + missed firings
+fullstackgtm schedule uninstall                  # remove the managed block, touch nothing else
+```
+
+**Scheduling never auto-approves.** Schedulable commands are read/plan-side only — `audit`, `snapshot`, `enrich append|refresh`, `market capture|refresh`, `suggest`, `report`, `doctor` — so unattended runs accumulate *proposals* (plans in the queue, run records, reports), never CRM writes. `apply` is schedulable only as `apply --plan-id <id>`, and every firing re-checks the plan's status is approved: an unapproved plan records a `plan_not_approved` no-op run instead of executing, and no flag relaxes this. Arbitrary shell is not schedulable — an entry's argv must resolve to a known fullstackgtm command (validated at `add` time and re-checked at run time), and the crontab line you audit is always `fullstackgtm schedule run <id>` and nothing else.
+
+`install` renders enabled entries into a sentinel-delimited block (`# >>> fullstackgtm <profile> >>>` … `# <<< fullstackgtm <profile> <<<`) in your user crontab; re-install replaces the block wholesale and never touches lines outside it. Honest limitation: local cron has no catch-up — a laptop asleep at firing time means a missed run. `schedule status` surfaces missed firings by comparing expected-vs-actual run history, so the gap is at least visible. Entries are provider-agnostic; cloud providers (Modal, AWS) arrive as scaffold generators that call the same `schedule run <id>` contract, and are refused as "not yet implemented" until then.
+
 ### Working across organizations
 
 Consultants and fractional operators hold credentials for several CRMs at once. A profile scopes stored logins *and* stored plans to one organization:
