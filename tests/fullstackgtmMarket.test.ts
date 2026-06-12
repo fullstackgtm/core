@@ -241,6 +241,9 @@ test("report renders deterministically with matrix, fronts, and quoted evidence"
   assert.ok(!html.includes("<claim-a> & more"), "evidence is HTML-escaped");
   assert.ok(html.indexOf("Open ground") < html.indexOf("Saturated fronts"), "open-front group renders before saturated");
   assert.ok(html.includes("Where to attack"), "report closes on the takeaway");
+  assert.ok(!html.includes("${"), "no unrendered template placeholders leak into the HTML");
+  assert.ok(html.includes("<h2>Market Claims</h2>"));
+  assert.ok(html.match(/<details class="claim-group">[\s\S]*?<th class="vh"><span>Globex<\/span><\/th>/), "expanded claim groups carry the vendor header row");
 });
 
 test("cli: market init, observe, fronts, report round-trip", async () => {

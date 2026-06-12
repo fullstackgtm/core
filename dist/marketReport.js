@@ -400,6 +400,9 @@ export function marketMapToHtml(config, set) {
             `<span class="claim-meta">${e(claim.icp)} · ${e(claim.pricingStructure)}</span></th>${cells}` +
             `<td class="front"><span class="chip chip-${state}">${state.toUpperCase()}</span></td></tr>`);
     };
+    const vendorHeads = config.vendors
+        .map((vendor) => `<th class="vh${vendor.id === anchor ? " anchor-col" : ""}"><span>${e(vendor.name)}</span></th>`)
+        .join("");
     // Claims grouped by front state, each group a collapsed <details> whose
     // summary carries the stats a skimmer needs; the full matrix is one click
     // away, not a wall the reader must climb to reach the takeaway.
@@ -418,7 +421,7 @@ export function marketMapToHtml(config, set) {
             : 0;
         const anchorNote = anchor ? ` · ${vendorNamesById.get(anchor) ?? anchor} loud on ${anchorLoud}` : "";
         return `<details class="claim-group"><summary><b>${e(group.title)}</b> — ${claimIds.length} claim${claimIds.length === 1 ? "" : "s"} <span class="sum-soft">(${e(group.blurb)}${anchorNote})</span></summary>
-      <table><thead><tr><th></th>${"${vendorHeads}"}<th></th></tr></thead><tbody>${claimIds.map(matrixRow).join("")}</tbody></table>
+      <table><thead><tr><th></th>${vendorHeads}<th></th></tr></thead><tbody>${claimIds.map(matrixRow).join("")}</tbody></table>
     </details>`;
     }).join("");
     // The closing argument: walk from open ground to a reasoned target list.
@@ -480,9 +483,6 @@ export function marketMapToHtml(config, set) {
             return "";
         return `<details class="ev-group"><summary><b>${e(vendor.name)}</b> <span class="sum-soft">— ${items.length} quoted span${items.length === 1 ? "" : "s"}</span></summary>${items.join("")}</details>`;
     })
-        .join("");
-    const vendorHeads = config.vendors
-        .map((vendor) => `<th class="vh${vendor.id === anchor ? " anchor-col" : ""}"><span>${e(vendor.name)}</span></th>`)
         .join("");
     return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -571,7 +571,7 @@ footer { margin-top:60px; border-top:1px solid var(--ink); padding-top:12px; fon
 </header>
 ${axisHtml.strategicMap}
 <section>
-  <h2>Claims, front by front</h2>
+  <h2>Market Claims</h2>
   <div class="key">
     <span class="lg"><i class="g g-loud"></i>LOUD — hero-level claim</span>
     <span class="lg"><i class="g g-quiet"></i>QUIET — shipped, buried</span>
