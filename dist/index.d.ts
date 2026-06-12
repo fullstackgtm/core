@@ -24,7 +24,7 @@ export { captureMarket, computeFrontStates, createFileObservationStore, diffFron
 export { assessAxes, axesReportToText, axisPosition, messageBreadth, pcaTop2, pearson, type AxesReport, type AxisAssessment, type AxisPairing, type PrincipalComponent, } from "./marketAxes.ts";
 export { buildWorksheet, classifyMarket, type ClassifyMarketOptions, type ClassifyMarketResult, type MarketWorksheet, } from "./marketClassify.ts";
 export { computeDirectives, computeOverlayStats, directivesToPlan, overlayToMarkdown, type CallDocument, type ClaimMentionStats, type DirectiveStat, type DirectiveType, type MarketDirective, type OverlayOptions, type OverlayStats, type VendorMentionStats, } from "./marketOverlay.ts";
-export { computeScaleIndex, scaleReportToText, type ScaleReport, type VendorScale } from "./marketScale.ts";
+export { computeScaleIndex, dimensionForMetric, scaleReportToText, type ScaleDimension, type ScaleReport, type SignalEstimate, type VendorScale, } from "./marketScale.ts";
 export { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
 export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type { ApprovalStatus, AuditFinding, AuditFindingSeverity, CanonicalAccount, CanonicalActivity, CanonicalContact, CanonicalDeal, CanonicalGtmSnapshot, CanonicalUser, CrmProvider, GtmAuditRule, GtmConnector, GtmEvidence, GtmEvidenceSourceSystem, GtmObjectType, GtmPolicy, GtmRuleContext, GtmRuleResult, GtmSnapshotIndex, PatchOperation, PatchOperationResult, PatchOperationType, PatchPlan, PatchPlanRun, PatchPlanRunStatus, PatchVerification, PipelineFinding, PipelineFindingStatus, PipelineFindingType, ProviderIdentity, RiskLevel, SourceFreshness, } from "./types.ts";

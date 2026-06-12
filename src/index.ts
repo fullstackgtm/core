@@ -197,7 +197,15 @@ export {
   type OverlayStats,
   type VendorMentionStats,
 } from "./marketOverlay.ts";
-export { computeScaleIndex, scaleReportToText, type ScaleReport, type VendorScale } from "./marketScale.ts";
+export {
+  computeScaleIndex,
+  dimensionForMetric,
+  scaleReportToText,
+  type ScaleDimension,
+  type ScaleReport,
+  type SignalEstimate,
+  type VendorScale,
+} from "./marketScale.ts";
 export { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
 export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type {

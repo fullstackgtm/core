@@ -24,6 +24,6 @@ export { captureMarket, computeFrontStates, createFileObservationStore, diffFron
 export { assessAxes, axesReportToText, axisPosition, messageBreadth, pcaTop2, pearson, } from "./marketAxes.js";
 export { buildWorksheet, classifyMarket, } from "./marketClassify.js";
 export { computeDirectives, computeOverlayStats, directivesToPlan, overlayToMarkdown, } from "./marketOverlay.js";
-export { computeScaleIndex, scaleReportToText } from "./marketScale.js";
+export { computeScaleIndex, dimensionForMetric, scaleReportToText, } from "./marketScale.js";
 export { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
 export { suggestValues } from "./suggest.js";

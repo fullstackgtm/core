@@ -172,10 +172,13 @@ function axisSectionsHtml(
   const useScale = report.vendors.length > 0 && report.vendors.every((vendorId) => scaleIndex.get(vendorId) !== null && scaleIndex.get(vendorId) !== undefined);
   const loudCounts = new Map(report.vendors.map((vendorId) => [vendorId, messageBreadth(vendorId, set.observations).loudCount]));
   const maxLoud = Math.max(1, ...loudCounts.values());
+  // Bubble areas stay proportional to the metric; dividing by the max just
+  // spends the full visual range without distorting any ratio.
+  const maxShare = Math.max(1e-9, ...report.vendors.map((vendorId) => scaleIndex.get(vendorId) ?? 0));
   const sizeOf = (vendorId: string): number =>
-    useScale ? (scaleIndex.get(vendorId) as number) : (loudCounts.get(vendorId) ?? 0) / maxLoud;
+    useScale ? (scaleIndex.get(vendorId) as number) / maxShare : (loudCounts.get(vendorId) ?? 0) / maxLoud;
   const sizeCaption = useScale
-    ? `Dot area &#8733; relative scale index (within this vendor set, from: ${e(scale.metricsUsed.join(", "))} — citable signals, not true market share)`
+    ? `Dot area &#8733; estimated revenue share of this vendor set (signals: ${e(scale.metricsUsed.join(", "))}; calibrated within-set, ACV-band stratified, citable but NOT audited — see \`market scale\` for estimates and spreads)`
     : "Dot area &#8733; LOUD count";
 
   const breadthAxis: ScatterAxis & { id: string } = {

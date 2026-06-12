@@ -5,6 +5,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.21.0] — 2026-06-12
+
+Scale estimation v2 — dimensional, calibrated, SMB-bias-robust.
+
+### Changed
+
+- **`market scale` estimates revenue, not a normalized blend.** v1 averaged
+  [0,1]-normalized signals, which quietly mixed dimensions: review/customer
+  counts proxy CUSTOMER COUNT while employees/revenue proxy REVENUE, so
+  many-small-customer vendors outranked fewer-bigger-customer ones (observed
+  live: a ~$20M SMB dialer outranked a ~$33M mid-market platform). v2
+  converts every signal into revenue space first: revenue signals are used
+  directly; headcount × a revenue-per-employee ratio; customer counts × a
+  revenue-per-customer ratio **calibrated within the set (median over
+  vendors that have both) and stratified by the vendor's new `acvBand`** —
+  revenue-per-review spans ~75× between SMB tools and enterprise suites,
+  which is the bias, killed at the source. Per-vendor output is an
+  estimated revenue (weighted geometric mean: revenue 3 / headcount 2 /
+  customers 1) with a disclosed max/min **uncertainty spread**, an index =
+  share of the set's summed estimates, and the full calibration table.
+  Uncalibratable metrics (no revenue pair anywhere) are skipped and named.
+- Report bubbles: dot area ∝ estimated revenue share (normalized to the
+  set's max for visual range — ratios preserved); caption now says
+  "estimated revenue share … citable but NOT audited" and points at
+  `market scale` for the per-vendor estimates and spreads.
+- New config fields: `MarketVendor.acvBand` ("smb" | "mid" | "enterprise"
+  by convention — usually obvious from the pricing page the map already
+  captures) and `ScaleSignal.dimension` override.
+- SMB-bias regression test: many cheap-product reviews must not outrank
+  fewer expensive-product reviews when band calibration says otherwise.
+
 ## [0.20.0] — 2026-06-12
 
 The directive layer: the market map joined to your own CRM ground truth.

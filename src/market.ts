@@ -63,6 +63,12 @@ export type ScaleSignal = {
   quote: string;
   asOf: string;
   caveat?: string;
+  /**
+   * What the signal proxies: revenue (used directly), headcount, or
+   * customers (count-of-customers proxies like reviews). Inferred from the
+   * metric name when omitted; set explicitly for unusual metrics.
+   */
+  dimension?: "revenue" | "headcount" | "customers";
 };
 
 export type MarketVendor = {
@@ -78,6 +84,14 @@ export type MarketVendor = {
   aliases?: string[];
   /** Public scale signals; see ScaleSignal. */
   scaleSignals?: ScaleSignal[];
+  /**
+   * ACV stratum ("smb" | "mid" | "enterprise" by convention) used to
+   * calibrate customer-count → revenue conversion in the scale index.
+   * Revenue-per-customer differs ~75× between SMB tools and enterprise
+   * suites; stratifying kills the many-small-customers bias. Usually
+   * obvious from the vendor's own pricing page (which the map captures).
+   */
+  acvBand?: string;
   notes?: string;
 };
 
