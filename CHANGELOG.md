@@ -5,6 +5,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.21.1] — 2026-06-12
+
+Report design pass: analyst-grade restraint, legible dense scatters.
+
+### Changed
+
+- **De-slopped the field report**: removed the rotated stamp, paper-grain
+  background, parchment palette, letterspaced kickers, and editorial hero
+  voice. White page, hairline rules, plain headings — the design recedes,
+  the data reads.
+- **Strategic map legibility**: bubbles are now numbered and colored
+  (Okabe–Ito colorblind-safe palette) with a legend table beside the chart
+  that doubles as the share table (number · color · vendor · est. share or
+  LOUD count, anchor bolded). Larger bubbles render first so overlapping
+  clusters stay readable; the number resolves what overlapping name labels
+  never could. Hover tooltips keep the names.
+- **Axis pole labels can no longer collide**: wrapped to ≤2 short lines
+  (parentheticals dropped first), x poles at the bottom corners, y poles
+  rotated along the left margin — four positions, standard chart
+  convention.
+
 ## [0.21.0] — 2026-06-12
 
 Scale estimation v2 — dimensional, calibrated, SMB-bias-robust.

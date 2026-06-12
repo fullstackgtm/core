@@ -176,13 +176,14 @@ test("report renders the strategic map (and only that — no axis lab) when axes
   // Best foot forward: the client-facing report carries one earned 2x2.
   // Axis exploration (pairings, verdicts) lives in `market axes`, not here.
   assert.ok(!html.includes("Axis lab"));
-  assert.ok(html.includes(">04</span> Evidence appendix"), "appendix renumbers after the strategic map");
+  assert.ok(html.includes("<h2>Evidence appendix</h2>"));
+  assert.ok(html.includes("table class=\"legend\""), "scatter ships a numbered color legend");
   assert.equal(html, marketMapToHtml(GOLDEN.config, GOLDEN.set), "deterministic bytes");
 
   const noAxes = { ...GOLDEN.config, axes: undefined, primaryAxes: undefined };
   const plain = marketMapToHtml(noAxes, GOLDEN.set);
   assert.ok(!plain.includes("Strategic map"));
-  assert.ok(plain.includes(">03</span> Evidence appendix"), "numbering unchanged without axes");
+  assert.ok(plain.includes("<h2>Evidence appendix</h2>"));
 });
 
 test("pearson basics", () => {

@@ -234,7 +234,7 @@ test("report renders deterministically with matrix, fronts, and quoted evidence"
 
   const html = marketMapToHtml(config(), fullSet());
   assert.equal(html, marketMapToHtml(config(), fullSet()), "same observations render the same bytes");
-  assert.ok(html.includes("Field Report"));
+  assert.ok(html.includes("Market map — "), "plain analyst header, no dossier theatrics");
   assert.ok(html.includes("g-unobservable"), "failed captures render as hatched, not absent");
   // Verbatim quotes survive into the appendix, escaped.
   assert.ok(html.includes("acme says &lt;claim-a&gt; &amp; more"));
