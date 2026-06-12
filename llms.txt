@@ -14,6 +14,7 @@ at/above `--fail-on`.
 
 - [README](https://github.com/fullstackgtm/core/blob/main/README.md): install, five-minute loop, auth ladder, MCP setup, programmatic use
 - [INSTALL_FOR_AGENTS](https://github.com/fullstackgtm/core/blob/main/INSTALL_FOR_AGENTS.md): deterministic install-and-verify steps with expected outputs
+- [Agent skill](https://github.com/fullstackgtm/core/blob/main/skills/fullstackgtm/SKILL.md): compact operating guide, installable via `npx skills add fullstackgtm/core`
 - [API reference](https://github.com/fullstackgtm/core/blob/main/docs/api.md): semver-covered surfaces — canonical model, rule interface, plan/apply contract, connector contract, config, CLI, MCP tools
 - [CRM-health lifecycle](https://github.com/fullstackgtm/core/blob/main/docs/crm-health-lifecycle.md): the Prevent → Detect → Remediate → Verify/Attribute model; no-new-dupes design
 - [CHANGELOG](https://github.com/fullstackgtm/core/blob/main/CHANGELOG.md): release history

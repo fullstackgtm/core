@@ -27,7 +27,13 @@ Requires Node 20+. The core has zero runtime dependencies; only the MCP server e
 npx fullstackgtm doctor   # verify the install: node version, credentials, MCP peers, next step
 ```
 
-Installing for an AI agent? Hand it [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md) — a deterministic install-and-verify script with expected outputs. A documentation map lives in [llms.txt](./llms.txt).
+Installing for an AI agent? The fastest path is the agent skill:
+
+```bash
+npx skills add fullstackgtm/core   # Claude Code, Cursor, Codex, and other skills-compatible agents
+```
+
+It installs a compact operating guide ([skills/fullstackgtm/SKILL.md](./skills/fullstackgtm/SKILL.md)) — the governed loop, the safety invariants, and the verb map — so the agent reaches for plans instead of raw writes. For a deterministic install-and-verify script with expected outputs, hand it [INSTALL_FOR_AGENTS.md](./INSTALL_FOR_AGENTS.md). A documentation map lives in [llms.txt](./llms.txt).
 
 ## Five-minute loop
 
