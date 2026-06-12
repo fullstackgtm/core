@@ -5,6 +5,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.22.0] — 2026-06-12
+
+The report becomes a narrative: map → claims → where to attack.
+
+### Changed
+
+- **Reading order rebuilt around the insight.** The strategic map is now the
+  hero, directly under the header: contenders and their positions first.
+  The claim detail follows, then the report CLOSES on the reasoned takeaway.
+  The front-summary stat cards are gone (numbers without referents).
+- **"Where to attack"** — a generated closing section that walks the open
+  fronts as an argument: each open claim names its closest quiet contenders,
+  whether the anchor already ships it quietly (promote candidate) or it's
+  unclaimed (first-mover), plus held ground (anchor-owned fronts to defend)
+  and crowded ground (saturated fronts where message budget buys least).
+  Ends by pointing at `market overlay` for evidence-backed directives.
+- **Claims grouped and collapsed**: the matrix splits into Open / Contested /
+  Owned / Saturated `<details>` groups, default collapsed, each summary
+  carrying the skimmer's stats (count, definition of the state, anchor's
+  loud count within the group).
+- **Evidence appendix grouped by vendor**, collapsed — receipts on demand.
+  All groups auto-expand on print (beforeprint).
+
 ## [0.21.2] — 2026-06-12
 
 Scatter interactivity + honest sizing fallbacks.
