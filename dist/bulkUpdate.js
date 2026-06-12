@@ -27,6 +27,7 @@
  * `account.ownerId`, `account.contactCount`; accounts get `contactCount`
  * and `openDealCount`.
  */
+import { normalizeDomain } from "./merge.js";
 import { stableHash } from "./rules.js";
 const FIELD_PATTERN = "[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z][a-zA-Z0-9_]*)?";
 export function parseWhere(expr) {
@@ -91,6 +92,10 @@ const VALID_FIELDS = {
     contact: new Set(["id", "crmId", "accountId", "firstName", "lastName", "email", "phone", "title", "ownerId", "lastSyncAt", ...RELATIONAL_FIELDS]),
     deal: new Set(["id", "crmId", "accountId", "ownerId", "name", "amount", "currency", "stage", "closeDate", "dealType", "forecastCategory", "nextStep", "probability", "isClosed", "isWon", "lastActivityAt", "lastSyncAt", ...RELATIONAL_FIELDS]),
 };
+/** True when `field` is filterable for this object type (relational pseudo-fields included). */
+export function isFilterableField(objectType, field) {
+    return VALID_FIELDS[objectType].has(field);
+}
 function assertValidFields(objectType, clauses, context) {
     for (const clause of clauses) {
         if (!VALID_FIELDS[objectType].has(clause.field)) {
@@ -192,15 +197,65 @@ export function buildBulkUpdatePlan(snapshot, options) {
     const clauses = options.where.map(parseWhere);
     assertValidFields(options.objectType, clauses, "--where");
     const WRITABLE_BLOCKLIST = new Set(["id", "crmId", "contactCount", "openDealCount", "openDealStages"]);
-    for (const field of Object.keys(options.set ?? {})) {
+    // `from:<sourceField>` values resolve per record from the filter view —
+    // the source is validated with the same strictness as filters (relational
+    // pseudo-fields allowed; the WRITTEN field still must be canonical).
+    const assignments = [];
+    for (const [field, value] of Object.entries(options.set ?? {})) {
         if (!VALID_FIELDS[options.objectType].has(field) || WRITABLE_BLOCKLIST.has(field) || field.includes(".")) {
             throw new Error(`Cannot --set "${field}" on ${options.objectType}s — not a writable canonical field.`);
+        }
+        if (value.startsWith("from:")) {
+            const fromField = value.slice("from:".length);
+            if (!VALID_FIELDS[options.objectType].has(fromField)) {
+                throw new Error(`Cannot --set ${field}=from:${fromField} on ${options.objectType}s — unknown source field "${fromField}". Valid fields: ${[...VALID_FIELDS[options.objectType]].join(", ")}.`);
+            }
+            assignments.push({ field, fromField });
+        }
+        else {
+            assignments.push({ field, literal: value });
         }
     }
     const views = buildViews(snapshot, options.objectType);
     const matched = views.filter(({ view }) => clauses.every((c) => matches(view, c)));
     if (matched.length > maxOperations) {
         throw new Error(`Filter matched ${matched.length} ${COLLECTIONS[options.objectType]} — above the ${maxOperations}-record safety cap. Narrow the --where filter or raise --max-operations explicitly.`);
+    }
+    // Archive duplicate guard: archiving a record that shares its identity key
+    // with another active record discards data a merge would preserve. Refuse
+    // and point at `dedupe` unless explicitly overridden. Deals are exempt —
+    // they carry no identity key.
+    if (options.archive && options.objectType !== "deal" && !options.forceArchiveDuplicates) {
+        const keyName = options.objectType === "account" ? "domain" : "email";
+        const keyOf = (record) => options.objectType === "account"
+            ? normalizeDomain(record.domain)
+            : (record.email?.trim().toLowerCase() || undefined);
+        const allRecords = snapshot[COLLECTIONS[options.objectType]];
+        const byKey = new Map();
+        for (const record of allRecords) {
+            const key = keyOf(record);
+            if (!key)
+                continue;
+            const existing = byKey.get(key) ?? [];
+            existing.push(record);
+            byKey.set(key, existing);
+        }
+        const collisions = [];
+        for (const { record } of matched) {
+            const key = keyOf(record);
+            if (!key)
+                continue;
+            const others = (byKey.get(key) ?? []).filter((other) => other.id !== record.id);
+            if (others.length === 0)
+                continue;
+            const label = record.name ?? record.email ?? "";
+            collisions.push(`${options.objectType} ${record.id}${label ? ` "${label}"` : ""} shares ${keyName} "${key}" with ${others
+                .map((other) => `${other.id}${other.name ? ` "${other.name}"` : ""}`)
+                .join(", ")}`);
+        }
+        if (collisions.length > 0) {
+            throw new Error(`Refusing to archive: ${collisions.length} matched record(s) look like duplicates of other records — archiving a duplicate DISCARDS its data, merging preserves it. Use \`fullstackgtm dedupe ${options.objectType} --key ${keyName}\` (merge_records) instead, or pass --force-archive-duplicates to archive anyway.\n  - ${collisions.join("\n  - ")}`);
+        }
     }
     // Preconditions: explicit --require, plus every equality filter on a real
     // (re-readable, non-relational) field. The premise the plan was built on
@@ -236,7 +291,9 @@ export function buildBulkUpdatePlan(snapshot, options) {
             : `set ${Object.entries(options.set).map(([k, v]) => `${k}=${v}`).join(", ")}`;
     const reason = options.reason ?? `bulk-update: ${action} where ${whereText}`;
     const operations = [];
-    for (const { record } of matched) {
+    // records skipped because a from:<sourceField> value was empty, per source
+    const skippedBySource = new Map();
+    for (const { record, view } of matched) {
         const objectId = String(record.id);
         const groupId = `grp_${options.objectType}_${objectId}`;
         const preconditions = preconditionSpecs.map((p) => ({
@@ -279,7 +336,30 @@ export function buildBulkUpdatePlan(snapshot, options) {
             });
             continue;
         }
-        for (const [field, value] of Object.entries(options.set)) {
+        // Resolve every assignment for this record BEFORE emitting any of its
+        // operations: a record whose from:<sourceField> resolves empty is
+        // skipped whole (its operations share a groupId — half a record's
+        // updates is exactly what grouping exists to prevent).
+        const resolved = [];
+        let emptySource = null;
+        for (const assignment of assignments) {
+            if (assignment.fromField !== undefined) {
+                const value = fieldValue(view, assignment.fromField);
+                if (value === "") {
+                    emptySource = assignment.fromField;
+                    break;
+                }
+                resolved.push({ field: assignment.field, value });
+            }
+            else {
+                resolved.push({ field: assignment.field, value: assignment.literal });
+            }
+        }
+        if (emptySource !== null) {
+            skippedBySource.set(emptySource, (skippedBySource.get(emptySource) ?? 0) + 1);
+            continue;
+        }
+        for (const { field, value } of resolved) {
             operations.push({
                 ...shared,
                 id: `op_${stableHash(`bulk-set:${options.objectType}:${objectId}:${field}:${value}`)}`,
@@ -300,13 +380,16 @@ export function buildBulkUpdatePlan(snapshot, options) {
         if (failure)
             throw new Error(`${failure} The guard already fails against the current snapshot — the plan would never apply.`);
     }
+    const skippedText = [...skippedBySource.entries()]
+        .map(([sourceField, count]) => ` ${count} skipped: empty ${sourceField}.`)
+        .join("");
     return {
-        id: `patch_plan_${stableHash(`bulk:${snapshot.provider}:${snapshot.generatedAt}:${whereText}:${action}:${operations.length}`)}`,
+        id: `patch_plan_${stableHash(`bulk:${snapshot.provider}:${snapshot.generatedAt}:${options.objectType}:${whereText}:${action}:${operations.length}`)}`,
         title: `Bulk update: ${options.objectType}s where ${whereText}`,
         createdAt: snapshot.generatedAt,
         status: operations.length > 0 ? "needs_approval" : "draft",
         dryRun: true,
-        summary: `${matched.length} ${COLLECTIONS[options.objectType]} matched (${whereText}); ${operations.length} proposed dry-run operations (${action}).${guards.length > 0 ? ` ${guards.length} apply-time guard(s).` : ""}`,
+        summary: `${matched.length} ${COLLECTIONS[options.objectType]} matched (${whereText}); ${operations.length} proposed dry-run operations (${action}).${skippedText}${guards.length > 0 ? ` ${guards.length} apply-time guard(s).` : ""}`,
         findings: [],
         operations,
         filter: { objectType: options.objectType, where: options.where },

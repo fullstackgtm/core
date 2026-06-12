@@ -264,6 +264,98 @@ test("| alternation: any-of for eq/contains, all-of for negations", () => {
   assert.equal(alt.operations[0].preconditions, undefined);
 });
 
+test("--archive refuses records whose identity key collides with another record", () => {
+  const snap = structuredClone(snapshot);
+  // a3 duplicates a1's domain (with www. noise); archiving it would discard data a merge keeps
+  snap.accounts.push({ id: "a3", name: "EMEA Duplicate", domain: "www.emea.de" } as any);
+  assert.throws(
+    () => buildBulkUpdatePlan(snap, { objectType: "account", where: ["name~duplicate"], archive: true }),
+    (error: Error) => {
+      assert.match(error.message, /Refusing to archive/);
+      assert.match(error.message, /a3 "EMEA Duplicate"/); // names the colliding record
+      assert.match(error.message, /a1 "EMEA GmbH"/); // and what it collides with
+      assert.match(error.message, /dedupe account --key domain/); // points at the merge path
+      return true;
+    },
+  );
+  // explicit override bypasses the guard
+  const forced = buildBulkUpdatePlan(snap, {
+    objectType: "account",
+    where: ["name~duplicate"],
+    archive: true,
+    forceArchiveDuplicates: true,
+  });
+  assert.deepEqual(forced.operations.map((o) => o.objectId), ["a3"]);
+});
+
+test("--archive duplicate guard covers contacts by email and exempts deals", () => {
+  const snap = structuredClone(snapshot);
+  snap.contacts = [
+    { id: "c1", firstName: "A", lastName: "B", email: "dup@x.com" } as any,
+    { id: "c2", firstName: "A", lastName: "B2", email: "DUP@x.com" } as any, // case noise still collides
+    { id: "c3", firstName: "C", lastName: "D" } as any, // no email → no identity key, archivable
+  ];
+  assert.throws(
+    () => buildBulkUpdatePlan(snap, { objectType: "contact", where: ["email~dup"], archive: true }),
+    /shares email "dup@x.com"|Refusing to archive/,
+  );
+  const noKey = buildBulkUpdatePlan(snap, { objectType: "contact", where: ["email:empty"], archive: true });
+  assert.deepEqual(noKey.operations.map((o) => o.objectId), ["c3"]);
+  // deals have no identity key: duplicate names never block an archive
+  const dealSnap = structuredClone(snapshot);
+  dealSnap.deals.push({ id: "d9", name: "Dana Deal 1", stage: "closedwon", isClosed: true } as any);
+  const deals = buildBulkUpdatePlan(dealSnap, { objectType: "deal", where: ["stage=closedwon"], archive: true });
+  assert.equal(deals.operations.length, 2);
+});
+
+test("--set field=from:<sourceField> resolves per record, including relational sources", () => {
+  const snap = structuredClone(snapshot);
+  snap.deals = [
+    { id: "d1", name: "One", accountId: "a1", stage: "qualifiedtobuy", isClosed: false } as any, // → u1 (a1's owner)
+    { id: "d2", name: "Two", accountId: "a2", stage: "qualifiedtobuy", isClosed: false } as any, // → u2 (a2's owner)
+    { id: "d3", name: "Three", stage: "qualifiedtobuy", isClosed: false } as any, // no account → skipped
+  ];
+  const plan = buildBulkUpdatePlan(snap, {
+    objectType: "deal",
+    where: ["ownerId:empty"],
+    set: { ownerId: "from:account.ownerId" },
+  });
+  // the op's afterValue is the RESOLVED literal; beforeValue stays the current value
+  const byId = Object.fromEntries(plan.operations.map((o) => [o.objectId, o]));
+  assert.deepEqual(Object.keys(byId).sort(), ["d1", "d2"]);
+  assert.equal(byId.d1.afterValue, "u1");
+  assert.equal(byId.d2.afterValue, "u2");
+  assert.equal(byId.d1.beforeValue, null);
+  // the empty-source record is skipped (not failed) and counted in the summary
+  assert.match(plan.summary, /1 skipped: empty account\.ownerId/);
+  assert.match(plan.summary, /3 deals matched/);
+});
+
+test("from: validates the source field strictly and skips the whole record when any source is empty", () => {
+  assert.throws(
+    () => buildBulkUpdatePlan(snapshot, {
+      objectType: "deal",
+      where: ["ownerId=u1"],
+      set: { ownerId: "from:hubspot_owner_id" },
+    }),
+    /unknown source field "hubspot_owner_id".*Valid fields/,
+  );
+  // multi-field set: one empty source skips the record entirely (groups are all-or-nothing)
+  const snap = structuredClone(snapshot);
+  snap.deals = [
+    { id: "d1", name: "One", accountId: "a1", stage: "qualifiedtobuy", isClosed: false } as any,
+    { id: "d2", name: "Two", stage: "qualifiedtobuy", isClosed: false } as any, // no account
+  ];
+  const plan = buildBulkUpdatePlan(snap, {
+    objectType: "deal",
+    where: ["isClosed=false"],
+    set: { ownerId: "from:account.ownerId", nextStep: "Confirm owner handoff" },
+  });
+  assert.deepEqual(plan.operations.map((o) => o.objectId), ["d1", "d1"]);
+  assert.equal(plan.operations.filter((o) => o.objectId === "d2").length, 0);
+  assert.match(plan.summary, /1 skipped: empty account\.ownerId/);
+});
+
 test("apply re-verifies the full filter per record, negations and relational fields included", async () => {
   const { applyPatchPlan } = await import("../src/connector.ts");
   const snap = structuredClone(snapshot);

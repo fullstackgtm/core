@@ -1,5 +1,7 @@
 export { auditSnapshot, defaultPolicy } from "./audit.js";
-export { buildBulkUpdatePlan, parseWhere } from "./bulkUpdate.js";
+export { buildBulkUpdatePlan, isFilterableField, parseWhere } from "./bulkUpdate.js";
+export { buildDedupePlan, dedupeKey } from "./dedupe.js";
+export { buildReassignPlans } from "./reassign.js";
 export { CONFIG_FILE_NAME, loadConfig, mergePolicy, resolveConfiguredRules, } from "./config.js";
 export { applyPatchPlan } from "./connector.js";
 export { createHubspotConnector } from "./connectors/hubspot.js";
