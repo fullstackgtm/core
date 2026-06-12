@@ -335,7 +335,7 @@ export async function startMcpServer() {
       },
     },
     async ({ vendorId, configPath, captureRun }) => {
-      const config = loadMarketConfig(resolve(process.cwd(), configPath ?? "market.config.json"));
+      const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
       return content(buildWorksheet(config, vendorId, { captureRun }));
     },
   );
@@ -355,7 +355,7 @@ export async function startMcpServer() {
       },
     },
     async ({ observationsPath, configPath }) => {
-      const config = loadMarketConfig(resolve(process.cwd(), configPath ?? "market.config.json"));
+      const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
       const set = JSON.parse(readFileSync(resolve(process.cwd(), observationsPath), "utf8")) as ObservationSet;
       const problems = validateObservationSet(config, set);
       const failures = verifyEvidenceSpans(set.observations, loadCaptureTexts(config.category).textByHash);
@@ -374,4 +374,17 @@ export async function startMcpServer() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+function loadMarketConfigOrHint(path: string): ReturnType<typeof loadMarketConfig> {
+  try {
+    return loadMarketConfig(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `No market config at ${path} — run \`fullstackgtm market init --category <name>\` in that directory first, or pass configPath.`,
+      );
+    }
+    throw error;
+  }
 }

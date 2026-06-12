@@ -864,7 +864,9 @@ async function marketCommand(args: string[]) {
   const [subcommand, ...rest] = args;
   const configPath = () => resolve(process.cwd(), option(rest, "--config") ?? "market.config.json");
 
-  if (!subcommand || subcommand === "--help") {
+  // Catch --help anywhere before loadMarketConfig/credential checks run —
+  // several subcommands (capture, refresh) have side effects on bare invocation.
+  if (!subcommand || subcommand === "--help" || subcommand === "-h" || rest.includes("--help") || rest.includes("-h")) {
     console.log(`Usage:
 market init --category <name> [--out <path>]   write a starter market.config.json
 market capture [--config <path>] [--run <label>]
@@ -1961,6 +1963,13 @@ export async function runCli(argv: string[]) {
   }
   if (command === "--version" || command === "-v" || command === "version") {
     console.log(readPackageInfo().version);
+    return;
+  }
+  // Commands without bespoke help fall back to the top-level usage on --help
+  // instead of executing (audit used to silently run the sample audit).
+  // call/market/bulk-update print their own richer help.
+  if (!["call", "market", "bulk-update"].includes(command) && (args.includes("--help") || args.includes("-h"))) {
+    console.log(usage());
     return;
   }
 

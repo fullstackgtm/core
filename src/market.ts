@@ -172,6 +172,9 @@ export function parseMarketConfig(raw: string): MarketConfig {
       if (!axis.id) throw new Error("market config: axis missing id");
       if (axisIds.has(axis.id)) throw new Error(`market config: duplicate axis id "${axis.id}"`);
       axisIds.add(axis.id);
+      if (!axis.negativePole || !axis.positivePole) {
+        throw new Error(`market config: axis "${axis.id}" needs negativePole and positivePole labels (the strategic map renders them as axis ends)`);
+      }
       for (const claimId of Object.keys(axis.claimScores ?? {})) {
         if (!claimIds.has(claimId)) {
           throw new Error(`market config: axis "${axis.id}" scores unknown claim "${claimId}"`);

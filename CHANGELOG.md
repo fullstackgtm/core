@@ -5,6 +5,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.19.0] — 2026-06-11
+
+Governed bulk writes, plus fixes from the 0.18 published-artifact verification.
+
+### Added
+
+- **`fullstackgtm bulk-update <account|contact|deal>`** — generic writes
+  through the same plan gate as everything else: `--where` filters (`=`,
+  `!=`, `~` substring, `:empty`/`:notempty`, `|` alternation) select records,
+  `--set`/`--archive`/`--create-task` define the change, and the result is a
+  dry-run patch plan needing explicit approval before `apply` — never a
+  direct write. `--require <field>=<value>` preconditions and
+  `--guard <object>:<where>:<none|some>` cross-record eligibility checks are
+  re-verified at apply time against the live CRM (mid-apply rechecks shrink
+  the audit→apply TOCTOU window); `--max-operations` caps blast radius.
+- Eval tool card teaches agents to encode eligibility conditions in filters
+  rather than hand-selecting record ids.
+
+### Fixed
+
+- `--help` no longer executes: every `market` subcommand now short-circuits
+  to usage before config loads, credential checks, or side effects
+  (`market capture --help` used to *run the capture* — live fetches and
+  manifest writes; `market axes --help` ran the analysis). Top-level
+  commands without bespoke help (`audit`, `snapshot`, `suggest`, …) print
+  usage on `--help` instead of executing (`audit --help` used to silently
+  run the sample audit).
+- `market report --format html` no longer crashes with a bare TypeError on
+  axes missing pole labels: `parseMarketConfig` now requires
+  `negativePole`/`positivePole` on every axis and says so.
+- The 0.18.0 entry below documented the axis shape with a `poles` field that
+  never existed; the real fields are `negativePole`/`positivePole` (entry
+  corrected in place).
+- `forcedToolCall` is now actually exported from the package root, as the
+  0.17.0 entry claimed.
+- MCP `fullstackgtm_market_worksheet`/`_observe` with no
+  `market.config.json` in the server cwd return a "run `fullstackgtm market
+  init`" hint instead of a raw ENOENT.
+
 ## [0.18.0] — 2026-06-11
 
 Axis discovery: earn a strategic 2×2 from the observations instead of
@@ -13,7 +52,7 @@ asserting one.
 ### Added
 
 - **Axes as config** — `axes` in `market.config.json`: each axis is a
-  claim-scoring rubric (`{ id, label, poles, rubric, status, claimScores }`,
+  claim-scoring rubric (`{ id, label, negativePole, positivePole, rubric, status, claimScores }`,
   null = axis doesn't apply to that claim); a vendor's position is the
   intensity-weighted mean (loud=1, quiet=½) of the claims it voices.
   `primaryAxes: [x, y]` picks the report's strategic map. Config validation

@@ -119,6 +119,7 @@ export {
   DEFAULT_RUBRIC,
   detectProviderFromKey,
   extractInsightsLlm,
+  forcedToolCall,
   parseRubric,
   resolveLlmCredential,
   scoreCallLlm,

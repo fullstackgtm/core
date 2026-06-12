@@ -135,6 +135,39 @@ test("config validation: axis scoring unknown claims and bad primaryAxes are rej
   const badPrimary = JSON.parse(JSON.stringify(GOLDEN.config)) as MarketConfig;
   badPrimary.primaryAxes = ["buyer", "nope"] as [string, string];
   assert.throws(() => parseMarketConfig(JSON.stringify(badPrimary)), /primaryAxes/);
+
+  // Pole-less axes used to validate everywhere and then crash only the HTML
+  // renderer (escapeHtml(undefined)) — fail at parse time instead.
+  const poleless = JSON.parse(JSON.stringify(GOLDEN.config)) as MarketConfig;
+  (poleless.axes as NonNullable<MarketConfig["axes"]>)[0].positivePole = "";
+  assert.throws(() => parseMarketConfig(JSON.stringify(poleless)), /negativePole and positivePole/);
+});
+
+test("market <sub> --help prints usage without executing; audit --help no longer runs the sample audit", async () => {
+  const home = mkdtempSync(join(tmpdir(), "fsgtm-home-help-"));
+  const work = mkdtempSync(join(tmpdir(), "fsgtm-work-help-"));
+  process.env.FSGTM_HOME = home;
+  const cwd = process.cwd();
+  process.chdir(work); // deliberately no market.config.json: execution would throw, capture would fetch
+  const logs: string[] = [];
+  const origLog = console.log;
+  console.log = (msg: unknown) => logs.push(String(msg));
+  try {
+    await runCli(["market", "capture", "--help"]);
+    await runCli(["market", "axes", "--help"]);
+    await runCli(["market", "classify", "--help"]); // used to demand a key first
+    assert.equal(logs.length, 3);
+    for (const line of logs) assert.match(line, /market capture \[--config/);
+
+    logs.length = 0;
+    await runCli(["audit", "--help"]);
+    assert.match(logs.join("\n"), /Usage/i);
+    assert.doesNotMatch(logs.join("\n"), /\d+ finding/i, "audit --help must not run the sample audit");
+  } finally {
+    console.log = origLog;
+    process.chdir(cwd);
+    delete process.env.FSGTM_HOME;
+  }
 });
 
 test("report renders the strategic map (and only that — no axis lab) when axes are configured", () => {
