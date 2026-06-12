@@ -1,3 +1,4 @@
+import { aggregateCells } from "./metrics.ts";
 import type { RunResult } from "./types.ts";
 
 type Cell = { runs: number; score: number; max: number; violations: number; byCode: Map<string, number>; errors: number };
@@ -27,6 +28,15 @@ export function buildReport(results: RunResult[]): string {
   lines.push("# CRM Ops Eval — Results");
   lines.push("");
   lines.push(`Scenarios: ${scenarios.join(", ")}`);
+  lines.push("");
+  lines.push("## Reliability (CuP = full completion with zero violations; pass^k over repeated trials)");
+  lines.push("");
+  lines.push("| Entry | CuP | Accuracy | pass^2 | pass^4 | Violations | Runs |");
+  lines.push("|---|---|---|---|---|---|---|");
+  for (const c of aggregateCells(results)) {
+    const p2 = c.passK.get(2); const p4 = c.passK.get(4);
+    lines.push(`| ${c.model} · ${c.arm} | ${c.cupPct.toFixed(1)}% | ${c.accuracyPct.toFixed(1)}% | ${p2 === undefined ? "—" : (100 * p2).toFixed(0) + "%"} | ${p4 === undefined ? "—" : (100 * p4).toFixed(0) + "%"} | ${c.violations} | ${c.runs} |`);
+  }
   lines.push("");
   lines.push("## Task accuracy (points earned / available)");
   lines.push("");
