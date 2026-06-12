@@ -44,8 +44,33 @@ elsewhere). Failed captures read UNOBSERVABLE, never ABSENT. `fronts --diff`
 = deterministic front states + drift between runs; `axes` = PCA axis
 discovery + orthogonality screen; `report` = self-contained HTML field
 report; `refresh` = capture → classify → drift → report in one command.
+`overlay --snapshot <crm.json> [--calls <files>]` joins observations to YOUR
+CRM/calls (deterministic mention matching, no LLM) and emits OCCUPY/PROMOTE/
+URGENT/RETREAT directives — each needs ≥1 observation + ≥1 CRM stat with
+sample size; below thresholds = no directive; `--save` = approval-gated
+create_task ops. `scale` = citable scaleSignals (sourceUrl + verbatim quote
+each) → revenue-space estimates calibrated within-set by acvBand, disclosed
+uncertainty; report bubbles ∝ estimated share only when signals exist.
 Storage is profile-scoped under `<home>/market/<category>`. MCP:
 `fullstackgtm_market_worksheet`, `fullstackgtm_market_observe`.
+
+## Key invariants (governed write verbs)
+
+`bulk-update <object> --where … (--set|--archive|--create-task)` filters the
+snapshot into a dry-run plan; the FULL filter is re-verified per record at
+apply time (plus mid-apply rechecks); equality filters double as
+preconditions, `--require`/`--guard` add explicit ones, `--max-operations`
+caps blast radius. `--set f=from:<source>` derives per-record values (empty
+source = skip + count, never guess). `--archive` refuses records sharing an
+identity key — merge with `dedupe` instead. `dedupe <object> --key
+<domain|email|name>` = one merge_records op per duplicate group,
+deterministic survivor (`--keep richest|oldest`); merges are irreversible and
+stay low-confidence-capped at approval. `reassign --from <owner> --to
+<owner>` = ownership handoff plans per object type; `--except-deal-stage`
+also excludes records whose account has an open deal in that stage. `fix
+--rule <id>` = audit one rule → suggest → approve at the confidence bar →
+apply only with `--yes`. All four produce plans; none writes outside
+approve → apply.
 
 ## Key invariants (enrich)
 
