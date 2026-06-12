@@ -47,6 +47,21 @@ report; `refresh` = capture → classify → drift → report in one command.
 Storage is profile-scoped under `<home>/market/<category>`. MCP:
 `fullstackgtm_market_worksheet`, `fullstackgtm_market_observe`.
 
+## Key invariants (enrich)
+
+`fullstackgtm enrich` is governed enrichment: `append` pulls (Apollo, BYO key
+via `login apollo`/APOLLO_API_KEY) or reads data staged by `ingest` (Clay CSV
+exports / webhook payload JSON), matches source records to CRM records via
+ordered keys in `enrich.config.json` (unique hit wins; ambiguity skips or
+becomes `requires_human_record_selection` placeholders — never a coin flip),
+and emits a fill-blanks-only patch plan through the normal dry-run → approve →
+apply gate. No `--save` = dry-run diff, nothing written. `refresh` re-checks
+stale fields the run-store ledger proves enrich stamped, proposing ops only
+where the source value changed (beforeValue = current CRM value → apply-time
+CAS). Conflict policy MVP is `never`; `system-only`/`always` are phase 2 and
+refused explicitly. Run store (checkpoint + staleness ledger + `status`) is
+profile-scoped under `<home>/enrich/runs`. No cron — scheduling is horizontal.
+
 ## Key invariants
 
 - Reads are safe by default; nothing is written without explicit `--approve`

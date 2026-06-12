@@ -126,6 +126,21 @@ The discipline matches the rest of the tool. Intensity readings are *proposals* 
 
 `market axes` is for earning a strategic 2×2 instead of asserting one: PCA over the intensity matrix (PC1 = the category's own primary axis, PC2 = the most differentiating direction orthogonal to it), triangulation of your configured axes against the data, and an orthogonality screen that flags two axes that are secretly one. Axes are claim-scoring rubrics in the config; the report renders the primary pair as the strategic map. Captures and observations are profile-scoped (`~/.fullstackgtm/market/<category>`), so one client's category intel never bleeds into another's.
 
+## Governed enrichment: a diff you approve before third-party data touches your CRM
+
+Every enrichment vendor ships fire-and-forget writeback. The **enrich layer** inverts that: declare once which fields come from which source under which conflict policy (`enrich.config.json` — sources, ordered match keys, field mappings, policy), then `enrich append` fills the gaps and `enrich refresh` keeps them current — with every write passing through the normal dry-run → approval → apply contract, and every value traceable to the source payload that produced it.
+
+```bash
+echo "$APOLLO_API_KEY" | fullstackgtm login apollo          # BYO key, stored 0600
+fullstackgtm enrich append --provider hubspot               # pull → match → dry-run diff, writes NOTHING
+fullstackgtm enrich append --provider hubspot --save        # persist the plan (needs_approval) + run record
+fullstackgtm enrich ingest clay-export.csv --source clay    # stage a push-style source (Clay CSV / webhook JSON)
+fullstackgtm enrich refresh --source apollo --save          # re-check stale stamped fields; ops only where the source changed
+fullstackgtm enrich status --runs                           # last run per source, counts, staleness, interrupted-run cursor
+```
+
+Matching is deterministic: ordered keys, unique hit wins, zero hits falls through to the next key, and multiple hits are never guessed away — they skip (recorded with candidate ids) or flow into the existing `suggest` → `plans approve` chain as `requires_human_record_selection` placeholders. The MVP conflict policy is `never`: enrich only fills blank fields, and `refresh` only re-touches fields its own run-store ledger proves it stamped (per-record/per-field `enrichedAt`, profile-scoped, never written into your portal as custom properties). The `system-only` and `always` rungs of the ladder are phase 2 and are refused explicitly, not silently accepted. Recurring execution belongs to the scheduler — enrich owns no cron logic.
+
 ### Working across organizations
 
 Consultants and fractional operators hold credentials for several CRMs at once. A profile scopes stored logins *and* stored plans to one organization:
