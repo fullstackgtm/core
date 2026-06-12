@@ -5,6 +5,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.21.2] — 2026-06-12
+
+Scatter interactivity + honest sizing fallbacks.
+
+### Changed
+
+- **Hover tooltips on the strategic map**: rich tooltip (vendor, both axis
+  positions, LOUD count, estimated revenue/share with signal spread) follows
+  the cursor; hovering a bubble raises it to the front, so a bubble born
+  fully underneath a bigger one is one mouse-over from visible; hovering
+  dims the rest. Legend rows cross-highlight their bubbles.
+- **No more implied share**: without scaleSignals the map renders UNIFORM
+  dots with the caption "Dot size carries no meaning on this map" — the
+  LOUD-count sizing fallback is gone (a map owner read it as market share;
+  the legend still lists LOUD counts). With partial coverage (majority of
+  vendors estimated), scale mode holds and signal-less vendors render as
+  minimal DASHED bubbles — visibly "no measurable scale", never silently
+  resized; their legend row shows "—".
+- Numbers move above bubbles too small to contain them.
+
 ## [0.21.1] — 2026-06-12
 
 Report design pass: analyst-grade restraint, legible dense scatters.

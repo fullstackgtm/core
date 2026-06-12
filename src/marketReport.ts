@@ -107,7 +107,7 @@ export function marketMapToMarkdown(config: MarketConfig, set: ObservationSet): 
 }
 
 /** size is normalized [0,1]; rendered area-proportionally (radius ∝ √size). */
-type ScatterPoint = { vendorId: string; name: string; x: number; y: number; size: number };
+type ScatterPoint = { vendorId: string; name: string; x: number; y: number; size: number; noScale?: boolean };
 type ScatterAxis = { label: string; negativePole: string; positivePole: string; signed: boolean };
 
 /**
@@ -185,21 +185,27 @@ function svgScatter(
   const sy = (y: number) => H - PAD_BOTTOM - ((y - yLo) / (yHi - yLo)) * (H - PAD_TOP - PAD_BOTTOM);
   const e = escapeHtml;
 
-  // Big bubbles first so small ones stay clickable/visible on top.
+  // Big bubbles first so small ones stay clickable/visible on top; hover
+  // raises a bubble to the front (JS re-appends its <g>), so even a bubble
+  // born fully underneath a bigger one is one mouse-over from visible.
   const ordered = [...points].sort((a, b) => b.size - a.size);
   const dots = ordered
     .map((p) => {
-      const r = 7 + 24 * Math.sqrt(p.size);
+      const r = p.noScale ? 7 : 7 + 24 * Math.sqrt(p.size);
       const color = colorByVendor.get(p.vendorId) ?? "#717171";
-      const ring = p.vendorId === anchor ? ` stroke="#1c1c1c" stroke-width="2.5"` : ` stroke="#ffffff" stroke-width="1.5"`;
       const number = numberByVendor.get(p.vendorId) ?? 0;
+      const cx = sx(p.x).toFixed(1);
+      const cy = sy(p.y);
+      const ring = p.vendorId === anchor ? ` stroke="#1c1c1c" stroke-width="2.5"` : ` stroke="#ffffff" stroke-width="1.5"`;
+      // No measurable scale: minimal dashed outline — visibly "no data", never a guess.
+      const fill = p.noScale ? ` fill="${color}" fill-opacity="0.2" stroke="${color}" stroke-width="1.5" stroke-dasharray="3 2"` : ` fill="${color}" fill-opacity="0.78"${ring}`;
+      // Numbers go inside when they fit, above the bubble when they don't.
       const fs = Math.max(10, Math.min(14, r * 0.9));
-      return (
-        `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${r.toFixed(1)}" fill="${color}" fill-opacity="0.88"${ring}>` +
-        `<title>${e(p.name)}</title></circle>` +
-        `<text x="${sx(p.x).toFixed(1)}" y="${(sy(p.y) + fs * 0.36).toFixed(1)}" text-anchor="middle" ` +
-        `font-size="${fs.toFixed(1)}" font-weight="700" fill="${numeralColor(color)}" style="pointer-events:none">${number}</text>`
-      );
+      const numberSvg =
+        r >= 10 && !p.noScale
+          ? `<text x="${cx}" y="${(cy + fs * 0.36).toFixed(1)}" text-anchor="middle" font-size="${fs.toFixed(1)}" font-weight="700" fill="${numeralColor(color)}" style="pointer-events:none">${number}</text>`
+          : `<text x="${cx}" y="${(cy - r - 3).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${color}" style="pointer-events:none">${number}</text>`;
+      return `<g class="bubble${p.noScale ? " no-scale" : ""}" data-v="${e(p.vendorId)}"><circle cx="${cx}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}"${fill}/>${numberSvg}</g>`;
     })
     .join("");
 
@@ -244,18 +250,26 @@ function axisSectionsHtml(
   // when every placeable vendor has one; LOUD count otherwise — never mix
   // the two semantics on one chart.
   const scale = computeScaleIndex(config);
+  const scaleByVendor = new Map(scale.vendors.map((vendor) => [vendor.vendorId, vendor]));
   const scaleIndex = new Map(scale.vendors.map((vendor) => [vendor.vendorId, vendor.index]));
-  const useScale = report.vendors.length > 0 && report.vendors.every((vendorId) => scaleIndex.get(vendorId) !== null && scaleIndex.get(vendorId) !== undefined);
+  const estimated = report.vendors.filter((vendorId) => typeof scaleIndex.get(vendorId) === "number");
+  // Scale mode needs a real majority of vendors estimated; the stragglers
+  // (idea-stage anchors, signal-less vendors) render as minimal dashed
+  // bubbles — visibly "no measurable scale", never silently re-sized.
+  const useScale = estimated.length >= 2 && estimated.length * 2 >= report.vendors.length;
   const loudCounts = new Map(report.vendors.map((vendorId) => [vendorId, messageBreadth(vendorId, set.observations).loudCount]));
-  const maxLoud = Math.max(1, ...loudCounts.values());
   // Bubble areas stay proportional to the metric; dividing by the max just
   // spends the full visual range without distorting any ratio.
   const maxShare = Math.max(1e-9, ...report.vendors.map((vendorId) => scaleIndex.get(vendorId) ?? 0));
-  const sizeOf = (vendorId: string): number =>
-    useScale ? (scaleIndex.get(vendorId) as number) / maxShare : (loudCounts.get(vendorId) ?? 0) / maxLoud;
+  const sizeOf = (vendorId: string): number => {
+    if (!useScale) return 0.14; // uniform: size carries NO meaning without scale signals
+    const share = scaleIndex.get(vendorId);
+    return typeof share === "number" ? share / maxShare : 0;
+  };
+  const noScaleFor = (vendorId: string): boolean => useScale && typeof scaleIndex.get(vendorId) !== "number";
   const sizeCaption = useScale
-    ? `Dot area &#8733; estimated revenue share of this vendor set (signals: ${e(scale.metricsUsed.join(", "))}; calibrated within-set, ACV-band stratified, citable but NOT audited — see \`market scale\` for estimates and spreads)`
-    : "Dot area &#8733; LOUD count";
+    ? `Dot area &#8733; estimated revenue share of this vendor set (signals: ${e(scale.metricsUsed.join(", "))}; calibrated within-set, ACV-band stratified, citable but NOT audited — see \`market scale\` for estimates and spreads). Dashed outline = no measurable scale signals.`
+    : "Dot size carries no meaning on this map (no scaleSignals in the config); the legend lists LOUD counts";
 
   const breadthAxis: ScatterAxis & { id: string } = {
     id: "breadth",
@@ -298,6 +312,7 @@ function axisSectionsHtml(
         x: xs.get(vendorId) as number,
         y: ys.get(vendorId) as number,
         size: sizeOf(vendorId),
+        noScale: noScaleFor(vendorId),
       }));
   };
 
@@ -318,13 +333,38 @@ function axisSectionsHtml(
       const number = numberByVendor.get(point.vendorId);
       const color = colorByVendor.get(point.vendorId) as string;
       const isAnchor = point.vendorId === config.anchorVendor;
+      const share = scaleIndex.get(point.vendorId);
       const measure = useScale
-        ? `${(((scaleIndex.get(point.vendorId) as number) ?? 0) * 100).toFixed(1)}%`
+        ? typeof share === "number"
+          ? `${(share * 100).toFixed(1)}%`
+          : "—"
         : `${loudCounts.get(point.vendorId) ?? 0} loud`;
-      return `<tr${isAnchor ? ' class="anchor-row"' : ""}><td><span class="swatch" style="background:${color};color:${numeralColor(color)}">${number}</span></td><td>${e(point.name)}${isAnchor ? " ·&nbsp;anchor" : ""}</td><td class="num">${measure}</td></tr>`;
+      return `<tr data-v="${e(point.vendorId)}"${isAnchor ? ' class="anchor-row"' : ""}><td><span class="swatch" style="background:${color};color:${numeralColor(color)}">${number}</span></td><td>${e(point.name)}${isAnchor ? " ·&nbsp;anchor" : ""}</td><td class="num">${measure}</td></tr>`;
     })
     .join("");
   const legendMeasureHead = useScale ? "est. share" : "loud";
+
+  const money = (value: number) =>
+    value >= 1e9 ? `$${(value / 1e9).toFixed(1)}B` : value >= 1e6 ? `$${(value / 1e6).toFixed(1)}M` : `$${Math.round(value / 1e3)}K`;
+  const tipData: Record<string, { name: string; n: number; lines: string[] }> = {};
+  for (const point of points) {
+    const vendorScale = scaleByVendor.get(point.vendorId);
+    const lines = [
+      `${axInfo.label}: ${point.x.toFixed(2)}`,
+      `${ayInfo.label}: ${point.y.toFixed(2)}`,
+      `LOUD claims: ${loudCounts.get(point.vendorId) ?? 0}`,
+    ];
+    if (useScale) {
+      if (vendorScale?.estimatedRevenue != null) {
+        lines.push(
+          `est. revenue: ~${money(vendorScale.estimatedRevenue)} (${(((scaleIndex.get(point.vendorId) as number) ?? 0) * 100).toFixed(1)}% of set${vendorScale.uncertainty && vendorScale.uncertainty > 1 ? `, ×${vendorScale.uncertainty.toFixed(1)} signal spread` : ""})`,
+        );
+      } else {
+        lines.push("est. revenue: no measurable scale signals");
+      }
+    }
+    tipData[point.vendorId] = { name: point.name, n: numberByVendor.get(point.vendorId) ?? 0, lines };
+  }
 
   const strategicMap = `<section>
   <h2>Strategic map: ${e(axInfo.label)} &#215; ${e(ayInfo.label)}</h2>
@@ -333,6 +373,47 @@ function axisSectionsHtml(
       ${svgScatter(points, axInfo, ayInfo, config.anchorVendor, colorByVendor, numberByVendor)}
       <table class="legend"><thead><tr><th></th><th>vendor</th><th class="num">${legendMeasureHead}</th></tr></thead><tbody>${legendRows}</tbody></table>
     </div>
+    <div class="map-tip" id="map-tip" hidden></div>
+    <script type="application/json" id="map-data">${JSON.stringify(tipData)}</script>
+    <script>
+    (function () {
+      var data = JSON.parse(document.getElementById("map-data").textContent);
+      var tip = document.getElementById("map-tip");
+      var fig = tip.closest("figure");
+      var bubbles = fig.querySelectorAll("g.bubble");
+      var rows = fig.querySelectorAll("table.legend tbody tr");
+      function show(v, evt) {
+        var d = data[v];
+        if (!d) return;
+        tip.innerHTML = "<b>" + d.n + " · " + d.name + "</b>" + d.lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
+        tip.hidden = false;
+        var box = fig.getBoundingClientRect();
+        tip.style.left = Math.min(evt.clientX - box.left + 14, box.width - tip.offsetWidth - 8) + "px";
+        tip.style.top = (evt.clientY - box.top + 14) + "px";
+      }
+      function focusOn(v) {
+        bubbles.forEach(function (b) {
+          b.classList.toggle("dim", b.getAttribute("data-v") !== v);
+          if (b.getAttribute("data-v") === v) b.parentNode.appendChild(b); // raise hidden bubbles
+        });
+        rows.forEach(function (r) { r.classList.toggle("hl", r.getAttribute("data-v") === v); });
+      }
+      function clear() {
+        tip.hidden = true;
+        bubbles.forEach(function (b) { b.classList.remove("dim"); });
+        rows.forEach(function (r) { r.classList.remove("hl"); });
+      }
+      bubbles.forEach(function (b) {
+        b.addEventListener("mousemove", function (evt) { show(b.getAttribute("data-v"), evt); });
+        b.addEventListener("mouseenter", function () { focusOn(b.getAttribute("data-v")); });
+        b.addEventListener("mouseleave", clear);
+      });
+      rows.forEach(function (r) {
+        r.addEventListener("mouseenter", function () { focusOn(r.getAttribute("data-v")); });
+        r.addEventListener("mouseleave", clear);
+      });
+    })();
+    </script>
   <figcaption>Positions computed from run ${e(set.runLabel)} observations: each axis is a per-claim scoring rubric
   in the market config; a vendor sits at the intensity-weighted mean (loud=1, quiet=&#189;) of the claims it
   voices. ${sizeCaption}. Axis status — ${e(axInfo.label)}: ${e(statusOf(px))}; ${e(ayInfo.label)}: ${e(statusOf(py))}.</figcaption>
@@ -458,7 +539,15 @@ tr.front-open th .claim-cap { color:var(--accent); font-weight:600; }
 .ev-head { font-size:10.5px; color:var(--soft); font-weight:600; }
 .ev blockquote { margin:5px 0; font-size:13.5px; line-height:1.5; }
 .ev-src { font-size:10px; color:var(--soft); word-break:break-all; }
-figure.map { margin-top:16px; border:1px solid var(--line); }
+figure.map { margin-top:16px; border:1px solid var(--line); position:relative; }
+g.bubble { cursor:pointer; }
+g.bubble.dim { opacity:0.25; transition:opacity .12s; }
+table.legend tbody tr { cursor:default; }
+table.legend tbody tr.hl td { background:var(--faint); }
+.map-tip { position:absolute; z-index:5; background:#1c1c1c; color:#fff; font-size:11.5px; line-height:1.45;
+  padding:8px 10px; border-radius:3px; pointer-events:none; max-width:260px;
+  font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+.map-tip b { display:block; margin-bottom:3px; }
 .map-row { display:flex; gap:8px; align-items:flex-start; padding:10px 12px 0; }
 .map-row svg { flex:1 1 62%; min-width:0; }
 .plot { fill:var(--faint); stroke:var(--line); }
@@ -474,7 +563,7 @@ table.legend tr.anchor-row td { font-weight:700; }
 figcaption { font-size:11.5px; color:var(--soft); padding:10px 14px 12px; border-top:1px solid var(--line); line-height:1.5; }
 footer { margin-top:60px; border-top:1px solid var(--ink); padding-top:12px; font-size:11px; color:var(--soft);
   display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; }
-@media print { body { max-width:none; padding:0 8mm; } section { break-inside:avoid-page; } tr { break-inside:avoid; } .map-row { display:block; } }
+@media print { body { max-width:none; padding:0 8mm; } section { break-inside:avoid-page; } tr { break-inside:avoid; } .map-row { display:block; } .map-tip { display:none; } }
 @media (max-width:760px) { .map-row { display:block; } }
 </style></head><body>
 <header>

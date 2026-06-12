@@ -299,10 +299,20 @@ test("report bubbles: revenue-share sizing only when every placeable vendor has 
   const set = observationSet();
 
   const fallback = marketMapToHtml(cfg, set);
-  assert.ok(fallback.includes("Dot area &#8733; LOUD count"), "no signals → LOUD-count sizing");
+  assert.ok(fallback.includes("Dot size carries no meaning"), "no signals → uniform dots with an explicit caption, never implied share");
 
   for (const [i, vendor] of cfg.vendors.entries()) vendor.scaleSignals = [scaleSignal("revenue_usd", 10 ** (i + 6))];
   const scaled = marketMapToHtml(cfg, set);
   assert.ok(scaled.includes("estimated revenue share"), "signals on all vendors → revenue-share sizing");
   assert.ok(scaled.includes("NOT audited"));
+  assert.ok(scaled.includes('id="map-data"') && scaled.includes("map-tip"), "scatter ships hover tooltips");
+
+  // Partial coverage: majority estimated keeps scale mode; the signal-less
+  // vendor renders as a dashed no-scale bubble and a — legend row, never
+  // silently flipping the whole map back to LOUD sizing.
+  cfg.vendors[4].scaleSignals = undefined;
+  const partial = marketMapToHtml(cfg, set);
+  assert.ok(partial.includes("estimated revenue share"), "majority coverage keeps scale mode");
+  assert.ok(partial.includes('class="bubble no-scale"'), "signal-less vendor is visibly no-data");
+  assert.ok(partial.includes("Dashed outline = no measurable scale signals"));
 });
