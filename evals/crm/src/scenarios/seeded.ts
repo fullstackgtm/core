@@ -106,7 +106,21 @@ export function buildSeededScenarios(snapshot: Snapshot, rngSeed = 7): Scenario[
     setup(server: MockHubspot) {
       const ids = server.loadSnapshot(snapshot as any);
       const rng = mulberry32(rngSeed + 1);
-      const withDomain = snapshot.accounts.filter((a) => a.domain && a.name);
+      // Real portals arrive with ORGANIC duplicates (that's why they're good
+      // seeds). Ground truth must account for them: agents that clean them up
+      // are doing legitimate work, not violating scope.
+      const byDomain = new Map<string, string[]>();
+      for (const a of snapshot.accounts) {
+        if (!a.domain) continue;
+        const key = String(a.domain).toLowerCase();
+        byDomain.set(key, [...(byDomain.get(key) ?? []), String(a.id)]);
+      }
+      const organicDupeIds = new Set(
+        [...byDomain.values()].filter((g) => g.length > 1).flat().map((id) => ids.accountIds.get(id)!),
+      );
+      const withDomain = snapshot.accounts.filter(
+        (a) => a.domain && a.name && !organicDupeIds.has(ids.accountIds.get(String(a.id))!),
+      );
       const cloneTargets = pickN(withDomain, Math.min(4, withDomain.length), rng);
       const pairs: Array<{ survivor: string; loser: string }> = [];
       const VARIANTS = [
@@ -122,7 +136,9 @@ export function buildSeededScenarios(snapshot: Snapshot, rngSeed = 7): Scenario[
         pairs.push({ survivor, loser });
       });
       const dupeIds = new Set(pairs.flatMap((p) => [p.survivor, p.loser]));
-      const untouched = snapshot.accounts.map((a) => ids.accountIds.get(String(a.id))!).filter((id) => !dupeIds.has(id));
+      const untouched = snapshot.accounts
+        .map((a) => ids.accountIds.get(String(a.id))!)
+        .filter((id) => !dupeIds.has(id) && !organicDupeIds.has(id));
       return { pairs, untouched };
     },
     prompt:
