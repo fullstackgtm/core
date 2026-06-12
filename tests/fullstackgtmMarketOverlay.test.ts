@@ -208,29 +208,82 @@ test("directivesToPlan: approval-gated create_task ops with evidence chain", () 
   assert.match(overlayToMarkdown(stats, []), /No directives met the evidence thresholds/);
 });
 
-test("scale index: log-normalized composite over shared metrics, honest gaps", () => {
+function scaleSignal(metric: string, value: number) {
+  return { metric, value, unit: "count", sourceUrl: "https://x.test", quote: `${value}`, asOf: "2026-06-12" };
+}
+
+test("scale v2: signals convert to revenue space via within-set calibration", () => {
   const cfg = config();
-  const signal = (metric: string, value: number) => ({ metric, value, unit: "count", sourceUrl: "https://x.test", quote: `${value}`, asOf: "2026-06-12" });
-  cfg.vendors[0].scaleSignals = [signal("g2_reviews", 100), signal("linkedin_employees", 50)];
-  cfg.vendors[1].scaleSignals = [signal("g2_reviews", 1000), signal("linkedin_employees", 500)];
-  cfg.vendors[2].scaleSignals = [signal("g2_reviews", 10)];
-  cfg.vendors[3].scaleSignals = [signal("revenue_usd", 5_000_000)]; // singleton metric → skipped
-  // vendors[4] has none.
+  // us: known revenue $30M, 200 employees → calibrates rev/employee at $150K.
+  cfg.vendors[0].acvBand = "mid";
+  cfg.vendors[0].scaleSignals = [scaleSignal("revenue_usd", 30_000_000), scaleSignal("linkedin_employees", 200)];
+  // r1: headcount only → estimated via the calibrated $150K/employee.
+  cfg.vendors[1].scaleSignals = [scaleSignal("linkedin_employees", 100)];
+  // r2: revenue only → direct.
+  cfg.vendors[2].scaleSignals = [scaleSignal("revenue_usd", 15_000_000)];
+  // r3, r4: none.
 
   const report = computeScaleIndex(cfg);
-  assert.deepEqual(report.metricsUsed, ["g2_reviews", "linkedin_employees"]);
-  assert.deepEqual(report.metricsSkipped, ["revenue_usd"]);
   const byVendor = new Map(report.vendors.map((vendor) => [vendor.vendorId, vendor]));
-  assert.equal(byVendor.get("r1")?.index, 1, "largest on every shared metric");
-  assert.equal(byVendor.get("r2")?.index, 0, "smallest on its only shared metric");
-  const mid = byVendor.get("us")?.index;
-  assert.ok(mid !== null && mid !== undefined && mid > 0 && mid < 1);
-  assert.equal(byVendor.get("r3")?.index, null, "singleton-metric vendor has no usable signals");
-  assert.equal(byVendor.get("r4")?.index, null);
+  const r1 = byVendor.get("r1");
+  assert.ok(r1?.estimatedRevenue !== null);
+  assert.ok(Math.abs((r1?.estimatedRevenue as number) - 15_000_000) < 1, "100 employees × calibrated $150K/emp");
+  assert.equal(r1?.estimates[0].calibration, "global");
+  assert.equal(byVendor.get("r2")?.estimatedRevenue, 15_000_000);
+  assert.equal(byVendor.get("r3")?.index, null);
   assert.equal(report.complete, false);
+  // Shares sum to 1 over estimable vendors: us 30M, r1 ~15M, r2 15M → us = 0.5.
+  assert.ok(Math.abs((byVendor.get("us")?.index as number) - 0.5) < 0.01);
+  // Calibration table is disclosed.
+  assert.ok(report.calibrations.some((c) => c.metric === "linkedin_employees" && c.stratum === "global"));
 });
 
-test("report bubbles: scale index sizes dots only when every placeable vendor has one", () => {
+test("scale v2: SMB-bias regression — many cheap customers must not outrank fewer expensive ones", () => {
+  const cfg = config();
+  // The vendorx/dialexample shape. Calibrators: r1 (smb, revenue known) and r2 (mid, revenue known)
+  // pin the per-band revenue-per-review ratios; "smb-tool" and "mid-tool" are then
+  // estimated from reviews alone.
+  cfg.vendors[0].id = "smb-tool"; cfg.vendors[0].name = "SMBTOOL"; cfg.vendors[0].acvBand = "smb";
+  cfg.vendors[0].scaleSignals = [scaleSignal("g2_reviews", 900)]; // many reviews, cheap product
+  cfg.vendors[1].acvBand = "smb";
+  cfg.vendors[1].scaleSignals = [scaleSignal("revenue_usd", 20_000_000), scaleSignal("g2_reviews", 1000)]; // $20K/review
+  cfg.vendors[2].id = "mid-tool"; cfg.vendors[2].name = "MIDTOOL"; cfg.vendors[2].acvBand = "mid";
+  cfg.vendors[2].scaleSignals = [scaleSignal("g2_reviews", 250)]; // fewer reviews, expensive product
+  cfg.vendors[3].acvBand = "mid";
+  cfg.vendors[3].scaleSignals = [scaleSignal("revenue_usd", 33_000_000), scaleSignal("g2_reviews", 250)]; // $132K/review
+  cfg.vendors[4].scaleSignals = [scaleSignal("revenue_usd", 1_000_000)];
+
+  // anchorVendor must exist; ids changed above — fix the anchor reference.
+  cfg.anchorVendor = "r1";
+
+  const report = computeScaleIndex(cfg);
+  const byVendor = new Map(report.vendors.map((vendor) => [vendor.vendorId, vendor]));
+  const smb = byVendor.get("smb-tool")?.estimatedRevenue as number;
+  const mid = byVendor.get("mid-tool")?.estimatedRevenue as number;
+  assert.ok(Math.abs(smb - 900 * 20_000) < 1, "smb reviews convert at the smb-band ratio");
+  assert.ok(Math.abs(mid - 250 * 132_000) < 1, "mid reviews convert at the mid-band ratio");
+  assert.ok(mid > smb, "fewer reviews at higher ACV outrank more reviews at lower ACV — the v1 bias inverted this");
+});
+
+test("scale v2: uncertainty reports signal disagreement; uncalibratable metrics are skipped", () => {
+  const cfg = config();
+  cfg.vendors[0].scaleSignals = [
+    scaleSignal("revenue_usd", 10_000_000),
+    scaleSignal("linkedin_employees", 200), // calibrates against itself → 10M estimate, agreement
+  ];
+  cfg.vendors[1].scaleSignals = [
+    scaleSignal("revenue_usd", 100_000_000),
+    scaleSignal("linkedin_employees", 200), // 200 × $50K-median... two calibration pairs → median ratio
+  ];
+  cfg.vendors[2].scaleSignals = [scaleSignal("github_stars", 5000)]; // no revenue pair anywhere → uncalibratable
+  const report = computeScaleIndex(cfg);
+  const byVendor = new Map(report.vendors.map((vendor) => [vendor.vendorId, vendor]));
+  assert.ok((byVendor.get("r1")?.uncertainty as number) > 1, "disagreeing signals show spread");
+  assert.equal(byVendor.get("r2")?.index, null);
+  assert.deepEqual(report.metricsSkipped, ["github_stars"]);
+});
+
+test("report bubbles: revenue-share sizing only when every placeable vendor has an estimate", () => {
   const cfg = config();
   cfg.axes = [
     {
@@ -248,9 +301,8 @@ test("report bubbles: scale index sizes dots only when every placeable vendor ha
   const fallback = marketMapToHtml(cfg, set);
   assert.ok(fallback.includes("Dot area &#8733; LOUD count"), "no signals → LOUD-count sizing");
 
-  const signal = (value: number) => [{ metric: "g2_reviews", value, unit: "count", sourceUrl: "https://x.test", quote: `${value}`, asOf: "2026-06-12" }];
-  for (const [i, vendor] of cfg.vendors.entries()) vendor.scaleSignals = signal(10 ** (i + 1));
+  for (const [i, vendor] of cfg.vendors.entries()) vendor.scaleSignals = [scaleSignal("revenue_usd", 10 ** (i + 6))];
   const scaled = marketMapToHtml(cfg, set);
-  assert.ok(scaled.includes("relative scale index"), "signals on all vendors → scale sizing with honest caption");
-  assert.ok(scaled.includes("not true market share"));
+  assert.ok(scaled.includes("estimated revenue share"), "signals on all vendors → revenue-share sizing");
+  assert.ok(scaled.includes("NOT audited"));
 });
