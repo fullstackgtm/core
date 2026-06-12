@@ -459,6 +459,13 @@ export function marketMapToHtml(config: MarketConfig, set: ObservationSet): stri
     );
   };
 
+  const vendorHeads = config.vendors
+    .map(
+      (vendor) =>
+        `<th class="vh${vendor.id === anchor ? " anchor-col" : ""}"><span>${e(vendor.name)}</span></th>`,
+    )
+    .join("");
+
   // Claims grouped by front state, each group a collapsed <details> whose
   // summary carries the stats a skimmer needs; the full matrix is one click
   // away, not a wall the reader must climb to reach the takeaway.
@@ -476,7 +483,7 @@ export function marketMapToHtml(config: MarketConfig, set: ObservationSet): stri
       : 0;
     const anchorNote = anchor ? ` · ${vendorNamesById.get(anchor) ?? anchor} loud on ${anchorLoud}` : "";
     return `<details class="claim-group"><summary><b>${e(group.title)}</b> — ${claimIds.length} claim${claimIds.length === 1 ? "" : "s"} <span class="sum-soft">(${e(group.blurb)}${anchorNote})</span></summary>
-      <table><thead><tr><th></th>${"${vendorHeads}"}<th></th></tr></thead><tbody>${claimIds.map(matrixRow).join("")}</tbody></table>
+      <table><thead><tr><th></th>${vendorHeads}<th></th></tr></thead><tbody>${claimIds.map(matrixRow).join("")}</tbody></table>
     </details>`;
   }).join("");
 
@@ -544,13 +551,6 @@ export function marketMapToHtml(config: MarketConfig, set: ObservationSet): stri
       if (items.length === 0) return "";
       return `<details class="ev-group"><summary><b>${e(vendor.name)}</b> <span class="sum-soft">— ${items.length} quoted span${items.length === 1 ? "" : "s"}</span></summary>${items.join("")}</details>`;
     })
-    .join("");
-
-  const vendorHeads = config.vendors
-    .map(
-      (vendor) =>
-        `<th class="vh${vendor.id === anchor ? " anchor-col" : ""}"><span>${e(vendor.name)}</span></th>`,
-    )
     .join("");
 
   return `<!doctype html>
@@ -640,7 +640,7 @@ footer { margin-top:60px; border-top:1px solid var(--ink); padding-top:12px; fon
 </header>
 ${axisHtml.strategicMap}
 <section>
-  <h2>Claims, front by front</h2>
+  <h2>Market Claims</h2>
   <div class="key">
     <span class="lg"><i class="g g-loud"></i>LOUD — hero-level claim</span>
     <span class="lg"><i class="g g-quiet"></i>QUIET — shipped, buried</span>

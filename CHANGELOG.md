@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.23.1] — 2026-06-12
+
+### Fixed
+
+- **Literal `${vendorHeads}` leaked into expanded claim-group tables** — a
+  templating slip in the 0.22.0 narrative restructure left the vendor header
+  row unrendered (and masked a use-before-declaration). Fixed, plus a
+  regression guard: the HTML must contain no unrendered `${` placeholders
+  and expanded groups must carry real vendor headers.
+- Claims section heading renamed to "Market Claims".
+
 ## [0.23.0] — 2026-06-12
 
 ### Added

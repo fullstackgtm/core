@@ -13,7 +13,8 @@ import {
 import type { CanonicalGtmSnapshot } from "../src/types.ts";
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const binPath = join(repoRoot, "packages", "fullstackgtm", "src", "bin.ts");
+// Literal path string so the OSS sync's monorepo→mirror path rewrite catches it.
+const binPath = resolve(import.meta.dirname, "../src/bin.ts");
 
 type FakeResponse = { status: number; body?: string; headers?: Record<string, string> };
 
