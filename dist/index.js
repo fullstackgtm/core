@@ -11,6 +11,8 @@ export { pollSalesforceDeviceLogin, refreshSalesforceToken, startSalesforceDevic
 export { createStripeConnector } from "./connectors/stripe.js";
 export { activeProfile, credentialsDir, credentialsPath, DEFAULT_PROFILE, deleteCredential, getCredential, listProfiles, resolveHubspotAccessToken, resolveHubspotConnection, setActiveProfile, storeCredential, } from "./credentials.js";
 export { generateDemoSnapshot } from "./demo.js";
+export { buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, enrichRunId, inferIngestObjectType, ingestKeyValue, latestStamps, loadEnrichConfig, matchSourceRecord, parseCsv, parseEnrichConfig, resolveCrmField, selectStaleWork, sourceValueAt, stagedSourceRecords, staleDaysFor, } from "./enrich.js";
+export { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, } from "./enrichApollo.js";
 export { diffFindings, diffSnapshots, diffToMarkdown, } from "./diff.js";
 export { mergeSnapshots, } from "./merge.js";
 export { createFilePlanStore } from "./planStore.js";

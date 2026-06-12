@@ -25,6 +25,8 @@ import { computeScaleIndex, scaleReportToText } from "./marketScale.js";
 import { buildWorksheet, classifyMarket } from "./marketClassify.js";
 import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
 import { DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
+import { buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, enrichRunId, inferIngestObjectType, latestStamps, loadEnrichConfig, parseCsv, resolveCrmField, selectStaleWork, stagedSourceRecords, staleDaysFor, } from "./enrich.js";
+import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, } from "./enrichApollo.js";
 import { resolveRecord } from "./resolve.js";
 import { buildBulkUpdatePlan } from "./bulkUpdate.js";
 import { buildDedupePlan } from "./dedupe.js";
@@ -41,7 +43,8 @@ Usage:
   fullstackgtm login salesforce --device --client-id <consumer key> [--login-url <url>]
   fullstackgtm login salesforce --instance-url <url> [--no-validate]
   fullstackgtm login stripe [--no-validate]
-  fullstackgtm login anthropic | openai        store an LLM API key for call parse/score\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|broker>
+  fullstackgtm login anthropic | openai        store an LLM API key for call parse/score
+  fullstackgtm login apollo                    store an Apollo API key for enrich pulls\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|broker>
 
   Secrets (tokens, client secrets) are NEVER passed as flags — they leak via
   the process list and shell history. Pipe them on stdin or enter them at the
@@ -81,6 +84,15 @@ Usage:
                                                against the stored capture it cites before it's accepted — then
                                                compute deterministic front states and drift, render the field
                                                report. refresh = capture → classify → drift → report in one step
+  fullstackgtm enrich append [--source apollo] [--objects companies,contacts] [--save] [--config <path>] [source options]
+  fullstackgtm enrich refresh [--source apollo] [--stale-days <n>] [--save] [--config <path>] [source options]
+  fullstackgtm enrich ingest <file.csv|payload.json> --source clay [--run-label <label>]
+  fullstackgtm enrich status [--runs] [--source <id>] [--json]
+                                               governed enrichment: pull (Apollo) or stage (Clay) third-party
+                                               data, match it to CRM records deterministically, and emit a
+                                               fill-blanks-only patch plan through the normal dry-run →
+                                               approve → apply gate. refresh re-checks stale stamped fields
+                                               and proposes updates only where the source value changed.
   fullstackgtm bulk-update <account|contact|deal> --where <expr> [--where …] (--set <field>=<value> [--set …] | --archive [--force-archive-duplicates] | --create-task <text>) [--require <field>=<value> …] [--guard <object>:<where>[;<where>]:<none|some> …] [source options] [--save] [--json] [--out <path>]
                                                governed generic writes: filter the snapshot
                                                (field=value, field!=value, field~substr, field!~substr,
@@ -1104,6 +1116,423 @@ recomputed deterministically on every invocation — never stored.`);
     throw new Error(`Unknown market subcommand: ${subcommand} (try: init, capture, classify, worksheet, observe, fronts, axes, overlay, scale, report, refresh)`);
 }
 /**
+ * The enrich layer: governed append/refresh of third-party data (Apollo pull,
+ * Clay ingest) into the CRM through the normal dry-run → approval → apply
+ * contract. State lives in the profile-scoped run store (checkpoint,
+ * staleness ledger, observability in one); scheduling belongs to the
+ * horizontal scheduler — enrich owns no cron logic.
+ */
+async function enrichCommand(args) {
+    const [subcommand, ...rest] = args;
+    // Catch --help BEFORE config load, credential resolution, or any network
+    // call (the 0.14.1/0.18 bug class — `enrich append --help` executing a
+    // paid Apollo pull would be its worst recurrence).
+    if (!subcommand || subcommand === "--help" || subcommand === "-h" || rest.includes("--help") || rest.includes("-h")) {
+        console.log(`Usage:
+enrich append  [--source apollo] [--objects companies,contacts] [--save] [--config <path>]
+               [source options] [--run-label <label>] [--json]
+enrich refresh [--source apollo] [--stale-days <n>] [--save] [--config <path>]
+               [source options] [--run-label <label>] [--json]
+enrich ingest  <file.csv|payload.json> --source clay [--run-label <label>] [--objects companies|contacts] [--config <path>]
+enrich status  [--runs] [--source <id>] [--config <path>] [--json]
+
+append pulls from an api source (Apollo — BYO key via \`login apollo\` or
+APOLLO_API_KEY) or reads data staged by \`enrich ingest\` (Clay CSV exports,
+webhook payload JSON), matches source records to CRM records via the ordered
+match keys in enrich.config.json (unique hit wins; zero hits falls through to
+the next key; multiple hits skip or flow into the suggest chain, per
+onAmbiguous), and emits a fill-blanks-only patch plan. Without --save it
+prints the dry-run diff and writes NOTHING; with --save the plan lands in the
+plan store as needs_approval and the run (counts, per-field enrichedAt stamps,
+resume cursor) lands in the profile's enrich run store. From there the normal
+chain takes over: plans approve → apply.
+
+refresh computes its work set from the run-store stamps — fields enrich
+itself wrote, opted in with "refresh": true, older than the staleness window
+(--stale-days overrides per-field staleDays and policy.defaultStaleDays) —
+re-fetches the source, and proposes updates only where the source value
+actually changed. Every operation carries beforeValue, so apply-time
+compare-and-set rejects writes over a CRM that moved underneath the plan.
+
+Conflict policy (MVP): "never" — enrich only fills blank fields and only
+re-touches fields its own ledger proves it stamped. system-only and always
+are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
+        return;
+    }
+    if (!["append", "refresh", "ingest", "status"].includes(subcommand)) {
+        throw new Error(`Unknown enrich subcommand: ${subcommand} (try: append, refresh, ingest, status)`);
+    }
+    const configPath = () => resolve(process.cwd(), option(rest, "--config") ?? ENRICH_CONFIG_FILE_NAME);
+    const store = createFileEnrichRunStore();
+    if (subcommand === "status") {
+        await enrichStatus(store, rest, configPath());
+        return;
+    }
+    const config = loadEnrichConfig(configPath());
+    if (subcommand === "ingest") {
+        await enrichIngest(store, config, rest);
+        return;
+    }
+    const mode = subcommand;
+    const source = resolveEnrichSource(config, rest);
+    const sourceConfig = config.sources[source];
+    const save = rest.includes("--save");
+    const today = new Date().toISOString().slice(0, 10);
+    // Refresh work set comes from the staleness ledger, before any fetch.
+    const allRuns = await store.list();
+    let workSet = [];
+    if (mode === "refresh") {
+        const staleDaysOverride = numericOption(rest, "--stale-days");
+        workSet = selectStaleWork(config, allRuns, source, { staleDaysOverride });
+        if (workSet.length === 0) {
+            const stamped = latestStamps(allRuns, source).size;
+            console.log(stamped === 0
+                ? `Nothing to refresh: no ${source} enrichment stamps yet. Run \`enrich append --source ${source} --save\` first.`
+                : `Nothing to refresh: all ${stamped} stamped field(s) from ${source} are within their staleness window.`);
+            return;
+        }
+    }
+    const snapshot = await readSnapshot(rest);
+    // Assemble source records: api pull (checkpointed when --save) or staged ingest data.
+    let run = null;
+    let records;
+    let missCount = 0;
+    if (sourceConfig.kind === "api") {
+        const objectTypes = parseEnrichObjects(rest, config, source);
+        const fieldsFor = (objectType) => (config.fields[objectType] ?? []).filter((field) => field.from[source] !== undefined);
+        const pullKeys = mode === "append"
+            ? apolloPullKeysForAppend(snapshot, objectTypes, (objectType, record) => fieldsFor(objectType).some((field) => {
+                const value = record[resolveCrmField(objectType, field.crm)];
+                return value === undefined || value === null || String(value).trim() === "";
+            }))
+            : apolloPullKeysForRefresh(snapshot, workSet);
+        if (pullKeys.length === 0) {
+            console.log(mode === "append"
+                ? "Nothing to enrich: no records with a blank mapped field and a pull key (companies need a domain, contacts an email)."
+                : "Nothing to refresh: no stale records carry a pull key (companies need a domain, contacts an email).");
+            return;
+        }
+        const client = createApolloClient({
+            getApiKey: () => apolloApiKey(),
+            apiBaseUrl: process.env.APOLLO_API_BASE_URL,
+        });
+        if (save) {
+            run = await openEnrichRun(store, source, mode, option(rest, "--run-label"), today);
+            if (run.cursor) {
+                console.error(`Resuming interrupted run ${run.runLabel} from cursor ${run.cursor} (${run.pulled?.length ?? 0} record(s) already pulled).`);
+            }
+        }
+        const result = await pullApolloRecords(client, pullKeys, {
+            resumeAfter: run?.cursor ?? null,
+            onProgress: run
+                ? async (progress) => {
+                    run.cursor = progress.lastKeyValue;
+                    if (progress.record)
+                        run.pulled = [...(run.pulled ?? []), progress.record];
+                    if (progress.miss)
+                        run.missedKeys = [...(run.missedKeys ?? []), progress.miss.value];
+                    await store.update(run);
+                }
+                : undefined,
+        });
+        records = run ? [...(run.pulled ?? [])] : result.records;
+        missCount = run ? (run.missedKeys?.length ?? 0) : result.misses.length;
+    }
+    else {
+        const stagedLabel = option(rest, "--staged-run");
+        const stagedRun = stagedLabel
+            ? await store.get(stagedLabel)
+            : await store.latest({ source, mode: "ingest" });
+        if (!stagedRun || stagedRun.mode !== "ingest") {
+            throw new Error(`No staged data for source "${source}". Stage it first: fullstackgtm enrich ingest <file.csv|payload.json> --source ${source}`);
+        }
+        records = stagedSourceRecords(config, source, stagedRun);
+        if (save)
+            run = await openEnrichRun(store, source, mode, option(rest, "--run-label"), today);
+    }
+    const result = buildEnrichPlan({
+        config,
+        source,
+        mode,
+        snapshot,
+        records,
+        workSet: mode === "refresh" ? workSet : undefined,
+        runLabel: run?.runLabel ?? `${mode}-${source}-${today}`,
+    });
+    // Pull keys the source had no data for count as fetched-but-unmatched.
+    result.counts.fetched += missCount;
+    result.counts.unmatched += missCount;
+    if (!save) {
+        if (rest.includes("--json")) {
+            console.log(JSON.stringify(result.plan, null, 2));
+        }
+        else {
+            console.log(patchPlanToMarkdown(result.plan));
+            console.log(formatEnrichCounts(result.counts, result.ambiguities.length));
+            console.log("\nDry run — nothing written. Re-run with --save to persist the plan and the run record.");
+        }
+        return;
+    }
+    // --save: persist the plan (when it proposes anything) and finalize the run.
+    const planIds = [];
+    if (result.plan.operations.length > 0) {
+        await createFilePlanStore().save(result.plan);
+        planIds.push(result.plan.id);
+    }
+    const finalized = {
+        ...run,
+        completedAt: new Date().toISOString(),
+        cursor: null,
+        counts: result.counts,
+        planIds: [...(run.planIds ?? []), ...planIds],
+        stamps: [...(run.stamps ?? []), ...result.stamps],
+        ambiguities: result.ambiguities,
+    };
+    await store.update(finalized);
+    console.log(formatEnrichCounts(result.counts, result.ambiguities.length));
+    if (planIds.length > 0) {
+        console.log(`Saved plan ${result.plan.id} (run ${finalized.runLabel}). Review with \`fullstackgtm plans show ${result.plan.id}\`, ` +
+            `approve with \`fullstackgtm plans approve ${result.plan.id} --operations <ids|all>\`, then ` +
+            `\`fullstackgtm apply --plan-id ${result.plan.id} --provider <name>\`.`);
+    }
+    else {
+        console.log(`Run ${finalized.runLabel} recorded; no operations to propose.`);
+    }
+}
+function formatEnrichCounts(counts, ambiguities) {
+    return (`Source records: ${counts.fetched} fetched · ${counts.matched} matched · ` +
+        `${counts.unmatched} unmatched · ${counts.ambiguous} ambiguous (${ambiguities} collision(s) recorded) · ` +
+        `${counts.opsEmitted} operation(s) proposed`);
+}
+function resolveEnrichSource(config, rest) {
+    const requested = option(rest, "--source");
+    const declared = Object.keys(config.sources);
+    if (requested) {
+        if (!config.sources[requested]) {
+            throw new Error(`Unknown enrich source "${requested}" (declared: ${declared.join(", ")})`);
+        }
+        return requested;
+    }
+    if (declared.length === 1)
+        return declared[0];
+    if (config.sources.apollo)
+        return "apollo";
+    throw new Error(`Multiple sources declared (${declared.join(", ")}) — pass --source <id>`);
+}
+function parseEnrichObjects(rest, config, source) {
+    const configured = ["company", "contact"].filter((objectType) => (config.fields[objectType] ?? []).some((field) => field.from[source] !== undefined));
+    const flag = option(rest, "--objects");
+    if (!flag) {
+        if (configured.length === 0) {
+            throw new Error(`No fields map from source "${source}" — add "from": { "${source}": ... } entries to the config.`);
+        }
+        return configured;
+    }
+    const requested = Array.from(new Set(flag.split(",").map((part) => parseSingleObjectType(part))));
+    for (const objectType of requested) {
+        if (!configured.includes(objectType)) {
+            throw new Error(`--objects ${flag}: no ${objectType} fields map from source "${source}" in the config.`);
+        }
+    }
+    return requested;
+}
+function apolloApiKey() {
+    if (process.env.APOLLO_API_KEY)
+        return process.env.APOLLO_API_KEY;
+    const stored = getCredential("apollo");
+    if (stored)
+        return stored.accessToken;
+    throw new Error('No Apollo credentials. Run `echo "$APOLLO_API_KEY" | fullstackgtm login apollo` once, or set APOLLO_API_KEY.');
+}
+/**
+ * Open (or resume) a saved run. An interrupted run — same label, same source
+ * and mode, never completed — is resumed from its cursor; a completed run
+ * with the default label gets a -2/-3 suffix (runs are append-only).
+ */
+async function openEnrichRun(store, source, mode, requestedLabel, today) {
+    const baseLabel = requestedLabel ?? `${mode}-${source}-${today}`;
+    let label = baseLabel;
+    for (let suffix = 2;; suffix += 1) {
+        const existing = await store.get(label);
+        if (!existing)
+            break;
+        if (existing.source === source && existing.mode === mode && existing.completedAt === null) {
+            return existing; // resume the interrupted run
+        }
+        if (requestedLabel) {
+            throw new Error(`Run "${requestedLabel}" already exists and is completed — enrich runs are append-only.`);
+        }
+        label = `${baseLabel}-${suffix}`;
+    }
+    return store.append({
+        id: enrichRunId(source, label),
+        runLabel: label,
+        source,
+        mode,
+        startedAt: new Date().toISOString(),
+        completedAt: null,
+        cursor: null,
+        counts: { fetched: 0, matched: 0, unmatched: 0, ambiguous: 0, opsEmitted: 0 },
+        planIds: [],
+        stamps: [],
+    });
+}
+async function enrichIngest(store, config, rest) {
+    const file = rest.find((arg) => !arg.startsWith("--") && !isOptionValue(rest, arg));
+    if (!file)
+        throw new Error("Usage: fullstackgtm enrich ingest <file.csv|payload.json> --source <id> [--run-label <label>]");
+    const source = option(rest, "--source");
+    if (!source)
+        throw new Error("enrich ingest requires --source <id> (the ingest source the data belongs to)");
+    const sourceConfig = config.sources[source];
+    if (!sourceConfig) {
+        throw new Error(`Unknown enrich source "${source}" (declared: ${Object.keys(config.sources).join(", ")})`);
+    }
+    if (sourceConfig.kind !== "ingest") {
+        throw new Error(`Source "${source}" is kind "${sourceConfig.kind}" — only ingest sources accept staged data.`);
+    }
+    const raw = readFileSync(resolve(process.cwd(), file), "utf8");
+    let rows;
+    const isCsv = file.toLowerCase().endsWith(".csv") || sourceConfig.format === "csv";
+    if (isCsv && !file.toLowerCase().endsWith(".json")) {
+        rows = parseCsv(raw);
+    }
+    else {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed))
+            rows = parsed;
+        else if (parsed && typeof parsed === "object" && Array.isArray(parsed.rows)) {
+            rows = parsed.rows;
+        }
+        else if (parsed && typeof parsed === "object") {
+            rows = [parsed];
+        }
+        else {
+            throw new Error(`${file}: expected a JSON array, an object, or { "rows": [...] }`);
+        }
+    }
+    if (rows.length === 0)
+        throw new Error(`${file}: no rows to stage`);
+    const objectsFlag = option(rest, "--objects");
+    const objectType = objectsFlag
+        ? parseSingleObjectType(objectsFlag)
+        : inferIngestObjectType(config, source, rows);
+    const today = new Date().toISOString().slice(0, 10);
+    const baseLabel = option(rest, "--run-label") ?? `ingest-${source}-${today}`;
+    let label = baseLabel;
+    for (let suffix = 2; await store.get(label); suffix += 1) {
+        if (option(rest, "--run-label")) {
+            throw new Error(`Run "${baseLabel}" already exists — enrich runs are append-only; pick a new --run-label.`);
+        }
+        label = `${baseLabel}-${suffix}`;
+    }
+    const now = new Date().toISOString();
+    await store.append({
+        id: enrichRunId(source, label),
+        runLabel: label,
+        source,
+        mode: "ingest",
+        startedAt: now,
+        completedAt: now,
+        cursor: null,
+        counts: { fetched: rows.length, matched: 0, unmatched: 0, ambiguous: 0, opsEmitted: 0 },
+        planIds: [],
+        stamps: [],
+        staged: rows,
+        stagedObjectType: objectType,
+    });
+    console.log(`Staged ${rows.length} ${objectType} row(s) from ${file} as run ${label}. ` +
+        `Next: fullstackgtm enrich append --source ${source} [source options] [--save]`);
+}
+function parseSingleObjectType(value) {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "companies" || normalized === "company")
+        return "company";
+    if (normalized === "contacts" || normalized === "contact")
+        return "contact";
+    throw new Error(`--objects must be companies or contacts (got "${value}")`);
+}
+async function enrichStatus(store, rest, configFile) {
+    const sourceFilter = option(rest, "--source");
+    const allRuns = (await store.list()).filter((run) => !sourceFilter || run.source === sourceFilter);
+    if (allRuns.length === 0) {
+        console.log(sourceFilter
+            ? `No enrich runs for source "${sourceFilter}".`
+            : "No enrich runs yet. Start with `fullstackgtm enrich append --save` or stage data with `enrich ingest`.");
+        return;
+    }
+    // Staleness windows come from the config when one is readable; status must
+    // not REQUIRE a config (the run store alone is enough to report on).
+    let config = null;
+    if (existsSync(configFile)) {
+        try {
+            config = loadEnrichConfig(configFile);
+        }
+        catch {
+            config = null;
+        }
+    }
+    const now = Date.now();
+    const sources = Array.from(new Set(allRuns.map((run) => run.source)));
+    const report = sources.map((source) => {
+        const runs = allRuns.filter((run) => run.source === source);
+        const last = runs[runs.length - 1];
+        const interrupted = runs.filter((run) => run.completedAt === null);
+        const stamps = Array.from(latestStamps(runs, source).values());
+        const ages = stamps.map((stamp) => (now - Date.parse(stamp.enrichedAt)) / 86_400_000);
+        const staleness = stamps.map((stamp, index) => {
+            const windowDays = config
+                ? staleDaysFor(config, stamp.objectType, stamp.field)
+                : DEFAULT_STALE_DAYS;
+            return ages[index] > windowDays;
+        });
+        return {
+            source,
+            runs: runs.length,
+            lastRun: {
+                runLabel: last.runLabel,
+                mode: last.mode,
+                startedAt: last.startedAt,
+                completedAt: last.completedAt,
+                counts: last.counts,
+                planIds: last.planIds,
+            },
+            interrupted: interrupted.map((run) => ({ runLabel: run.runLabel, cursor: run.cursor })),
+            stamps: {
+                total: stamps.length,
+                stale: staleness.filter(Boolean).length,
+                oldestDays: ages.length ? Math.round(Math.max(...ages)) : null,
+                newestDays: ages.length ? Math.round(Math.min(...ages)) : null,
+                windowSource: config ? "enrich.config.json" : `default ${DEFAULT_STALE_DAYS}d`,
+            },
+        };
+    });
+    if (rest.includes("--json")) {
+        console.log(JSON.stringify({ sources: report, runs: rest.includes("--runs") ? allRuns : undefined }, null, 2));
+        return;
+    }
+    for (const entry of report) {
+        const last = entry.lastRun;
+        console.log(`${entry.source} — ${entry.runs} run(s)`);
+        console.log(`  last: ${last.runLabel} (${last.mode}) ${last.completedAt ? `completed ${last.completedAt}` : "INTERRUPTED"}` +
+            ` · ${last.counts.fetched} fetched, ${last.counts.matched} matched, ${last.counts.unmatched} unmatched,` +
+            ` ${last.counts.ambiguous} ambiguous, ${last.counts.opsEmitted} ops` +
+            (last.planIds.length ? ` · plans: ${last.planIds.join(", ")}` : ""));
+        for (const run of entry.interrupted) {
+            console.log(`  interrupted: ${run.runLabel} at cursor ${run.cursor ?? "(start)"} — re-run with --save to resume`);
+        }
+        console.log(`  stamps: ${entry.stamps.total} field(s) enriched · ${entry.stamps.stale} stale (window: ${entry.stamps.windowSource})` +
+            (entry.stamps.total ? ` · age ${entry.stamps.newestDays}–${entry.stamps.oldestDays}d` : ""));
+    }
+    if (rest.includes("--runs")) {
+        console.log("");
+        for (const run of allRuns) {
+            console.log(`${run.runLabel}  ${run.source.padEnd(8)} ${run.mode.padEnd(8)} ${run.completedAt ? "done" : "interrupted"}` +
+                `  ${run.counts.opsEmitted} ops  ${run.stamps.length} stamps${run.staged ? `  ${run.staged.length} staged` : ""}`);
+        }
+    }
+}
+/**
  * The resolve gate: exit 0 = safe to create, exit 2 = match found (exists or
  * ambiguous — do NOT blind-create), exit 1 = error. Built for sync jobs and
  * webhook handlers to call before any record creation.
@@ -1850,8 +2279,27 @@ async function login(args) {
         console.log(`Stored ${provider} API key in ${credentialsPath()}. \`fullstackgtm call parse\` and \`call score\` use it automatically.`);
         return;
     }
+    if (provider === "apollo") {
+        rejectArgvSecret(args, "--token", "--key", "--api-key");
+        const key = await readSecret("Apollo API key");
+        if (!key)
+            throw new Error("No Apollo key provided.");
+        if (!args.includes("--no-validate")) {
+            const response = await fetch("https://api.apollo.io/api/v1/auth/health", {
+                headers: { "X-Api-Key": key, Accept: "application/json" },
+            });
+            if (!response.ok) {
+                throw new Error(`Apollo rejected the key: ${safeStatus(response)}`);
+            }
+            console.log("Key accepted by the Apollo API.");
+        }
+        const stamp = new Date().toISOString();
+        storeCredential("apollo", { kind: "api_key", accessToken: key, createdAt: stamp, updatedAt: stamp });
+        console.log(`Stored Apollo API key in ${credentialsPath()}. \`fullstackgtm enrich append|refresh\` use it automatically.`);
+        return;
+    }
     if (provider !== "hubspot") {
-        throw new Error("login supports: hubspot, salesforce, stripe, anthropic, openai, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com");
+        throw new Error("login supports: hubspot, salesforce, stripe, anthropic, openai, apollo, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com");
     }
     const now = new Date().toISOString();
     if (args.includes("--oauth")) {
@@ -2058,8 +2506,8 @@ export async function runCli(argv) {
     }
     // Commands without bespoke help fall back to the top-level usage on --help
     // instead of executing (audit used to silently run the sample audit).
-    // call/market/bulk-update print their own richer help.
-    if (!["call", "market", "bulk-update"].includes(command) && (args.includes("--help") || args.includes("-h"))) {
+    // call/market/enrich/bulk-update print their own richer help.
+    if (!["call", "market", "enrich", "bulk-update"].includes(command) && (args.includes("--help") || args.includes("-h"))) {
         console.log(usage());
         return;
     }
@@ -2121,6 +2569,10 @@ export async function runCli(argv) {
     }
     if (command === "market") {
         await marketCommand(args);
+        return;
+    }
+    if (command === "enrich") {
+        await enrichCommand(args);
         return;
     }
     if (command === "profiles") {

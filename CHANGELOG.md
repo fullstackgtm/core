@@ -5,6 +5,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.23.0] — 2026-06-12
+
+### Added
+
+- **The enrich layer (MVP)** — governed append/refresh of third-party data
+  into the CRM (spec: docs/enrich.md in the monorepo). Where every enrichment
+  vendor ships fire-and-forget writeback, enrich emits a diff you approve:
+  source data → deterministic matcher → fill-blanks patch plan → the
+  existing plans approve → apply chain, with the source payload stored as
+  `GtmEvidence` on the plan and `beforeValue` set on every operation for
+  apply-time compare-and-set.
+  - `enrich append [--source <id>] [--objects companies,contacts] [--save] [--config <path>]`
+    — pull (Apollo) or read staged ingest data (Clay), match via ordered
+    keys (unique-hit-wins, zero-hits-next-key, multi-hit → `onAmbiguous`
+    skip-with-candidates-recorded or `requires_human_record_selection`
+    placeholders into the suggest chain), emit a fill-blanks-only plan.
+    Without `--save`: dry-run diff, nothing written.
+  - `enrich refresh [--source <id>] [--stale-days <n>] [--save]` — work set
+    from run-store stamps older than the staleness window (per-field
+    `staleDays` → `policy.defaultStaleDays` → 90); operations only where the
+    source value actually changed, and only on fields the ledger proves
+    enrich stamped.
+  - `enrich ingest <file.csv|payload.json> --source <id> [--run-label <l>]`
+    — stage Clay CSV exports (dependency-free CSV parser) or webhook payload
+    JSON for a subsequent append/refresh.
+  - `enrich status [--runs] [--source <id>]` — last run per source, counts,
+    staleness distribution, interrupted-run cursor.
+  - `enrich.config.json` (sources / ordered match keys / field mappings /
+    policy) with strict up-front validation; the `system-only` and `always`
+    conflict-ladder rungs error as "not yet implemented (phase 2)" instead
+    of being silently accepted. MVP policy: `never` (fill blanks only).
+  - Apollo source client: raw `fetch` against the people-match /
+    organization-enrich endpoints, BYO key via `login apollo` (0600 cred
+    store) or `APOLLO_API_KEY`, and 429-aware retry with capped exponential
+    backoff honoring `Retry-After` — local to the Apollo client; the shared
+    connector contract is unchanged.
+  - Profile-scoped append-only run store
+    (`~/.fullstackgtm/profiles/<p>/enrich/runs/<runLabel>.json`): resume
+    checkpoint (cursor + already-paid-for payloads), per-record/per-field
+    `enrichedAt` staleness ledger, and the surface `enrich status` reads.
+    State stays local — no `fsgtm_enriched_at`-style properties are written
+    into the customer's portal.
+  - Every `enrich` subcommand catches `--help`/`-h` before config load,
+    credential resolution, or any network call. No scheduling/cron logic —
+    that is the horizontal schedule layer's job (docs/schedule.md).
+
 ## [0.22.0] — 2026-06-12
 
 The report becomes a narrative: map → claims → where to attack.
