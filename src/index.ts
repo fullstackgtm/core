@@ -161,6 +161,7 @@ export {
   type ObservationConfidence,
   type ObservationSet,
   type ObservationStore,
+  type ScaleSignal,
   type SpanVerificationFailure,
 } from "./market.ts";
 export {
@@ -182,6 +183,21 @@ export {
   type ClassifyMarketResult,
   type MarketWorksheet,
 } from "./marketClassify.ts";
+export {
+  computeDirectives,
+  computeOverlayStats,
+  directivesToPlan,
+  overlayToMarkdown,
+  type CallDocument,
+  type ClaimMentionStats,
+  type DirectiveStat,
+  type DirectiveType,
+  type MarketDirective,
+  type OverlayOptions,
+  type OverlayStats,
+  type VendorMentionStats,
+} from "./marketOverlay.ts";
+export { computeScaleIndex, scaleReportToText, type ScaleReport, type VendorScale } from "./marketScale.ts";
 export { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
 export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type {

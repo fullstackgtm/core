@@ -5,6 +5,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.20.0] — 2026-06-12
+
+The directive layer: the market map joined to your own CRM ground truth.
+Two companies mapping the same category see the same fronts; their own
+conversion fingerprints produce different directives.
+
+### Added
+
+- **`fullstackgtm market overlay`** — joins the observation store to a CRM
+  snapshot and a call corpus, and emits OCCUPY / PROMOTE / URGENT / RETREAT
+  directives. Deterministic throughout: claim mentions are word-boundary
+  matches of each claim's configured `terms` (and vendor `aliases`) against
+  call documents (`call parse` output, optionally deal-linked via a manifest);
+  every directive carries ≥1 observation id and ≥1 CRM statistic **with its
+  sample size**; explicit minimum-evidence thresholds (`--min-mentions`,
+  `--promote-lift`) refuse to mint strategy from small samples — and an
+  empty directive list is reported as an answer, not a failure.
+  - OCCUPY: open front the anchor doesn't own, buyers demonstrably discuss it.
+  - PROMOTE: anchor-quiet claim whose mentioned-deal win rate beats baseline.
+  - URGENT: a front the anchor is loud on drifted toward saturation
+    (`--prior-run`).
+  - RETREAT: saturated front, loud anchor, zero presence in won-deal calls.
+  - `--save --task-account <id>|--task-deal <id>` turns directives into
+    approval-gated `create_task` operations through the normal
+    plans → approve → apply gate. Nothing writes without approval.
+- **`fullstackgtm market scale` + scale-sized report bubbles** — vendors may
+  carry `scaleSignals` (citable G2 review counts, LinkedIn headcount,
+  disclosed revenue, self-reported customers — each with sourceUrl, verbatim
+  quote, asOf, and caveat). A deterministic composite (log-normalized
+  per metric within the set, mean over available metrics, singleton metrics
+  skipped) yields a **relative scale index — never "market share"
+  unqualified** — and the strategic map's dot area becomes proportional to
+  it when every placeable vendor has signals (LOUD-count sizing otherwise;
+  the caption always states which, and bubbles are now area-proportional
+  either way).
+- `MarketClaim.terms` and `MarketVendor.aliases` for deterministic mention
+  matching; `MarketVendor.scaleSignals`.
+
 ## [0.19.0] — 2026-06-11
 
 Governed bulk writes, plus fixes from the 0.18 published-artifact verification.

@@ -52,6 +52,14 @@ import {
   type ObservationSet,
 } from "./market.ts";
 import { assessAxes, axesReportToText } from "./marketAxes.ts";
+import {
+  computeDirectives,
+  computeOverlayStats,
+  directivesToPlan,
+  overlayToMarkdown,
+  type CallDocument,
+} from "./marketOverlay.ts";
+import { computeScaleIndex, scaleReportToText } from "./marketScale.ts";
 import { buildWorksheet, classifyMarket } from "./marketClassify.ts";
 import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
 import {
@@ -118,6 +126,8 @@ Usage:
   fullstackgtm market fronts [--run <label>] [--diff <prior-run>] [--json]
   fullstackgtm market axes [--run <label>] [--json]
   fullstackgtm market report [--run <label>] [--format md|html] [--out <path>]
+  fullstackgtm market overlay --snapshot <crm.json> [--calls <files>] [--save]
+  fullstackgtm market scale [--json]
   fullstackgtm market refresh [--run <label>] [--model m]
                                                the live competitive map: capture vendor pages (content-addressed),
                                                classify intensity per claim (LLM bring-your-own-key, or fill the
@@ -875,8 +885,23 @@ market worksheet --vendor <id> [--capture-run <label>] [--out <path>]
 market observe --from <observations.json> [--unverified]
 market fronts [--config <path>] [--run <label>] [--diff <prior-run>] [--json]
 market axes [--config <path>] [--run <label>] [--json]
+market overlay --snapshot <crm.json> [--calls <parsed.json|manifest.json>]... [--prior-run <label>]
+               [--min-mentions N] [--promote-lift X] [--json] [--save --task-account <id>|--task-deal <id>]
+market scale [--config <path>] [--json]
 market report [--config <path>] [--run <label>] [--format md|html] [--out <path>]
 market refresh [--run <label>] [--model m]     capture → classify → fronts drift → HTML report
+
+overlay is the directive layer: joins the map to YOUR CRM ground truth and
+emits OCCUPY / PROMOTE / URGENT / RETREAT directives, each carrying ≥1
+observation and ≥1 CRM statistic with its sample size. Claim mentions are
+deterministic word-boundary matches of each claim's "terms" against call
+documents (call parse output); small samples refuse to become strategy
+(--min-mentions, default 3). --save turns directives into approval-gated
+create_task operations through the normal plans → approve → apply gate.
+
+scale prints the relative scale index that sizes the report's bubbles when
+vendors carry scaleSignals (citable review counts / headcount / revenue —
+a within-set index, never "market share" unqualified).
 
 axes runs the axis-discovery math: PCA over the vendor × claim intensity
 matrix (PC1 = the category's primary axis, PC2 = the max-differentiation
@@ -1089,8 +1114,90 @@ recomputed deterministically on every invocation — never stored.`);
     return;
   }
 
+  if (subcommand === "scale") {
+    const report = computeScaleIndex(config);
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    console.log(scaleReportToText(config, report));
+    return;
+  }
+
+  if (subcommand === "overlay") {
+    const set = await loadSet();
+    const snapshotPath = option(rest, "--snapshot");
+    if (!snapshotPath) {
+      throw new Error(
+        "market overlay requires --snapshot <canonical-snapshot.json> (fullstackgtm snapshot --out it first) — directives need CRM ground truth",
+      );
+    }
+    const snapshot = JSON.parse(readFileSync(resolve(process.cwd(), snapshotPath), "utf8")) as CanonicalGtmSnapshot;
+
+    // --calls accepts ParsedCall JSON files (from `call parse --out`) and/or
+    // manifest arrays [{path, dealId?}] linking calls to deals. Repeatable.
+    const documents: CallDocument[] = [];
+    const addParsedCall = (parsedPath: string, dealId?: string) => {
+      const parsed = JSON.parse(readFileSync(resolve(process.cwd(), parsedPath), "utf8")) as ParsedCall & {
+        segments?: Array<{ text?: string }>;
+      };
+      const text = [
+        ...(parsed.segments ?? []).map((segment) => segment.text ?? ""),
+        ...(parsed.insights ?? []).map((insight) => `${insight.text ?? ""} ${insight.evidence ?? ""}`),
+      ].join("\n");
+      documents.push({ id: parsed.id ?? parsedPath, text, dealId, occurredAt: parsed.evidence?.[0]?.capturedAt });
+    };
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] !== "--calls") continue;
+      const callsPath = rest[i + 1];
+      if (!callsPath) throw new Error("--calls needs a path");
+      const raw = JSON.parse(readFileSync(resolve(process.cwd(), callsPath), "utf8"));
+      if (Array.isArray(raw)) {
+        for (const entry of raw as Array<{ path: string; dealId?: string }>) addParsedCall(entry.path, entry.dealId);
+      } else {
+        addParsedCall(callsPath);
+      }
+    }
+
+    const priorLabel = option(rest, "--prior-run");
+    const priorSet = priorLabel ? await store.get(priorLabel) : null;
+    if (priorLabel && !priorSet) throw new Error(`No observation run "${priorLabel}" for URGENT drift`);
+
+    const stats = computeOverlayStats(config, snapshot, documents);
+    const directives = computeDirectives(config, set, stats, {
+      minMentions: numericOption(rest, "--min-mentions") ?? undefined,
+      promoteLift: numericOption(rest, "--promote-lift") ?? undefined,
+      priorSet: priorSet ?? undefined,
+    });
+
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify({ stats, directives }, null, 2));
+      return;
+    }
+    console.log(overlayToMarkdown(stats, directives));
+
+    if (rest.includes("--save")) {
+      const taskAccount = option(rest, "--task-account");
+      const taskDeal = option(rest, "--task-deal");
+      if (!taskAccount && !taskDeal) {
+        throw new Error(
+          "--save needs --task-account <id> or --task-deal <id>: directives become approval-gated create_task operations, and the CRM needs a record to hang them on (your own company's account record works well)",
+        );
+      }
+      const plan = directivesToPlan(
+        config,
+        set,
+        directives,
+        taskDeal ? { objectType: "deal", objectId: taskDeal } : { objectType: "account", objectId: taskAccount as string },
+      );
+      const stored = await createFilePlanStore().save(plan);
+      console.log(`Saved plan ${stored.plan.id} (${directives.length} directive task(s); approve via \`plans approve\`)`);
+    }
+    return;
+  }
+
   throw new Error(
-    `Unknown market subcommand: ${subcommand} (try: init, capture, classify, worksheet, observe, fronts, axes, report, refresh)`,
+    `Unknown market subcommand: ${subcommand} (try: init, capture, classify, worksheet, observe, fronts, axes, overlay, scale, report, refresh)`,
   );
 }
 
