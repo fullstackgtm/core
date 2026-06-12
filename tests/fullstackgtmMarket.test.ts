@@ -239,7 +239,8 @@ test("report renders deterministically with matrix, fronts, and quoted evidence"
   // Verbatim quotes survive into the appendix, escaped.
   assert.ok(html.includes("acme says &lt;claim-a&gt; &amp; more"));
   assert.ok(!html.includes("<claim-a> & more"), "evidence is HTML-escaped");
-  assert.ok(html.indexOf("claim-d") < html.indexOf("claim-b"), "open fronts sort before saturated ones");
+  assert.ok(html.indexOf("Open ground") < html.indexOf("Saturated fronts"), "open-front group renders before saturated");
+  assert.ok(html.includes("Where to attack"), "report closes on the takeaway");
 });
 
 test("cli: market init, observe, fronts, report round-trip", async () => {

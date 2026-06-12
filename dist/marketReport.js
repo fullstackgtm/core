@@ -382,8 +382,9 @@ export function marketMapToHtml(config, set) {
     const anchor = config.anchorVendor;
     const e = escapeHtml;
     const axisHtml = axisSectionsHtml(config, set);
-    const matrixRows = model.orderedClaimIds
-        .map((claimId) => {
+    const vendorNamesById = new Map(config.vendors.map((vendor) => [vendor.id, vendor.name]));
+    const frontByClaim = new Map(model.fronts.map((front) => [front.claimId, front]));
+    const matrixRow = (claimId) => {
         const claim = claimsById.get(claimId);
         if (!claim)
             return "";
@@ -398,27 +399,87 @@ export function marketMapToHtml(config, set) {
         return (`<tr class="front-${state}"><th scope="row"><span class="claim-cap">${e(claim.capability.split(":")[0])}</span>` +
             `<span class="claim-meta">${e(claim.icp)} · ${e(claim.pricingStructure)}</span></th>${cells}` +
             `<td class="front"><span class="chip chip-${state}">${state.toUpperCase()}</span></td></tr>`);
-    })
-        .join("");
-    const openList = model.orderedClaimIds
-        .filter((claimId) => {
+    };
+    // Claims grouped by front state, each group a collapsed <details> whose
+    // summary carries the stats a skimmer needs; the full matrix is one click
+    // away, not a wall the reader must climb to reach the takeaway.
+    const GROUPS = [
+        { states: ["open", "vacant"], title: "Open ground", blurb: "no vendor is loud here" },
+        { states: ["contested"], title: "Contested fronts", blurb: "2–3 vendors loud" },
+        { states: ["owned"], title: "Owned fronts", blurb: "exactly one vendor loud" },
+        { states: ["saturated"], title: "Saturated fronts", blurb: "4+ vendors loud" },
+    ];
+    const groupedMatrix = GROUPS.map((group) => {
+        const claimIds = model.orderedClaimIds.filter((claimId) => group.states.includes(stateByClaim.get(claimId) ?? "vacant"));
+        if (claimIds.length === 0)
+            return "";
+        const anchorLoud = anchor
+            ? claimIds.filter((claimId) => model.cell(anchor, claimId)?.intensity === "loud").length
+            : 0;
+        const anchorNote = anchor ? ` · ${vendorNamesById.get(anchor) ?? anchor} loud on ${anchorLoud}` : "";
+        return `<details class="claim-group"><summary><b>${e(group.title)}</b> — ${claimIds.length} claim${claimIds.length === 1 ? "" : "s"} <span class="sum-soft">(${e(group.blurb)}${anchorNote})</span></summary>
+      <table><thead><tr><th></th>${"${vendorHeads}"}<th></th></tr></thead><tbody>${claimIds.map(matrixRow).join("")}</tbody></table>
+    </details>`;
+    }).join("");
+    // The closing argument: walk from open ground to a reasoned target list.
+    const openFronts = model.orderedClaimIds.filter((claimId) => {
         const state = stateByClaim.get(claimId);
         return state === "open" || state === "vacant";
-    })
+    });
+    const targetItems = openFronts
         .map((claimId) => {
         const claim = claimsById.get(claimId);
-        return `<li><b>${e(claim?.capability.split(":")[0] ?? claimId)}</b> <span class="why">— no vendor is loud here; ${e(claim?.icp ?? "")} cell</span></li>`;
+        const front = frontByClaim.get(claimId);
+        if (!claim || !front)
+            return "";
+        const quietNames = front.quietVendorIds.map((id) => vendorNamesById.get(id) ?? id);
+        const anchorIntensity = anchor ? model.cell(anchor, claimId)?.intensity ?? "unobservable" : null;
+        const nearest = quietNames.length > 0
+            ? `Closest contenders (quiet): ${quietNames.join(", ")}.`
+            : "Nobody even ships it quietly — vacant ground.";
+        const move = anchorIntensity === "quiet"
+            ? `${e(vendorNamesById.get(anchor) ?? "The anchor")} already ships this quietly — a promote-to-loud candidate.`
+            : anchorIntensity === "absent"
+                ? "Unclaimed by the anchor: a first-mover messaging opportunity if the capability is real or buildable."
+                : "";
+        return `<li><b>${e(claim.capability.split(":")[0])}</b> <span class="sum-soft">(${e(claim.icp)} · ${e(claim.pricingStructure)})</span><br>
+        No vendor is loud on this claim. ${e(nearest)} ${move}</li>`;
     })
         .join("");
-    const appendix = model.orderedClaimIds
-        .flatMap((claimId) => config.vendors.flatMap((vendor) => {
-        const obs = model.cell(vendor.id, claimId);
-        if (!obs || obs.evidence.length === 0)
-            return [];
-        return obs.evidence.map((evidence) => `<div class="ev"><span class="ev-head">${e(vendor.name)} · ${e(claimId)} · ${obs.intensity.toUpperCase()} (${obs.confidence})</span>` +
-            `<blockquote>“${e(evidence.text)}”</blockquote>` +
-            `<span class="ev-src">${e(String(evidence.metadata?.url ?? ""))} · capture ${e(String(evidence.metadata?.captureHash ?? "").slice(0, 12))}</span></div>`);
-    }))
+    const heldFronts = anchor
+        ? model.fronts.filter((front) => front.state === "owned" && front.loudVendorIds[0] === anchor)
+        : [];
+    const heldLine = heldFronts.length > 0
+        ? `<p><b>Held ground:</b> ${e(vendorNamesById.get(anchor) ?? "the anchor")} is the sole loud vendor on ${heldFronts
+            .map((front) => `<i>${e(claimsById.get(front.claimId)?.capability.split(":")[0] ?? front.claimId)}</i>`)
+            .join(", ")} — positions to defend, not abandon.</p>`
+        : "";
+    const crowdLine = counts.saturated > 0
+        ? `<p><b>Crowded ground:</b> ${counts.saturated} claim${counts.saturated === 1 ? " is" : "s are"} saturated (4+ vendors loud) — message budget spent there buys the least differentiation.</p>`
+        : "";
+    const takeaway = `<section>
+  <h2>Where to attack</h2>
+  <p class="lede">${openFronts.length === 0 ? "No open fronts this run — every claim has at least one loud vendor. Watch the drift between runs for windows opening." : `${openFronts.length} claim${openFronts.length === 1 ? "" : "s"} in this category ${openFronts.length === 1 ? "is" : "are"} open: buyers can be reached there without out-shouting anyone.`}</p>
+  <ul class="targets">${targetItems}</ul>
+  ${heldLine}
+  ${crowdLine}
+  <p class="sum-soft">These are messaging fronts, not verdicts — join the map to CRM ground truth (\`market overlay\`) for evidence-backed OCCUPY / PROMOTE / URGENT / RETREAT directives with win-rate stats.</p>
+</section>`;
+    // Evidence grouped by vendor, collapsed: receipts on demand, not a scroll wall.
+    const appendixGroups = config.vendors
+        .map((vendor) => {
+        const items = model.orderedClaimIds.flatMap((claimId) => {
+            const obs = model.cell(vendor.id, claimId);
+            if (!obs || obs.evidence.length === 0)
+                return [];
+            return obs.evidence.map((evidence) => `<div class="ev"><span class="ev-head">${e(claimId)} · ${obs.intensity.toUpperCase()} (${obs.confidence})</span>` +
+                `<blockquote>“${e(evidence.text)}”</blockquote>` +
+                `<span class="ev-src">${e(String(evidence.metadata?.url ?? ""))} · capture ${e(String(evidence.metadata?.captureHash ?? "").slice(0, 12))}</span></div>`);
+        });
+        if (items.length === 0)
+            return "";
+        return `<details class="ev-group"><summary><b>${e(vendor.name)}</b> <span class="sum-soft">— ${items.length} quoted span${items.length === 1 ? "" : "s"}</span></summary>${items.join("")}</details>`;
+    })
         .join("");
     const vendorHeads = config.vendors
         .map((vendor) => `<th class="vh${vendor.id === anchor ? " anchor-col" : ""}"><span>${e(vendor.name)}</span></th>`)
@@ -438,14 +499,16 @@ h1 { font-size:27px; font-weight:600; line-height:1.2; }
 .meta { font-size:11px; color:var(--soft); display:flex; gap:18px; flex-wrap:wrap; margin-top:8px; }
 section { margin-top:44px; }
 h2 { font-size:17px; font-weight:600; border-bottom:1px solid var(--line); padding-bottom:7px; margin-bottom:4px; }
-.fronts { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line); border:1px solid var(--line); margin-top:16px; }
-.fcard { background:#fff; padding:14px 16px 12px; }
-.fcard b { display:block; font-size:30px; font-weight:600; line-height:1.1; }
-.fcard span { font-size:11px; color:var(--soft); }
-.fcard.open b { color:var(--accent); }
-.openlist { margin-top:14px; font-size:14.5px; line-height:1.55; }
-.openlist li { margin:3px 0 3px 20px; }
-.openlist .why { color:var(--soft); font-size:13px; }
+details.claim-group, details.ev-group { border:1px solid var(--line); border-radius:3px; margin-top:10px; }
+details.claim-group summary, details.ev-group summary { cursor:pointer; padding:10px 14px; font-size:14px; list-style-position:inside; }
+details.claim-group summary:hover, details.ev-group summary:hover { background:var(--faint); }
+details.claim-group[open] summary, details.ev-group[open] summary { border-bottom:1px solid var(--line); }
+details.claim-group table { margin:4px 12px 12px; width:calc(100% - 24px); }
+details.ev-group .ev { margin:0 14px; }
+.sum-soft { color:var(--soft); font-size:12px; }
+.lede { font-size:16px; margin-top:12px; }
+.targets { margin-top:12px; font-size:14.5px; line-height:1.6; }
+.targets li { margin:10px 0 10px 20px; }
 .key { display:flex; gap:20px; flex-wrap:wrap; margin:14px 0 8px; font-size:10.5px; color:var(--soft); }
 .lg { display:inline-flex; align-items:center; gap:6px; }
 table { border-collapse:collapse; width:100%; margin-top:6px; }
@@ -506,34 +569,24 @@ footer { margin-top:60px; border-top:1px solid var(--ink); padding-top:12px; fon
     <span>extractor: ${e(set.extractor)}</span>
   </div>
 </header>
+${axisHtml.strategicMap}
 <section>
-  <h2>Front summary</h2>
-  <div class="fronts">
-    <div class="fcard open"><b>${counts.open + counts.vacant}</b><span>Open / vacant</span></div>
-    <div class="fcard"><b>${counts.contested}</b><span>Contested</span></div>
-    <div class="fcard"><b>${counts.owned}</b><span>Owned</span></div>
-    <div class="fcard"><b>${counts.saturated}</b><span>Saturated</span></div>
-  </div>
-  <ul class="openlist">${openList}</ul>
-</section>
-<section>
-  <h2>Claim × vendor intensity matrix</h2>
+  <h2>Claims, front by front</h2>
   <div class="key">
     <span class="lg"><i class="g g-loud"></i>LOUD — hero-level claim</span>
     <span class="lg"><i class="g g-quiet"></i>QUIET — shipped, buried</span>
     <span class="lg"><i class="g g-absent"></i>ABSENT</span>
     <span class="lg"><i class="g g-unobservable"></i>UNOBSERVABLE — capture failed</span>
   </div>
-  <table>
-    <thead><tr><th></th>${vendorHeads}<th></th></tr></thead>
-    <tbody>${matrixRows}</tbody>
-  </table>
+  ${groupedMatrix}
 </section>
-${axisHtml.strategicMap}
+${takeaway}
 <section>
   <h2>Evidence appendix</h2>
-  ${appendix}
+  <p class="sum-soft">Every loud/quiet reading is grounded in a verbatim span from a stored page capture; expand a vendor for its receipts.</p>
+  ${appendixGroups}
 </section>
+<script>window.addEventListener("beforeprint",function(){document.querySelectorAll("details").forEach(function(d){d.open=true;});});</script>
 <footer>
   <span>Generated by fullstackgtm market · deterministic render of ${e(set.runLabel)}</span>
   <span>Front rule v1: 0 loud=open · 1=owned · 2–3=contested · ≥4=saturated</span>
