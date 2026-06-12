@@ -8,7 +8,9 @@
     "smoke": "node --experimental-strip-types src/smoke.ts",
     "eval": "node --experimental-strip-types src/run.ts",
     "report": "node --experimental-strip-types src/reportCli.ts",
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "anonymize": "node --experimental-strip-types src/seed/anonymizeCli.ts",
+    "cert": "node --experimental-strip-types src/liveCert.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0"

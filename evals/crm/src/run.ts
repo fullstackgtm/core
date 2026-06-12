@@ -12,7 +12,9 @@
  */
 import { mkdir, writeFile, appendFile } from "node:fs/promises";
 import path from "node:path";
-import { scenarios } from "./scenarios/index.ts";
+import { readFileSync } from "node:fs";
+import { registerScenarios, scenarios } from "./scenarios/index.ts";
+import { buildSeededScenarios } from "./scenarios/seeded.ts";
 import { runOne } from "./runner.ts";
 import { buildReport } from "./report.ts";
 import { buildHtmlReport } from "./reportHtml.ts";
@@ -30,6 +32,12 @@ const scenarioArg = flag(args, "scenarios", "all");
 const outDir = flag(args, "out", "results");
 const concurrency = Number(flag(args, "concurrency", "3"));
 const trials = Math.max(1, Number(flag(args, "trials", "1")));
+
+const seedSnapshotPath = flag(args, "seed-snapshot", "");
+if (seedSnapshotPath) {
+  const snapshot = JSON.parse(readFileSync(seedSnapshotPath, "utf8"));
+  registerScenarios(buildSeededScenarios(snapshot, Number(flag(args, "seed", "7"))));
+}
 
 const scenarioIds = scenarioArg === "all" ? scenarios.map((s) => s.id) : scenarioArg.split(",").map((s) => s.trim());
 
