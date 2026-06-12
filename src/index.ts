@@ -254,6 +254,32 @@ export {
   type VendorScale,
 } from "./marketScale.ts";
 export { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
+export {
+  computeMissedFirings,
+  createFileScheduleRunStore,
+  createFileScheduleStore,
+  cronMatches,
+  crontabSentinels,
+  expectedFirings,
+  nextCronFiring,
+  parseCron,
+  renderManagedBlock,
+  replaceManagedBlock,
+  scheduleId,
+  scheduleRunsDir,
+  schedulesPath,
+  systemCrontabIo,
+  tokenizeCommand,
+  validateSchedulableArgv,
+  type CronExpression,
+  type CrontabIo,
+  type ScheduleEntry,
+  type ScheduleProvider,
+  type ScheduleRunRecord,
+  type ScheduleRunStore,
+  type ScheduleRunTrigger,
+  type ScheduleStore,
+} from "./schedule.ts";
 export { suggestValues, type SuggestionConfidence, type ValueSuggestion } from "./suggest.ts";
 export type {
   ApprovalStatus,

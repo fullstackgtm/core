@@ -5,6 +5,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.24.0] — 2026-06-12
+
+### Added
+
+- **The schedule layer (MVP)** — the horizontal scheduler (spec:
+  docs/schedule.md in the monorepo): declare once that a CLI command should
+  run on a cadence, materialize the timers through a provider, and keep an
+  append-only run history. No feature namespace owns cron logic.
+  - The governance invariant: **scheduling never auto-approves.** The
+    schedulable allowlist is read/plan-side only (`audit`, `snapshot`,
+    `enrich append|refresh`, `market capture|refresh`, `suggest`, `report`,
+    `doctor`) — unattended runs accumulate proposals, never CRM writes.
+    `apply` is schedulable ONLY as `apply --plan-id <id>`, and every firing
+    re-checks the plan's status is `approved`: an unapproved plan records a
+    `plan_not_approved` no-op run instead of executing, with no relaxing
+    flag. Argv must resolve to a known fullstackgtm command — validated at
+    `add` time AND re-checked at run time; arbitrary shell is not
+    schedulable (execution dispatches in-process, never through a shell).
+  - `schedule add "<command>" --cron "<expr>" [--label <name>]
+    [--provider local]` — allowlist + cron validation, then a declarative
+    entry in `~/.fullstackgtm/profiles/<profile>/schedules.json`; nothing
+    touches the crontab until `install` (the plan/apply split: declare,
+    then deliberately activate). Plus `list`, `remove`, `enable|disable`.
+  - `schedule run <id>` — the single entry point every provider's timer
+    calls (and a human can call: `trigger: manual` vs `cron`). Executes the
+    command in-process, records exit code, ~50-line output tail, and
+    artifacts (plan ids / enrich run labels, attributed by store diff)
+    under `<profile>/schedule/runs/<id>/`, and propagates the exit code.
+  - `schedule install|uninstall [--provider local]` — renders enabled
+    entries into a sentinel-delimited managed crontab block
+    (`# >>> fullstackgtm <profile> >>>` … `# <<< fullstackgtm <profile> <<<`);
+    re-install replaces the block wholesale and never touches lines outside
+    the sentinels; uninstall removes only the block. Crontab access is an
+    injected seam (`CrontabIo`) — tests never read or write a real crontab.
+    Providers beyond `local` (`modal`, `aws`) are refused as "not yet
+    implemented"; they arrive later as scaffold generators calling the same
+    `schedule run <id>` contract.
+  - `schedule status [<id>] [--runs <n>]` — next firing per the cron
+    expression, last run + success/failure streak + artifacts, and missed
+    firings (expected-vs-actual since the last run record; visibility only,
+    no catch-up — local cron skips silently when the laptop sleeps).
+  - Minimal dependency-free 5-field cron parser: `*`, lists, ranges, steps,
+    day-of-week 7=Sunday, vixie day-of-month/day-of-week OR semantics;
+    clear validation errors at `add` time (including expressions that never
+    fire), next-firing computation for `status`.
+
 ## [0.23.2] — 2026-06-12
 
 Documentation catch-up: the README, llms.txt, and docs/api.md now cover
