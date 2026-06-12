@@ -7,6 +7,7 @@ import type {
 } from "./market.ts";
 import { computeFrontStates } from "./market.ts";
 import { assessAxes, messageBreadth, type AxesReport } from "./marketAxes.ts";
+import { computeScaleIndex } from "./marketScale.ts";
 
 /**
  * Render a market map as a client-ready deliverable: markdown for terminals
@@ -105,7 +106,8 @@ export function marketMapToMarkdown(config: MarketConfig, set: ObservationSet): 
   return `${lines.join("\n")}\n`;
 }
 
-type ScatterPoint = { vendorId: string; name: string; x: number; y: number; loud: number };
+/** size is normalized [0,1]; rendered area-proportionally (radius ∝ √size). */
+type ScatterPoint = { vendorId: string; name: string; x: number; y: number; size: number };
 type ScatterAxis = { label: string; negativePole: string; positivePole: string; signed: boolean };
 
 function svgScatter(
@@ -132,7 +134,8 @@ function svgScatter(
   const e = escapeHtml;
   const dots = points
     .map((p) => {
-      const r = mini ? 3 + p.loud * 0.8 : 6 + p.loud * 1.6;
+      // Area-proportional: perceived bubble area tracks the size metric.
+      const r = (mini ? 4 + 14 * Math.sqrt(p.size) : 8 + 26 * Math.sqrt(p.size));
       const cls = p.vendorId === anchor ? "dot-anchor" : "dot";
       return (
         `<circle class="${cls}" cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${r.toFixed(1)}"/>` +
@@ -160,7 +163,20 @@ function axisSectionsHtml(
   const e = escapeHtml;
   const report = assessAxes(config, set);
   const vendorNames = new Map(config.vendors.map((vendor) => [vendor.id, vendor.name]));
+
+  // Bubble size: scale index (relative market scale from citable signals)
+  // when every placeable vendor has one; LOUD count otherwise — never mix
+  // the two semantics on one chart.
+  const scale = computeScaleIndex(config);
+  const scaleIndex = new Map(scale.vendors.map((vendor) => [vendor.vendorId, vendor.index]));
+  const useScale = report.vendors.length > 0 && report.vendors.every((vendorId) => scaleIndex.get(vendorId) !== null && scaleIndex.get(vendorId) !== undefined);
   const loudCounts = new Map(report.vendors.map((vendorId) => [vendorId, messageBreadth(vendorId, set.observations).loudCount]));
+  const maxLoud = Math.max(1, ...loudCounts.values());
+  const sizeOf = (vendorId: string): number =>
+    useScale ? (scaleIndex.get(vendorId) as number) : (loudCounts.get(vendorId) ?? 0) / maxLoud;
+  const sizeCaption = useScale
+    ? `Dot area &#8733; relative scale index (within this vendor set, from: ${e(scale.metricsUsed.join(", "))} — citable signals, not true market share)`
+    : "Dot area &#8733; LOUD count";
 
   const breadthAxis: ScatterAxis & { id: string } = {
     id: "breadth",
@@ -202,7 +218,7 @@ function axisSectionsHtml(
         name: vendorNames.get(vendorId) ?? vendorId,
         x: xs.get(vendorId) as number,
         y: ys.get(vendorId) as number,
-        loud: loudCounts.get(vendorId) ?? 0,
+        size: sizeOf(vendorId),
       }));
   };
 
@@ -215,7 +231,7 @@ function axisSectionsHtml(
   <figure>${svgScatter(pointsFor(px, py), axInfo, ayInfo, config.anchorVendor, false)}
   <figcaption>Positions computed from run ${e(set.runLabel)} observations: each axis is a per-claim scoring rubric
   in the market config; a vendor sits at the intensity-weighted mean (loud=1, quiet=&#189;) of the claims it
-  voices. Dot size = LOUD count. Axis status — ${e(axInfo.label)}: ${e(statusOf(px))}; ${e(ayInfo.label)}: ${e(statusOf(py))}.</figcaption>
+  voices. ${sizeCaption}. Axis status — ${e(axInfo.label)}: ${e(statusOf(px))}; ${e(ayInfo.label)}: ${e(statusOf(py))}.</figcaption>
   </figure>
 </section>`;
 

@@ -1,5 +1,6 @@
 import { computeFrontStates } from "./market.js";
 import { assessAxes, messageBreadth } from "./marketAxes.js";
+import { computeScaleIndex } from "./marketScale.js";
 /**
  * Render a market map as a client-ready deliverable: markdown for terminals
  * and PRs, and a self-contained printable HTML "field report" — front
@@ -98,7 +99,8 @@ function svgScatter(points, ax, ay, anchor, mini) {
     const e = escapeHtml;
     const dots = points
         .map((p) => {
-        const r = mini ? 3 + p.loud * 0.8 : 6 + p.loud * 1.6;
+        // Area-proportional: perceived bubble area tracks the size metric.
+        const r = (mini ? 4 + 14 * Math.sqrt(p.size) : 8 + 26 * Math.sqrt(p.size));
         const cls = p.vendorId === anchor ? "dot-anchor" : "dot";
         return (`<circle class="${cls}" cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${r.toFixed(1)}"/>` +
             `<text class="dot-label" style="font-size:${fsLabel}px" x="${sx(p.x).toFixed(1)}" y="${(sy(p.y) - r - 4).toFixed(1)}">${e(p.name)}</text>`);
@@ -121,7 +123,18 @@ function axisSectionsHtml(config, set) {
     const e = escapeHtml;
     const report = assessAxes(config, set);
     const vendorNames = new Map(config.vendors.map((vendor) => [vendor.id, vendor.name]));
+    // Bubble size: scale index (relative market scale from citable signals)
+    // when every placeable vendor has one; LOUD count otherwise — never mix
+    // the two semantics on one chart.
+    const scale = computeScaleIndex(config);
+    const scaleIndex = new Map(scale.vendors.map((vendor) => [vendor.vendorId, vendor.index]));
+    const useScale = report.vendors.length > 0 && report.vendors.every((vendorId) => scaleIndex.get(vendorId) !== null && scaleIndex.get(vendorId) !== undefined);
     const loudCounts = new Map(report.vendors.map((vendorId) => [vendorId, messageBreadth(vendorId, set.observations).loudCount]));
+    const maxLoud = Math.max(1, ...loudCounts.values());
+    const sizeOf = (vendorId) => useScale ? scaleIndex.get(vendorId) : (loudCounts.get(vendorId) ?? 0) / maxLoud;
+    const sizeCaption = useScale
+        ? `Dot area &#8733; relative scale index (within this vendor set, from: ${e(scale.metricsUsed.join(", "))} — citable signals, not true market share)`
+        : "Dot area &#8733; LOUD count";
     const breadthAxis = {
         id: "breadth",
         label: "Message breadth",
@@ -158,7 +171,7 @@ function axisSectionsHtml(config, set) {
             name: vendorNames.get(vendorId) ?? vendorId,
             x: xs.get(vendorId),
             y: ys.get(vendorId),
-            loud: loudCounts.get(vendorId) ?? 0,
+            size: sizeOf(vendorId),
         }));
     };
     const [px, py] = config.primaryAxes ?? [axes[0].id, axes[1]?.id ?? "breadth"];
@@ -170,7 +183,7 @@ function axisSectionsHtml(config, set) {
   <figure>${svgScatter(pointsFor(px, py), axInfo, ayInfo, config.anchorVendor, false)}
   <figcaption>Positions computed from run ${e(set.runLabel)} observations: each axis is a per-claim scoring rubric
   in the market config; a vendor sits at the intensity-weighted mean (loud=1, quiet=&#189;) of the claims it
-  voices. Dot size = LOUD count. Axis status — ${e(axInfo.label)}: ${e(statusOf(px))}; ${e(ayInfo.label)}: ${e(statusOf(py))}.</figcaption>
+  voices. ${sizeCaption}. Axis status — ${e(axInfo.label)}: ${e(statusOf(px))}; ${e(ayInfo.label)}: ${e(statusOf(py))}.</figcaption>
   </figure>
 </section>`;
     // Deliberately no axis-pairing gallery here: the report is the client-facing

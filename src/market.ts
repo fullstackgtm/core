@@ -38,6 +38,31 @@ export type MarketClaim = {
   pricingStructure: string;
   /** Operational definition: how a reader judges LOUD vs QUIET vs ABSENT. */
   definition: string;
+  /**
+   * Exact terms buyers use for this claim, for deterministic mention
+   * matching against call transcripts (the overlay). No terms = no mention
+   * stats for this claim; matching is word-boundary, case-insensitive.
+   */
+  terms?: string[];
+};
+
+/**
+ * One public, citable scale signal for a vendor (G2 review count, LinkedIn
+ * headcount, disclosed revenue, self-reported customer count). The composite
+ * of several biased-in-different-directions signals sizes the report's
+ * bubbles — a RELATIVE scale index within the mapped set, never "market
+ * share" unqualified.
+ */
+export type ScaleSignal = {
+  /** e.g. "g2_reviews", "linkedin_employees", "revenue_usd", "self_reported_customers". */
+  metric: string;
+  value: number;
+  unit: string;
+  sourceUrl: string;
+  /** Verbatim snippet containing the number — same evidence posture as observations. */
+  quote: string;
+  asOf: string;
+  caveat?: string;
 };
 
 export type MarketVendor = {
@@ -49,6 +74,10 @@ export type MarketVendor = {
     pricing: string | null;
     product: string[];
   };
+  /** Alternate names/spellings for deterministic mention matching. */
+  aliases?: string[];
+  /** Public scale signals; see ScaleSignal. */
+  scaleSignals?: ScaleSignal[];
   notes?: string;
 };
 
