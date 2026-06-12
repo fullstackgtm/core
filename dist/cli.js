@@ -27,6 +27,8 @@ import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
 import { DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
 import { resolveRecord } from "./resolve.js";
 import { buildBulkUpdatePlan } from "./bulkUpdate.js";
+import { buildDedupePlan } from "./dedupe.js";
+import { buildReassignPlans } from "./reassign.js";
 import { suggestValues } from "./suggest.js";
 function usage() {
     return `FullStackGTM — audit GTM data across providers, propose reviewable patch plans,
@@ -79,7 +81,7 @@ Usage:
                                                against the stored capture it cites before it's accepted — then
                                                compute deterministic front states and drift, render the field
                                                report. refresh = capture → classify → drift → report in one step
-  fullstackgtm bulk-update <account|contact|deal> --where <expr> [--where …] (--set <field>=<value> [--set …] | --archive | --create-task <text>) [--require <field>=<value> …] [--guard <object>:<where>[;<where>]:<none|some> …] [source options] [--save] [--json] [--out <path>]
+  fullstackgtm bulk-update <account|contact|deal> --where <expr> [--where …] (--set <field>=<value> [--set …] | --archive [--force-archive-duplicates] | --create-task <text>) [--require <field>=<value> …] [--guard <object>:<where>[;<where>]:<none|some> …] [source options] [--save] [--json] [--out <path>]
                                                governed generic writes: filter the snapshot
                                                (field=value, field!=value, field~substr, field!~substr,
                                                field:empty, field:notempty, '|' = any-of; canonical fields
@@ -91,6 +93,35 @@ Usage:
                                                apply time (incl. mid-apply rechecks); equality filters
                                                double as preconditions; per-record ops apply
                                                all-or-nothing; guards assert cross-record conditions.
+                                               --set <field>=from:<sourceField> derives the value PER
+                                               RECORD from the snapshot (relational sources like
+                                               account.ownerId included); records whose source is empty
+                                               are skipped and counted, never guessed. --archive refuses
+                                               records that share their identity key (account domain /
+                                               contact email) with another record — merge those with
+                                               \`dedupe\` instead, or --force-archive-duplicates.
+  fullstackgtm dedupe <account|contact|deal> --key <domain|email|name> [--keep richest|oldest] [source options] [--reason <text>] [--max-operations <n>] [--save] [--json] [--out <path>]
+                                               find duplicate groups by normalized identity key and build
+                                               a dry-run plan of merge_records operations — one per group,
+                                               deterministic survivor (richest = most populated data
+                                               fields, ties to lowest id; oldest = lowest id). Approve and
+                                               apply like any plan; merges are IRREVERSIBLE on apply.
+  fullstackgtm reassign --from <ownerId> --to <ownerId> [--objects account,contact,deal] [--where <expr> …] [--except-deal-stage <stage>] [--include-closed-deals] [source options] [--save] [--json] [--out <path>]
+                                               ownership handoff playbook: one bulk-update-style plan per
+                                               object type (ownerId=<from> → <to>). Extra --where scoping
+                                               is account-lifted for deals/contacts (domain~.de becomes
+                                               account.domain~.de); --except-deal-stage <stage> excludes
+                                               deals in that stage AND every record whose account has an
+                                               open deal in it, re-verified per record at apply time.
+                                               Deal plans cover open deals only unless
+                                               --include-closed-deals.
+  fullstackgtm fix --rule <ruleId> --provider <name> [--min-confidence high|low] [--include-creates] [--today <iso>] [--yes]
+                                               one-shot composite: audit ONE rule → save the plan →
+                                               suggest values → approve only suggestion-backed operations
+                                               meeting the confidence bar (plus operations that need no
+                                               value) → with --yes, apply through the provider and print a
+                                               stage-by-stage summary. Without --yes it stops after
+                                               approval and prints the apply command.
   fullstackgtm suggest --plan-id <id> | --plan <path>  [source options] [--json] [--out <path>]
                                                derive values for requires_human_* placeholders
                                                from snapshot evidence, with confidence + reasons
@@ -1128,26 +1159,193 @@ async function bulkUpdateCommand(args) {
         where,
         set: Object.keys(set).length > 0 ? set : undefined,
         archive: rest.includes("--archive"),
+        forceArchiveDuplicates: rest.includes("--force-archive-duplicates"),
         createTask: option(rest, "--create-task") ?? undefined,
         require: repeatedOption(rest, "--require"),
         guard: repeatedOption(rest, "--guard"),
         reason: option(rest, "--reason") ?? undefined,
         maxOperations: numericOption(rest, "--max-operations"),
     });
-    const out = option(rest, "--out");
+    await emitPlan(plan, rest);
+}
+/** Shared plan output plumbing: --out, --save (with the approve/apply hint), --json or markdown. */
+async function emitPlan(plan, args) {
+    const out = option(args, "--out");
     if (out) {
         writeFileSync(resolve(process.cwd(), out), `${JSON.stringify(plan, null, 2)}\n`);
     }
-    if (rest.includes("--save")) {
+    if (args.includes("--save")) {
         await createFilePlanStore().save(plan);
         console.error(`Saved plan ${plan.id} (${plan.operations.length} operations). Review with \`fullstackgtm plans show ${plan.id}\`, approve with \`fullstackgtm plans approve ${plan.id} --operations <ids|all>\`, then \`fullstackgtm apply --plan-id ${plan.id} --provider <name>\`.`);
     }
-    if (rest.includes("--json")) {
+    if (args.includes("--json")) {
         console.log(JSON.stringify(plan, null, 2));
     }
     else {
         console.log(patchPlanToMarkdown(plan));
     }
+}
+/**
+ * Governed duplicate cleanup: group by a normalized identity key, propose one
+ * merge_records per duplicate group with a deterministic survivor. Never
+ * writes — approve and apply the plan like any audit plan.
+ */
+async function dedupeCommand(args) {
+    const [objectType, ...rest] = args;
+    if (!objectType || !["account", "contact", "deal"].includes(objectType)) {
+        throw new Error("Usage: fullstackgtm dedupe <account|contact|deal> --key <domain|email|name> [--keep richest|oldest] [source options] [--reason <text>] [--max-operations <n>] [--save] [--out <path>] [--json]");
+    }
+    const key = option(rest, "--key");
+    if (!key || !["domain", "email", "name"].includes(key)) {
+        throw new Error("dedupe requires --key <domain|email|name> (the identity field duplicates share).");
+    }
+    const keep = option(rest, "--keep") ?? undefined;
+    const snapshot = await readSnapshot(rest);
+    const plan = buildDedupePlan(snapshot, {
+        objectType: objectType,
+        key: key,
+        keep: (keep ?? undefined),
+        reason: option(rest, "--reason") ?? undefined,
+        maxOperations: numericOption(rest, "--max-operations"),
+    });
+    await emitPlan(plan, rest);
+}
+/**
+ * Ownership handoff playbook: compile one bulk-update-style plan per object
+ * type. Each plan carries its full filter, so eligibility (including the
+ * --except-deal-stage exclusion) is re-verified per record at apply time.
+ */
+async function reassignCommand(args) {
+    const from = option(args, "--from");
+    const to = option(args, "--to");
+    if (!from || !to) {
+        throw new Error("Usage: fullstackgtm reassign --from <ownerId> --to <ownerId> [--objects account,contact,deal] [--where <expr> …] [--except-deal-stage <stage>] [--include-closed-deals] [source options] [--reason <text>] [--max-operations <n>] [--save] [--out <path>] [--json]");
+    }
+    const objects = option(args, "--objects")
+        ?.split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+    const snapshot = await readSnapshot(args);
+    const plans = buildReassignPlans(snapshot, {
+        fromOwnerId: from,
+        toOwnerId: to,
+        objects,
+        where: repeatedOption(args, "--where"),
+        exceptDealStage: option(args, "--except-deal-stage") ?? undefined,
+        includeClosedDeals: args.includes("--include-closed-deals"),
+        reason: option(args, "--reason") ?? undefined,
+        maxOperations: numericOption(args, "--max-operations"),
+    });
+    const out = option(args, "--out");
+    if (out) {
+        writeFileSync(resolve(process.cwd(), out), `${JSON.stringify(plans, null, 2)}\n`);
+    }
+    if (args.includes("--json")) {
+        console.log(JSON.stringify(plans, null, 2));
+        return;
+    }
+    const store = args.includes("--save") ? createFilePlanStore() : null;
+    for (const plan of plans) {
+        if (store)
+            await store.save(plan);
+        console.log(`${plan.id}  ${String(plan.operations.length).padStart(3)} operation(s)  ${plan.title}`);
+        console.log(`    ${plan.summary}`);
+    }
+    if (store) {
+        console.log(`\nSaved ${plans.length} plan(s). For each: \`fullstackgtm plans show <id>\`, \`fullstackgtm plans approve <id> --operations <ids|all>\`, then \`fullstackgtm apply --plan-id <id> --provider <name>\`.`);
+    }
+    else {
+        console.log("\nDry run only — re-run with --save to store the plans for approval.");
+    }
+}
+/**
+ * One-shot composite for a single audit rule: audit → save → suggest →
+ * approve only suggestion-backed operations meeting the confidence bar (plus
+ * operations that carry concrete values and need no human input) → apply
+ * (only with --yes). Every stage goes through the same gates as the manual
+ * chain; placeholder values below the bar stay unapproved.
+ */
+async function fixCommand(args) {
+    const ruleId = option(args, "--rule");
+    const provider = option(args, "--provider");
+    if (!ruleId || !provider) {
+        throw new Error("Usage: fullstackgtm fix --rule <ruleId> --provider <name> [--min-confidence high|low] [--include-creates] [--today <iso>] [--yes]");
+    }
+    const minConfidence = option(args, "--min-confidence") ?? "high";
+    if (!["high", "low"].includes(minConfidence)) {
+        throw new Error("--min-confidence must be high or low");
+    }
+    const includeCreates = args.includes("--include-creates");
+    const loaded = loadConfig(option(args, "--config") ?? undefined);
+    const configured = await resolveConfiguredRules(loaded);
+    const rule = configured.find((candidate) => candidate.id === ruleId);
+    if (!rule) {
+        throw new Error(`Unknown rule: ${ruleId}. Available rules: ${configured.map((r) => r.id).join(", ")}`);
+    }
+    const policy = mergePolicy(defaultPolicy(), loaded?.config);
+    const today = option(args, "--today");
+    if (today)
+        policy.today = today;
+    const snapshot = await readSnapshot(args);
+    const plan = auditSnapshot(snapshot, policy, [rule]);
+    if (plan.operations.length === 0) {
+        console.log(`fix ${ruleId}: audit proposed 0 operations — nothing to fix.`);
+        return;
+    }
+    const store = createFilePlanStore();
+    await store.save(plan);
+    const suggestions = suggestValues(plan, snapshot);
+    const accepted = new Set(minConfidence === "low" ? ["high", "low"] : ["high"]);
+    const overrides = {};
+    let belowBar = 0;
+    for (const suggestion of suggestions) {
+        if (suggestion.suggestedValue &&
+            (accepted.has(suggestion.confidence) || (includeCreates && suggestion.confidence === "create"))) {
+            overrides[suggestion.operationId] = suggestion.suggestedValue;
+        }
+        else {
+            belowBar += 1;
+        }
+    }
+    // Approve operations whose placeholder got a qualifying suggested value,
+    // plus operations that already carry a concrete value (no human input
+    // needed — nothing to guess). Everything else stays unapproved.
+    const placeholderIds = new Set(suggestions.map((suggestion) => suggestion.operationId));
+    const approvedIds = plan.operations
+        .map((operation) => operation.id)
+        .filter((id) => overrides[id] !== undefined || !placeholderIds.has(id));
+    const lines = [
+        `fix ${ruleId} via ${provider}:`,
+        `  proposed:  ${plan.operations.length} operation(s) — plan ${plan.id} (saved)`,
+        `  suggested: ${Object.keys(overrides).length} value(s) at ${minConfidence}+ confidence${includeCreates ? " (creates included)" : ""}${belowBar > 0 ? `; ${belowBar} below the bar (left unapproved)` : ""}`,
+        `  approved:  ${approvedIds.length} of ${plan.operations.length}`,
+    ];
+    if (approvedIds.length === 0) {
+        lines.push("  applied:   0 — no operation met the confidence bar");
+        console.log(lines.join("\n"));
+        console.log(`\nWiden with --min-confidence low / --include-creates, or approve manually: \`fullstackgtm plans approve ${plan.id} --operations <ids> --value <opId>=<value>\`.`);
+        return;
+    }
+    await store.approveOperations(plan.id, approvedIds, overrides);
+    if (!args.includes("--yes")) {
+        lines.push("  applied:   0 (stopped before apply — pass --yes to write)");
+        console.log(lines.join("\n"));
+        console.log(`\nApply with:\n  fullstackgtm apply --plan-id ${plan.id} --provider ${provider}`);
+        return;
+    }
+    const connector = await connectorFor(provider, args);
+    const run = await applyPatchPlan(connector, plan, {
+        approvedOperationIds: approvedIds,
+        valueOverrides: overrides,
+    });
+    await store.recordRun(plan.id, run);
+    const counts = { applied: 0, conflict: 0, skipped: 0, failed: 0 };
+    for (const result of run.results)
+        counts[result.status] = (counts[result.status] ?? 0) + 1;
+    lines.push(`  applied:   ${counts.applied} · conflicts: ${counts.conflict} · skipped: ${counts.skipped} · failed: ${counts.failed}`);
+    console.log(lines.join("\n"));
+    if (run.status === "failed")
+        process.exitCode = 1;
 }
 async function suggest(args) {
     const planId = option(args, "--plan-id");
@@ -1907,6 +2105,18 @@ export async function runCli(argv) {
     }
     if (command === "bulk-update") {
         await bulkUpdateCommand(args);
+        return;
+    }
+    if (command === "dedupe") {
+        await dedupeCommand(args);
+        return;
+    }
+    if (command === "reassign") {
+        await reassignCommand(args);
+        return;
+    }
+    if (command === "fix") {
+        await fixCommand(args);
         return;
     }
     if (command === "market") {

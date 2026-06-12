@@ -114,11 +114,40 @@ function suggestDealAccount(
     return { ...base, suggestedValue: null, confidence: "none", reason: "Deal not found in the snapshot." };
   }
 
-  // Convention: "Contact Name - Company Name". Both signals below are
-  // independent; agreement upgrades confidence, conflict downgrades it.
-  const separatorIndex = deal.name.indexOf(" - ");
-  const left = separatorIndex >= 0 ? deal.name.slice(0, separatorIndex) : deal.name;
-  const right = separatorIndex >= 0 ? deal.name.slice(separatorIndex + 3).trim() : "";
+  // Convention 1: "Contact Name - Company Name" (hyphen, en or em dash).
+  // Both signals below are independent; agreement upgrades confidence,
+  // conflict downgrades it.
+  const separator = [" - ", " – ", " — "]
+    .map((s) => ({ s, index: deal.name.indexOf(s) }))
+    .filter(({ index }) => index >= 0)
+    .sort((a, b) => a.index - b.index)[0];
+  const left = separator ? deal.name.slice(0, separator.index).trim() : deal.name;
+  const right = separator ? deal.name.slice(separator.index + separator.s.length).trim() : "";
+
+  // Convention 2: "Company - Deal descriptor" (e.g. "Globex – Expansion",
+  // "Hooli – New Business"). When the right side is purely deal-descriptor
+  // words, the company is on the LEFT. Only an exact account-name match
+  // counts as high; an unknown left side proposes a create — the engine
+  // never guesses at an existing record.
+  if (left && right && isDealDescriptor(right)) {
+    const leftMatch = accountsByNorm.get(normalize(left));
+    if (leftMatch) {
+      return {
+        ...base,
+        suggestedValue: leftMatch.id,
+        confidence: "high",
+        reason: `Deal name leads with the exact account name "${leftMatch.name}" ("${right}" is a deal descriptor, not a company).`,
+      };
+    }
+    if (!contactsByName.get(normalize(left))) {
+      return {
+        ...base,
+        suggestedValue: `create:${left}`,
+        confidence: "create",
+        reason: `No account named "${left}" exists ("${right}" is a deal descriptor) — approving creates the company, then links.`,
+      };
+    }
+  }
 
   // Signal 1: company-name match against account names.
   let nameMatch: { id: string; name: string } | null = null;
@@ -189,6 +218,22 @@ function suggestDealAccount(
       reason: `No account named "${right}" exists and contact "${left}" has none — approving creates the company, then links.`,
     };
   }
+  // Convention 3: "<Company> <descriptor…>" without a separator (e.g.
+  // "INITECH renewal"): strip trailing descriptor words and accept only an
+  // exact account-name match on what remains.
+  if (!separator) {
+    const words = normalize(deal.name).split(" ").filter(Boolean);
+    while (words.length > 1 && DEAL_DESCRIPTOR_WORDS.has(words[words.length - 1])) words.pop();
+    const strippedMatch = words.length > 0 ? accountsByNorm.get(words.join(" ")) : undefined;
+    if (strippedMatch) {
+      return {
+        ...base,
+        suggestedValue: strippedMatch.id,
+        confidence: "high",
+        reason: `Deal name leads with the exact account name "${strippedMatch.name}" (trailing words are deal descriptors).`,
+      };
+    }
+  }
   return {
     ...base,
     suggestedValue: null,
@@ -197,6 +242,25 @@ function suggestDealAccount(
       ? `No account matches "${right}" and "${left}" is not a known contact. Supply --value ${operation.id}=<accountId> or --value ${operation.id}=create:<Company Name>.`
       : `Deal name "${deal.name}" has no "Contact - Company" pattern to derive a company from. Supply --value ${operation.id}=<accountId> or create:<Company Name>.`,
   };
+}
+
+/**
+ * Words that describe the deal rather than name a company. Used to recognize
+ * the "Company - Deal descriptor" naming convention: a segment counts as a
+ * descriptor only when EVERY word is in this list, so any real company name
+ * ("Brand New Startup") falls through to the contact/company conventions.
+ */
+const DEAL_DESCRIPTOR_WORDS = new Set([
+  "renewal", "expansion", "pilot", "annual", "monthly", "platform", "new", "business",
+  "add", "on", "addon", "upsell", "upgrade", "trial", "poc", "proof", "concept",
+  "subscription", "license", "licence", "contract", "opportunity", "deal", "engagement",
+  "implementation", "onboarding", "services", "inbound", "outbound",
+  "q1", "q2", "q3", "q4",
+]);
+
+function isDealDescriptor(segment: string): boolean {
+  const words = normalize(segment).split(" ").filter(Boolean);
+  return words.length > 0 && words.every((word) => DEAL_DESCRIPTOR_WORDS.has(word));
 }
 
 /**
