@@ -109,6 +109,22 @@ npx fullstackgtm report --provider hubspot --client "Acme" --out acme-health.htm
 
 `report` renders the same audit as a deliverable — severity counts up front, a prose summary, per-rule detail with example records, and next steps — as markdown or self-contained HTML (printable, emailable, no external assets).
 
+## Routine maintenance as governed verbs: bulk-update, dedupe, reassign, fix
+
+The maintenance work RevOps actually does in bulk — backfills, book transfers, duplicate sweeps, "just fix everything that rule found" — gets first-class verbs. Each one *builds a plan*; nothing executes without the same approve → apply gauntlet as everything else.
+
+```bash
+fullstackgtm bulk-update deal --where "stage=closedwon" --where "amount:empty" \
+  --set amount=from:account.annualrevenue --save     # per-record derived values; empty sources skipped, never guessed
+fullstackgtm dedupe account --key domain --keep richest --save   # one merge_records op per duplicate group
+fullstackgtm reassign --from 411 --to 902 --except-deal-stage closing --save   # ownership handoff playbook
+fullstackgtm fix --rule missing-deal-owner --provider hubspot --yes  # audit one rule → suggest → approve → apply, one command
+```
+
+`bulk-update` filters the snapshot (`=`, `!=`, `~` substring, `:empty`/`:notempty`, `|` any-of, relational pseudo-fields like `account.domain` or `openDealStages`) into a dry-run patch plan — and **the full filter is re-verified per record at apply time**, with mid-apply rechecks, so a record that stopped matching between audit and apply is skipped, not clobbered. Equality filters double as preconditions; `--require` adds explicit ones; `--guard` asserts cross-record conditions; `--max-operations` caps blast radius. `--set field=from:<sourceField>` derives values per record; `--archive` refuses records whose identity key (account domain, contact email) is shared with another record — that's a duplicate, and duplicates are merged with `dedupe`, not archived around.
+
+`dedupe` finds duplicate groups by normalized identity key and emits one `merge_records` operation per group with a deterministic survivor (`richest` = most populated fields, ties to lowest id; `oldest`). Merges stay irreversible-and-therefore-low-confidence-capped on approval, exactly like merge suggestions from the audit. `reassign` is the ownership-handoff playbook: one plan per object type, extra scoping account-lifted to deals and contacts, and `--except-deal-stage` excludes both deals in that stage and every record whose account has an open deal in it. `fix` is the one-shot composite for a single rule: audit → save → suggest → approve suggestion-backed operations at the confidence bar → with `--yes`, apply and print the stage-by-stage summary; without it, stop after approval and print the apply command.
+
 ## The market map: the category, observed
 
 Your CRM records what happened in your own deals; nothing records the shape of the category you sell into. The **market map** does: vendors and a claim taxonomy live in a reviewable `market.config.json`, vendor pages are captured into a content-addressed cache, every vendor × claim cell gets a messaging-intensity reading (LOUD / QUIET / ABSENT — with UNOBSERVABLE for failed captures, never a fake absence), and deterministic front states fall out per claim: open, contested, owned, saturated.
@@ -125,6 +141,8 @@ fullstackgtm market refresh                                 # all of the above, 
 The discipline matches the rest of the tool. Intensity readings are *proposals* — from the LLM (`classify`, same bring-your-own-key seam as `call parse`, provenance-marked) or from any agent/human (`market worksheet` → `market observe`) — and **every quoted evidence span is verified character-for-character against the stored capture it cites** before an observation is accepted. Quotes that aren't on the page bounce. Everything downstream of the store is deterministic: same observations, same map.
 
 `market axes` is for earning a strategic 2×2 instead of asserting one: PCA over the intensity matrix (PC1 = the category's own primary axis, PC2 = the most differentiating direction orthogonal to it), triangulation of your configured axes against the data, and an orthogonality screen that flags two axes that are secretly one. Axes are claim-scoring rubrics in the config; the report renders the primary pair as the strategic map. Captures and observations are profile-scoped (`~/.fullstackgtm/market/<category>`), so one client's category intel never bleeds into another's.
+
+Two more derivations close the loop from map to action. `market overlay --snapshot <crm.json> [--calls <files>]` joins the observation store against your own ground truth — which claims and vendors actually come up in your deals and call transcripts (deterministic word-boundary matching, no LLM) — and emits OCCUPY / PROMOTE / URGENT / RETREAT directives, each carrying at least one observation and one CRM stat with its sample size; below the evidence thresholds the honest answer is *no directive*. `--save` turns directives into approval-gated `create_task` operations through the normal plan chain. `market scale` estimates each vendor's size from **citable** signals you record in the config (G2 review counts, LinkedIn headcount, revenue claims — each with source URL, verbatim quote, and caveat): every signal is converted into revenue space first, calibrated within the vendor set and stratified by ACV band, then combined as a weighted geometric mean with the uncertainty spread and calibration table disclosed. The report's strategic-map bubbles become area-proportional to estimated revenue share — captioned "citable but NOT audited" — and without signals, dots are uniform and the caption says size carries no meaning.
 
 ## Governed enrichment: a diff you approve before third-party data touches your CRM
 

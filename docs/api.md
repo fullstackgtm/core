@@ -59,8 +59,10 @@ release.
 
 Commands: `login` / `logout`, `snapshot`, `audit`, `report`, `diff`, `merge`, `plans`,
 `apply`, `suggest`, `call` (`parse` / `score` / `link` / `plan`), `resolve`,
+`bulk-update`, `dedupe`, `reassign`, `fix`,
 `market` (`init` / `capture` / `classify` / `worksheet` / `observe` / `fronts` /
-`axes` / `report` / `refresh`), `rules`, `profiles`, `doctor`.
+`axes` / `overlay` / `scale` / `report` / `refresh`),
+`enrich` (`append` / `refresh` / `ingest` / `status`), `rules`, `profiles`, `doctor`.
 Exit codes: `0` success · `1` error · `2` findings/regressions at the requested gate
 (`--fail-on`, `--fail-on-new-findings`). `--json` everywhere; JSON output shapes are stable.
 
@@ -80,19 +82,59 @@ deliverable in markdown or self-contained HTML: severity counts, prose summary,
 per-rule detail with capped examples, and next steps. `auditReportToMarkdown` /
 `auditReportToHtml` expose the same rendering programmatically.
 
+## Governed write verbs
+
+Plan builders behind `bulk-update`, `dedupe`, and `reassign` — every one
+emits a standard dry-run `PatchPlan` for the normal approve → apply chain:
+
+- `buildBulkUpdatePlan(snapshot, options: BulkUpdateOptions)` with
+  `parseWhere` (filter expressions: `=`, `!=`, `~`, `!~`, `:empty`,
+  `:notempty`, `|` any-of, relational pseudo-fields) and
+  `isFilterableField`. Filters are re-verified per record at apply time;
+  `from:<sourceField>` values derive per record from the snapshot.
+- `buildDedupePlan(snapshot, options: DedupeOptions)` with `dedupeKey` —
+  duplicate groups by normalized identity key, one `merge_records` per group,
+  deterministic survivor selection (`richest` / `oldest`).
+- `buildReassignPlans(snapshot, options: ReassignOptions)` — one plan per
+  `ReassignObjectType`, account-lifted scoping, stage exclusions.
+
+`fix` is CLI-only composition of existing surfaces (audit → suggest →
+approve → apply for one rule).
+
+## Enrich
+
+Governed third-party enrichment (spec-first; `enrich.config.json` validated
+by `parseEnrichConfig` / `loadEnrichConfig`, types `EnrichConfig`,
+`EnrichFieldConfig`, `EnrichSourceConfig`): `buildEnrichPlan` matches staged
+or pulled source records to CRM records (`matchSourceRecord` — ordered keys,
+`MatchOutcome` of matched / unmatched / ambiguous) and emits fill-blanks-only
+operations. `createFileEnrichRunStore` / `EnrichRunStore` is the profile-scoped
+append-only run store (resume cursor, per-record/per-field `enrichedAt`
+stamps read by `latestStamps` / `selectStaleWork`). `parseCsv` is the
+dependency-free CSV intake; the Apollo client (`createApolloClient`,
+`pullApolloRecords`, 429-aware with `Retry-After`) is the first `api`-kind
+source.
+
 ## Market map
 
-Newer surface (0.16–0.18); shapes are settling toward the 1.0 contract. A live
+Newer surface (0.16–0.23); shapes are settling toward the 1.0 contract. A live
 model of the competitive category: claim taxonomy + vendor registry as a
 reviewable `market.config.json` (`MarketConfig`, `MarketClaim`, `MarketVendor`,
-`MarketAxis`), content-addressed page captures (`captureMarket`,
-`loadCaptureTexts`), append-only observations (`ObservationSet`,
-`MarketObservation`, `ObservationStore` / `createFileObservationStore` —
-profile-scoped under `<home>/market/<category>`), and deterministic
-derivations: `computeFrontStates` / `diffFrontStates` (front rule v1),
-`assessAxes` / `pcaTop2` / `axisPosition` (axis discovery), and
+`MarketAxis` — axes require `negativePole`/`positivePole` labels), content-addressed
+page captures (`captureMarket`, `loadCaptureTexts`), append-only observations
+(`ObservationSet`, `MarketObservation`, `ObservationStore` /
+`createFileObservationStore` — profile-scoped under `<home>/market/<category>`),
+and deterministic derivations: `computeFrontStates` / `diffFrontStates`
+(front rule v1), `assessAxes` / `pcaTop2` / `axisPosition` (axis discovery),
+`computeDirectives` / `computeOverlayStats` / `directivesToPlan`
+(`market overlay` — observations × CRM snapshot × call corpus →
+OCCUPY/PROMOTE/URGENT/RETREAT `MarketDirective`s, convertible to an
+approval-gated plan of `create_task` operations), `computeScaleIndex` /
+`scaleReportToText` (`market scale` — citable `ScaleSignal`s → within-set,
+ACV-band-stratified revenue estimates with disclosed uncertainty), and
 `marketMapToMarkdown` / `marketMapToHtml` (the field report; renders the
-primary strategic 2×2 when `axes` / `primaryAxes` are configured).
+primary strategic 2×2 when `axes` / `primaryAxes` are configured, bubbles
+area-proportional to estimated revenue share when scale signals exist).
 
 Intensity readings are proposals: `classifyMarket` (LLM, bring-your-own-key,
 provenance-marked) or `buildWorksheet` + `market observe` (agent/human). Every

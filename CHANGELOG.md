@@ -5,6 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.23.2] — 2026-06-12
+
+Documentation catch-up: the README, llms.txt, and docs/api.md now cover
+everything that shipped 0.19–0.23. (No code changes.)
+
+### Fixed
+
+- README: new "Routine maintenance as governed verbs" section (`bulk-update`,
+  `dedupe`, `reassign`, `fix`) and a market-map paragraph for `market overlay`
+  (directives from your own ground truth) and `market scale` (citable,
+  calibrated size estimates).
+- llms.txt: governed-write-verbs invariants block; overlay/scale invariants
+  added to the market-map block.
+- docs/api.md: CLI command list completed (write verbs, `enrich`, market
+  `overlay`/`scale`); new "Governed write verbs" and "Enrich" export
+  sections; market-map section updated for 0.16–0.23 exports incl.
+  `computeDirectives`/`directivesToPlan` and `computeScaleIndex`.
+
 ## [0.23.1] — 2026-06-12
 
 ### Fixed
