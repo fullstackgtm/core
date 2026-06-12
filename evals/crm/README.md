@@ -97,3 +97,41 @@ Outputs: `results/runs-<ts>.jsonl` (one record per run) and
 - Graders are deterministic; no LLM-as-judge.
 - The mock's traps (page size, index lag) mirror documented HubSpot behavior,
   not adversarial inventions.
+
+## Real-data seeds (private held-out set)
+
+Real CRM portals make the best scenario substrate — their mess is the point.
+The pipeline keeps them safe:
+
+```bash
+# 1. read-only export from any portal the CLI is authenticated against
+fullstackgtm snapshot --provider hubspot --out snap.json
+# 2. deterministic anonymization (pseudonyms preserve dedupe relationships)
+npm run anonymize -- snap.json seeds/my-portal.json && rm snap.json
+# 3. run snapshot-seeded scenarios: known footguns planted into real shape
+npm run eval -- --seed-snapshot seeds/my-portal.json \
+  --scenarios seeded-ownerless,seeded-dupes,seeded-past-close --models …
+```
+
+`seeds/` is gitignored on purpose: portal-derived scenarios are the private,
+contamination-resistant half of the benchmark. The public half stays fully
+synthetic.
+
+## Live-write certification (real HubSpot / Salesforce)
+
+The benchmark itself never touches a real CRM. To validate that the
+connector's write operations work against the real APIs, run the
+certification suite against a **disposable test org** — a free HubSpot
+developer test account or a Salesforce Developer Edition / scratch org:
+
+```bash
+npm run cert -- --provider mock        # harness self-test, no credentials
+HUBSPOT_ACCESS_TOKEN=<test-portal token> npm run cert -- --provider hubspot
+SALESFORCE_ACCESS_TOKEN=… SALESFORCE_INSTANCE_URL=… npm run cert -- --provider salesforce
+```
+
+It exercises every operation (set/clear field, link, task creation with both
+idempotency layers, merge, archive, compare-and-set conflict, snapshot
+pagination), namespaces everything it creates under `ZZCERT`, archives it on
+exit, and **refuses to run against any org holding more than 250 records** —
+so pointing it at production fails the safety gate instead of your data.

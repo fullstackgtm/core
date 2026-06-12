@@ -1398,3 +1398,10 @@ export function getScenario(id: string): Scenario {
   if (!s) throw new Error(`Unknown scenario: ${id}. Available: ${scenarios.map((x) => x.id).join(", ")}`);
   return s;
 }
+
+/** Register dynamically built scenarios (e.g. snapshot-seeded) before a run. */
+export function registerScenarios(extra: Scenario[]): void {
+  for (const scenario of extra) {
+    if (!scenarios.some((s) => s.id === scenario.id)) scenarios.push(scenario);
+  }
+}
