@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.25.0] — 2026-06-12
+
+### Added
+
+- **Agent skill distribution** — `npx skills add fullstackgtm/core` installs
+  [skills/fullstackgtm/SKILL.md](./skills/fullstackgtm/SKILL.md) into any
+  skills-compatible agent (Claude Code, Cursor, Codex, …): a compact operating
+  guide covering the governed audit → suggest → approve → apply loop, the
+  non-negotiable safety invariants, the verb map, and the credential ladder.
+  Documentation only — no runtime surface changes.
+
 ## [0.24.0] — 2026-06-12
 
 ### Added
