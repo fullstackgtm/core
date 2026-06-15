@@ -78,6 +78,68 @@ export function validateSchedulableArgv(argv) {
     }
 }
 /**
+ * A schedule label is free text the operator chooses, but it is later
+ * interpolated into a crontab comment line by `renderManagedBlock`. A newline
+ * (or carriage return) would break out of the comment and inject an arbitrary
+ * crontab entry on `schedule install`. Reject control characters at the entry
+ * point so a label can never carry a second line; `renderManagedBlock` also
+ * strips them defensively in case a hand-edited schedules.json slips one past.
+ */
+export function assertSingleLineLabel(label) {
+    if (hasControlChar(label)) {
+        throw new Error("A schedule --label cannot contain newlines or control characters " +
+            "(they would inject lines into the managed crontab block). Use a plain single-line name.");
+    }
+}
+/**
+ * True if the string contains any line-breaking or control character. Covers
+ * C0 controls + DEL, plus the Unicode separators a non-cron parser might honor
+ * (NEL U+0085, LS U+2028, PS U+2029, VT U+000B, FF U+000C) — defense-in-depth
+ * for the future modal/aws scaffold renderers whose target formats may treat
+ * those as line breaks.
+ */
+export function hasControlChar(value) {
+    for (let i = 0; i < value.length; i++) {
+        const code = value.charCodeAt(i);
+        if (code < 0x20 || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029)
+            return true;
+    }
+    return false;
+}
+/** Collapse any control/separator character to a space — last-resort guard at render time. */
+function sanitizeCrontabComment(value) {
+    let out = "";
+    for (const ch of value) {
+        const code = ch.charCodeAt(0);
+        out += code < 0x20 || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029 ? " " : ch;
+    }
+    return out.replace(/ {2,}/g, " ").trim();
+}
+/**
+ * Validate every field of an entry that `renderManagedBlock` interpolates into
+ * the crontab — not just the label. The EXECUTABLE line embeds `cron` and `id`
+ * raw, and `schedule install` renders entries straight from schedules.json, so
+ * a hand-edited (or otherwise tampered) entry with a newline in cron/id/profile
+ * would inject a live crontab line. Refuse to render a tampered entry rather
+ * than emit it. (Well-formed entries never trip this: cron is parser-validated,
+ * id is an fnv1a hex hash, label is guarded at add-time.)
+ */
+function assertRenderableEntry(profile, entry) {
+    const fields = [
+        ["profile", profile],
+        ["cron", entry.cron],
+        ["id", entry.id],
+        ["label", entry.label],
+        ...entry.argv.map((token, i) => [`argv[${i}]`, token]),
+    ];
+    for (const [name, value] of fields) {
+        if (hasControlChar(value)) {
+            throw new Error(`Refusing to render schedule entry ${entry.id}: its ${name} contains a newline or control character. ` +
+                "The schedules.json store has been tampered with or corrupted — repair it before installing.");
+        }
+    }
+}
+/**
  * Split a `schedule add "<command>"` string into argv, honoring single and
  * double quotes (no escapes, no expansion — this is tokenization, not shell).
  */
@@ -124,7 +186,13 @@ const CRON_FIELD_SPECS = [
     { name: "day-of-week", min: 0, max: 7 },
 ];
 export function parseCron(expression) {
-    const fields = expression.trim().split(/\s+/);
+    // Reject non-ASCII whitespace and control chars: JS \s splits on U+00A0,
+    // U+3000, etc., but Vixie cron's field separator is only space/tab. A source
+    // carrying them would parse here yet be misparsed or rejected by `crontab -`.
+    if (hasControlChar(expression) || /[^\x20-\x7e]/.test(expression)) {
+        throw new Error(`Invalid cron expression "${expression}": only ASCII characters, space, and tab are allowed.`);
+    }
+    const fields = expression.trim().split(/[ \t]+/);
     if (fields.length !== 5) {
         throw new Error(`Invalid cron expression "${expression}": expected 5 fields ` +
             `(minute hour day-of-month month day-of-week), got ${fields.length}.`);
@@ -432,13 +500,26 @@ export function crontabSentinels(profile) {
  * but fullstackgtm dispatch (no arbitrary shell, ever).
  */
 export function renderManagedBlock(profile, entries, cliInvocation) {
+    // cliInvocation is spliced raw into the executable line; it is built from
+    // process.execPath, the script path, and FSGTM_HOME (cli.ts), so a newline in
+    // FSGTM_HOME would inject a crontab line. Validate it like the entry fields —
+    // single-quote shell-escaping does NOT defend cron's line parser.
+    if (hasControlChar(cliInvocation)) {
+        throw new Error("Refusing to render the managed crontab: the resolved CLI invocation (node path, script path, " +
+            "or FSGTM_HOME) contains a newline or control character. Check $FSGTM_HOME.");
+    }
     const { open, close } = crontabSentinels(profile);
     const lines = [
         open,
         "# Managed by `fullstackgtm schedule install` — replaced wholesale on re-install; do not edit.",
     ];
     for (const entry of entries) {
-        lines.push(`# ${entry.label} (${entry.id}): ${entry.argv.join(" ")}`);
+        // Refuse to render any entry whose interpolated fields carry a control char
+        // — the executable line below embeds cron/id raw, so a tampered store could
+        // otherwise inject a live crontab line. The comment line is additionally
+        // sanitized so a benign-but-messy label can't break it.
+        assertRenderableEntry(profile, entry);
+        lines.push(sanitizeCrontabComment(`# ${entry.label} (${entry.id}): ${entry.argv.join(" ")}`));
         lines.push(`${entry.cron} ${cliInvocation} schedule run ${entry.id} --profile ${profile} --trigger cron`);
     }
     lines.push(close);

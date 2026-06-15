@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync, } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync, } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { refreshHubspotToken } from "./connectors/hubspotAuth.js";
@@ -98,8 +98,29 @@ export function writeSecureFile(path, contents) {
         // Non-POSIX filesystems ignore chmod.
     }
 }
+/**
+ * The 0600/0700 guarantee was write-only: a credentials.json inherited at
+ * looser permissions (a restored backup, a file created by another tool, a
+ * cloned home) was read and trusted regardless of its actual mode. Enforce the
+ * mode on read too — re-tighten to 0600 and warn once — so a world-readable
+ * credential store can't sit there silently leaking the token to other users.
+ */
+function enforceCredentialFileMode(path) {
+    try {
+        const mode = statSync(path).mode & 0o777;
+        if ((mode & 0o077) !== 0) {
+            chmodSync(path, 0o600);
+            console.error(`fullstackgtm: tightened ${path} from ${mode.toString(8).padStart(3, "0")} to 600 ` +
+                "(it was readable or writable by other users).");
+        }
+    }
+    catch {
+        // Missing file or non-POSIX filesystem: nothing to enforce.
+    }
+}
 function readFile() {
     try {
+        enforceCredentialFileMode(credentialsPath());
         const parsed = JSON.parse(readFileSync(credentialsPath(), "utf8"));
         if (parsed && typeof parsed === "object" && parsed.version === 1 && parsed.providers) {
             return parsed;

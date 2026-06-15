@@ -394,6 +394,29 @@ function valueToString(value: unknown): string {
   return "";
 }
 
+/**
+ * CSV/formula-injection neutralization for string values destined for a CRM
+ * write. Third-party export rows (Clay CSV, webhook JSON) can contain cells
+ * like `=cmd|'/c calc'!A1` or `@SUM(...)`; written verbatim to a CRM field they
+ * lie dormant until someone exports the CRM to CSV and opens it in a spreadsheet,
+ * where the leading `= + - @` (or a leading tab/CR) makes the client execute it.
+ * We prefix a single apostrophe — the spreadsheet-standard escape that renders
+ * the cell as literal text. Numeric values bypass this (they're written as
+ * numbers, not strings), so signed numbers keep full fidelity; a phone number
+ * supplied as a string and starting with `+` gains a leading `'`, which the
+ * human sees in the approved diff. Applied only at the write path, never to
+ * match keys.
+ */
+function neutralizeFormulaInjection(value: string): string {
+  if (value && /^[=+\-@\t\r]/.test(value)) return `'${value}`;
+  return value;
+}
+
+/** valueToString for a value that will be written to a CRM field. */
+function writeSafeString(value: unknown): string {
+  return neutralizeFormulaInjection(valueToString(value));
+}
+
 // ---------------------------------------------------------------------------
 // Matching: ordered keys, unique-hit-wins, zero-hits-next-key,
 // multi-hit → onAmbiguous. Ambiguity is surfaced, never resolved by coin flip.
@@ -708,7 +731,7 @@ export function buildEnrichPlan(options: BuildEnrichPlanOptions): EnrichPlanResu
           operation: "set_field",
           field: canonicalField,
           beforeValue: currentValue ?? null,
-          afterValue: typeof sourceValue === "number" ? sourceValue : valueToString(sourceValue),
+          afterValue: typeof sourceValue === "number" ? sourceValue : writeSafeString(sourceValue),
           reason:
             `${source} ${record.objectType} "${describeSourceRecord(record)}" (matched by ` +
             `${outcome.matchedKey}) reports a changed value for ${canonicalField}.`,
@@ -726,7 +749,7 @@ export function buildEnrichPlan(options: BuildEnrichPlanOptions): EnrichPlanResu
       if (isEmptyValue(sourceValue)) continue;
       if (!isEmptyValue(currentValue)) continue;
       emittedForRecord = true;
-      const afterValue = typeof sourceValue === "number" ? sourceValue : valueToString(sourceValue);
+      const afterValue = typeof sourceValue === "number" ? sourceValue : writeSafeString(sourceValue);
       operations.push({
         id: `op_enr_${fnv1a(`${source}:${record.objectType}:${outcome.recordId}:${canonicalField}`)}`,
         objectType: canonicalObjectType(record.objectType),

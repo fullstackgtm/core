@@ -80,7 +80,13 @@ test("apollo client gives up after maxRetries 429s with a status-bearing error",
       sleeps.push(ms);
     },
   });
-  await assert.rejects(client.matchPerson("a@b.com"), /Apollo API error 429 \(rate limited; 2 retries exhausted\): slow down/);
+  // Status line only — the response body ("slow down") must never be echoed
+  // (it can carry the submitted query or key); see the 0.25.2 leak fix.
+  await assert.rejects(client.matchPerson("a@b.com"), (err: Error) => {
+    assert.match(err.message, /Apollo API error 429 \(rate limited; 2 retries exhausted\)/);
+    assert.doesNotMatch(err.message, /slow down/);
+    return true;
+  });
   assert.equal(calls.length, 3); // initial + 2 retries
   assert.equal(sleeps.length, 2);
 });
@@ -91,7 +97,11 @@ test("apollo client throws on non-OK (no retry), returns null on 404, wraps netw
     getApiKey: () => "bad-key",
     fetchImpl: fakeFetch([{ status: 401, body: "invalid api key" }], calls),
   });
-  await assert.rejects(unauthorized.matchPerson("a@b.com"), /Apollo API error 401: invalid api key/);
+  await assert.rejects(unauthorized.matchPerson("a@b.com"), (err: Error) => {
+    assert.match(err.message, /Apollo API error 401/);
+    assert.doesNotMatch(err.message, /invalid api key/); // body not leaked
+    return true;
+  });
   assert.equal(calls.length, 1);
 
   const missing = createApolloClient({

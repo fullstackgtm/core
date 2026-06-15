@@ -153,6 +153,7 @@ export type FetchPage = (url: string) => Promise<{
     status: number;
     body: string;
 }>;
+export declare function assertPublicUrl(rawUrl: string): Promise<URL>;
 export type CaptureOptions = {
     /** Directory for captures; defaults to <marketHome>/captures. */
     dir?: string;

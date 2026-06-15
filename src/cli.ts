@@ -109,6 +109,8 @@ import {
   parseCron,
   renderManagedBlock,
   replaceManagedBlock,
+  assertSingleLineLabel,
+  hasControlChar,
   scheduleId,
   systemCrontabIo,
   tokenizeCommand,
@@ -1831,6 +1833,7 @@ trigger: manual. status shows next firing and surfaces missed firings
     const label =
       option(rest, "--label") ??
       argv.filter((arg) => !arg.startsWith("--")).slice(0, 2).join("-").replace(/[^\w.-]+/g, "-");
+    assertSingleLineLabel(label);
     const entry: ScheduleEntry = {
       id: scheduleId(label, cron.source, argv, createdAt),
       label,
@@ -2052,12 +2055,26 @@ function scheduleCliInvocation(): string {
   if (!script || !existsSync(script)) {
     throw new Error("Cannot resolve the fullstackgtm entry point for crontab lines (process.argv[1] is missing).");
   }
+  // A newline/control char in any of these flows verbatim into the crontab
+  // executable line; single-quote escaping defends the shell, not cron's line
+  // parser. Refuse early with a clear message (renderManagedBlock re-checks).
+  for (const [name, value] of [
+    ["FSGTM_HOME", process.env.FSGTM_HOME],
+    ["the node executable path", process.execPath],
+    ["the CLI script path", script],
+  ] as const) {
+    if (value && hasControlChar(value)) {
+      throw new Error(`Cannot install schedules: ${name} contains a newline or control character.`);
+    }
+  }
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
   const parts = [quote(process.execPath)];
   if (script.endsWith(".ts")) parts.push("--experimental-strip-types");
   parts.push(quote(script));
   const home = process.env.FSGTM_HOME ? `FSGTM_HOME=${quote(process.env.FSGTM_HOME)} ` : "";
-  return home + parts.join(" ");
+  // cron treats an unescaped `%` in the command field as a newline/stdin split.
+  // Escape it as `\%` so a stray `%` in a path can't truncate the managed line.
+  return (home + parts.join(" ")).replace(/%/g, "\\%");
 }
 
 /**

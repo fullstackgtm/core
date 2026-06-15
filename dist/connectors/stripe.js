@@ -26,8 +26,10 @@ export function createStripeConnector(options) {
             headers: { Authorization: `Bearer ${apiKey}` },
         });
         if (!response.ok) {
-            const body = await response.text();
-            throw new Error(`Stripe API error ${response.status}: ${body}`);
+            // Status line only — the body can echo request details bound to a live
+            // billing key, and these errors land in scheduled-run records.
+            await response.text().catch(() => undefined);
+            throw new Error(`Stripe API error ${response.status}. Check the restricted key and request.`);
         }
         return response.json();
     }
