@@ -106,6 +106,33 @@ The original thesis: GTM data disagrees across systems.
 - Docs site with the operating-model registry as browsable reference.
 - Performance pass: streaming snapshots for very large orgs.
 
+## 0.10 → 0.25 — the layers, as shipped
+
+The plan above ended at the freeze; what shipped next grew the surface
+outward, one layer per release, each consolidating before the next expanded:
+
+- **0.11** — the suggest chain: deterministic placeholder values with
+  confidence + reasons, `plans approve --values-from`.
+- **0.12** — governed merge: `merge_records` (HubSpot contacts / companies /
+  deals), survivor suggestions capped at low confidence.
+- **0.13–0.14** — call intelligence: `call parse|score|link|plan`, LLM
+  extraction behind the bring-your-own-key seam, deterministic baseline,
+  provenance-marked insights.
+- **0.15** — the Prevent layer: the `resolve` create gate plus record-source
+  provenance and attribution.
+- **0.16–0.22** — the market map: content-addressed captures, classification
+  with mechanical span verification, front states and drift, axis discovery,
+  overlay directives, scale estimation, the field report.
+- **0.19 / 0.23** — governed write verbs (`bulk-update`, then `dedupe`,
+  `reassign`, `fix`) and the enrich layer (Apollo / Clay, fill-blanks-only
+  plans).
+- **0.24** — the schedule layer: horizontal cron, read/plan-side allowlist,
+  scheduling never auto-approves.
+- **0.25** — agent skill distribution (`npx skills add fullstackgtm/core`).
+
+The known-gaps list below predates these layers and has been re-verified
+against the 0.25 surface: still accurate, still open.
+
 ## Known real-portal gaps to close before 1.0
 
 Found by exercising the published package as a fresh RevOps user with a real

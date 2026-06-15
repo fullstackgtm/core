@@ -48,7 +48,8 @@ Credentials resolve in order: `--token-env <NAME>` → ambient env
 In a sandbox prefer the first two. LLM-powered verbs (`call parse`, `call
 score`, `market classify`) take `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, or use
 their deterministic/worksheet fallbacks — the CLI never prompts when
-non-interactive.
+non-interactive. `--profile <name>` (or `FULLSTACKGTM_PROFILE`) scopes
+credentials AND stored plans per client org.
 
 ## Verb map
 
@@ -61,9 +62,10 @@ non-interactive.
 | `fix --rule <id>` | audit one rule → suggest → approve at the confidence bar → apply only with `--yes` |
 | `call parse\|score\|link\|plan` | Transcripts → evidence-quoted insights, rubric scorecards, deal linking, governed next-step writes |
 | `enrich append\|refresh\|ingest\|status` | Governed enrichment (Apollo pull / Clay ingest), fill-blanks-only plans |
-| `market capture\|classify\|worksheet\|observe\|fronts\|axes\|overlay\|scale\|report\|refresh` | Competitive category map; evidence quotes verified verbatim against stored captures |
-| `schedule add\|install\|run\|status` | Horizontal cron; read/plan-side allowlist only — scheduling NEVER auto-approves |
-| `plans list\|approve` / `snapshot` / `rules` / `doctor` | Plan lifecycle, raw snapshots, rule registry, machine state |
+| `market init\|capture\|classify\|worksheet\|observe\|fronts\|axes\|overlay\|scale\|report\|refresh` | Competitive category map; evidence quotes verified verbatim against stored captures |
+| `schedule add\|list\|remove\|enable\|disable\|run\|install\|uninstall\|status` | Horizontal cron; read/plan-side allowlist only — scheduling NEVER auto-approves |
+| `report` | Client-ready audit deliverable (markdown or self-contained HTML) |
+| `plans list\|show\|approve\|reject` / `snapshot` / `rules` / `doctor` | Plan lifecycle, raw snapshots, rule registry, machine state |
 
 All write-shaped verbs produce plans; none writes outside approve → apply.
 Add `--json` for machine-readable output on any command.

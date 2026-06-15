@@ -127,7 +127,7 @@ fullstackgtm reassign --from 411 --to 902 --except-deal-stage closing --save   #
 fullstackgtm fix --rule missing-deal-owner --provider hubspot --yes  # audit one rule → suggest → approve → apply, one command
 ```
 
-`bulk-update` filters the snapshot (`=`, `!=`, `~` substring, `:empty`/`:notempty`, `|` any-of, relational pseudo-fields like `account.domain` or `openDealStages`) into a dry-run patch plan — and **the full filter is re-verified per record at apply time**, with mid-apply rechecks, so a record that stopped matching between audit and apply is skipped, not clobbered. Equality filters double as preconditions; `--require` adds explicit ones; `--guard` asserts cross-record conditions; `--max-operations` caps blast radius. `--set field=from:<sourceField>` derives values per record; `--archive` refuses records whose identity key (account domain, contact email) is shared with another record — that's a duplicate, and duplicates are merged with `dedupe`, not archived around.
+`bulk-update` filters the snapshot (`=`, `!=`, `~` substring, `!~` not-substring, `:empty`/`:notempty`, `|` any-of, relational pseudo-fields like `account.domain` or `openDealStages`) into a dry-run patch plan — and **the full filter is re-verified per record at apply time**, with mid-apply rechecks, so a record that stopped matching between audit and apply is skipped, not clobbered. Equality filters double as preconditions; `--require` adds explicit ones; `--guard` asserts cross-record conditions; `--max-operations` caps blast radius. `--set field=from:<sourceField>` derives values per record; `--create-task <text>` is the third change mode, emitting approval-gated `create_task` operations instead of field writes; `--archive` refuses records whose identity key (account domain, contact email) is shared with another record — that's a duplicate, and duplicates are merged with `dedupe`, not archived around (`--force-archive-duplicates` overrides that refusal explicitly).
 
 `dedupe` finds duplicate groups by normalized identity key and emits one `merge_records` operation per group with a deterministic survivor (`richest` = most populated fields, ties to lowest id; `oldest`). Merges stay irreversible-and-therefore-low-confidence-capped on approval, exactly like merge suggestions from the audit. `reassign` is the ownership-handoff playbook: one plan per object type, extra scoping account-lifted to deals and contacts, and `--except-deal-stage` excludes both deals in that stage and every record whose account has an open deal in it. `fix` is the one-shot composite for a single rule: audit → save → suggest → approve suggestion-backed operations at the confidence bar → with `--yes`, apply and print the stage-by-stage summary; without it, stop after approval and print the apply command.
 
@@ -210,11 +210,16 @@ fullstackgtm audit --input snap.json --rules stale-deal --stale-days 45 --json
 
 # Gate a nightly CI job or agent run on hygiene: exit 2 if findings ≥ threshold
 fullstackgtm audit --provider hubspot --fail-on warning
+
+# Gate CI on hygiene drift instead: exit 2 only when a NEW (rule, record) finding appears
+fullstackgtm diff --before old.json --after new.json --fail-on-new-findings
 ```
 
 - Finding and operation ids are **stable hashes** of rule + record, so two runs over the same data produce identical ids — agents can diff plans, track findings across runs, and approve operations by id without re-parsing.
 - `--demo` (with `--seed`) generates a realistic mid-market CRM with injected real-world failure modes — departed owners, unlinked deals, orphan accounts, stale pipeline — so agents and CI can exercise the full snapshot → audit → apply pipeline with zero credentials.
 - Exit codes: `0` success, `1` error, `2` findings at/above `--fail-on`.
+
+"Built for agents" is measured, not asserted: a 612-run benchmark (17 scenarios × 3 tool-surface arms × 4 trials, deterministic graders over final CRM state, τ-bench-style pass^k) shows the gated CLI surface beating raw CRM-API access on completion-under-policy for every model tested. Full matrix and methodology: [the leaderboard](./evals/crm/leaderboard/RESULTS.md).
 
 ## Authentication: CLI-first, browser only at the consent moment
 
@@ -297,7 +302,7 @@ The Stripe connector only reads customers and subscriptions, and `apply` is read
 | Concept | What it is |
 |---|---|
 | **Canonical snapshot** | Provider-independent view of users, accounts, contacts, deals, activities. Records carry `identities` — `(provider, externalId)` claims — so the same real-world entity can be tracked across several systems. |
-| **Audit rule** | A deterministic function `(context) => { findings, operations }`. Eleven built-ins cover orphan accounts, ownerless/unlinked/amount-less deals, past close dates, stale pipeline, duplicates, and more — `fullstackgtm rules` lists them all. Write your own in ~10 lines. |
+| **Audit rule** | A deterministic function `(context) => { findings, operations }`. Twelve built-ins cover orphan accounts, ownerless/unlinked/amount-less deals, past close dates, stale pipeline, duplicates, and more — `fullstackgtm rules` lists them all. Write your own in ~10 lines. |
 | **Patch plan** | The dry-run output of an audit: findings plus typed patch operations with before/after values, reasons, risk levels, and approval flags. Always a proposal, never a mutation. |
 | **Connector** | A provider adapter: `fetchSnapshot()` for reads, optional `applyOperation()` for writes. HubSpot and Salesforce reference connectors ship in the package; connectors never drop records they can't fully resolve — the audit flags them instead. |
 | **Patch plan run** | The audit record of one apply attempt: per-operation applied/failed/skipped results. |
@@ -396,7 +401,13 @@ Or configure any MCP client (Cursor, Claude Desktop, …) with:
 }
 ```
 
-Exposes `fullstackgtm_audit` (read-only; sample, demo, file, or live provider sources with optional rule scoping), `fullstackgtm_rules` (rule discovery), and `fullstackgtm_apply` (requires explicit `approvedOperationIds`) over stdio. Tokens stored via `fullstackgtm login` are picked up automatically — the env var is only needed when no stored login exists.
+Eight tools are exposed over stdio.
+
+**Read-only:** `fullstackgtm_audit` (sample, demo, file, or live provider sources with optional rule scoping), `fullstackgtm_rules` (rule discovery), `fullstackgtm_suggest` (deterministic placeholder values with confidence + reasons), `fullstackgtm_call_parse` (transcripts → provenance-marked segments, insights, and evidence), `fullstackgtm_resolve` (the create gate: exists / ambiguous / safe_to_create), and `fullstackgtm_market_worksheet` (the classification packet for one vendor: claims, judging rules, captured page texts).
+
+**Gated:** `fullstackgtm_apply` (requires explicit `approvedOperationIds`; placeholders still need value overrides) and `fullstackgtm_market_observe` (verifies every quoted span against the stored captures before appending — nothing is stored unless the whole set passes).
+
+Tokens stored via `fullstackgtm login` are picked up automatically — the env var is only needed when no stored login exists.
 
 ## Safety model
 
