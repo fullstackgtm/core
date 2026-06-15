@@ -5,7 +5,7 @@
  */
 import type { AgentLoopOptions, AgentLoopResult } from "./types.ts";
 
-export type CompatEndpoint = { baseUrl: string; apiKey: string };
+export type CompatEndpoint = { baseUrl: string; apiKey: string; maxTokensParam?: "max_tokens" | "max_completion_tokens" };
 
 export async function runOpenAICompatAgent(
   endpoint: CompatEndpoint,
@@ -44,7 +44,7 @@ export async function runOpenAICompatAgent(
           tools,
           tool_choice: "auto",
           // cap output so providers don't reserve the model's full ceiling
-          max_tokens: 8192,
+          [endpoint.maxTokensParam ?? "max_tokens"]: 8192,
         }),
       });
       if (res.ok || (res.status !== 429 && res.status < 500)) break;

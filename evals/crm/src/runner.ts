@@ -59,7 +59,7 @@ function resolveProvider(modelSpec: string): { kind: "anthropic"; model: string 
       return {
         kind: "compat",
         model,
-        endpoint: { baseUrl: "https://api.openai.com/v1", apiKey: requireEnv("OPENAI_API_KEY") },
+        endpoint: { baseUrl: "https://api.openai.com/v1", apiKey: requireEnv("OPENAI_API_KEY"), maxTokensParam: "max_completion_tokens" },
       };
     case "compat":
       return {
