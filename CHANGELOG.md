@@ -5,6 +5,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.25.2] — 2026-06-15
+
+Security hardening I — confirmed fixes from an adversarial audit (each verified
+by a refute-by-default re-attack; the crontab and report fixes took three
+rounds because the re-attack kept finding deeper paths).
+
+### Security
+
+- **Crontab injection via `schedule install` (was: arbitrary code execution).**
+  `schedule add --label` rejects newlines/control chars; `renderManagedBlock`
+  now refuses to render any entry (or CLI invocation) whose interpolated
+  fields — label, cron, id, profile, argv, **and the resolved node/script
+  path + `FSGTM_HOME`** — carry a control character, so a hand-edited
+  `schedules.json` or a newline in `FSGTM_HOME` can no longer inject a live
+  crontab line. `parseCron` now accepts ASCII space/tab only (rejects Unicode
+  whitespace), and a stray `%` in a path is escaped (`\%`) so it can't truncate
+  the managed line.
+- **SSRF in `market capture`.** Page fetches now allow only http/https, refuse
+  any host that is or resolves to a private/loopback/link-local/CGNAT/metadata
+  address (IPv4, IPv6, and IPv4-mapped IPv6 in dotted or hex form), follow
+  redirects manually with per-hop re-validation, and cap time/body size.
+- **Stored XSS in the market HTML report.** The embedded JSON data island is
+  serialized with `<`/`>`/`&`/U+2028/U+2029 escaped (no `</script>` breakout),
+  the tooltip is built with `textContent` (no `innerHTML`), and the two
+  remaining raw sinks (anchor vendor name, evidence-appendix confidence) are
+  now `escapeHtml`'d; `validateObservationSet` rejects a non-enum `confidence`
+  so an `observe --from` file can't smuggle markup.
+- **Provider response bodies no longer leak into errors.** HubSpot, Salesforce,
+  Apollo, and Stripe connectors throw status-line-only errors (a 4xx body can
+  echo submitted emails/domains or the key, and these errors are persisted into
+  scheduled-run records).
+- **CSV/formula injection neutralized at the enrich write path.** Ingested
+  string values beginning with `= + - @` / tab / CR are prefixed with `'` so
+  they can't execute if the CRM is later exported to a spreadsheet; numeric
+  values keep full fidelity.
+- **Credential-store mode enforced on read, not just write.** A pre-existing
+  `credentials.json` with group/other permissions is re-tightened to 0600 (and
+  warned) on read, closing the inherited-loose-permissions gap.
+
+Known residuals tracked for follow-up: `marketMapToMarkdown` does not
+HTML-escape (safe in terminals/GitHub; only a risk if a downstream renderer
+trusts raw HTML — to be addressed with the report work); the credential read
+check is reactive (a loose file is exposed until the next CLI read).
+
 ## [0.25.1] — 2026-06-12
 
 Docs-sync release — no code changes.

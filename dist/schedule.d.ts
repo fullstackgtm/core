@@ -54,6 +54,23 @@ export declare function scheduleId(label: string, cron: string, argv: string[], 
  */
 export declare function validateSchedulableArgv(argv: string[]): void;
 /**
+ * A schedule label is free text the operator chooses, but it is later
+ * interpolated into a crontab comment line by `renderManagedBlock`. A newline
+ * (or carriage return) would break out of the comment and inject an arbitrary
+ * crontab entry on `schedule install`. Reject control characters at the entry
+ * point so a label can never carry a second line; `renderManagedBlock` also
+ * strips them defensively in case a hand-edited schedules.json slips one past.
+ */
+export declare function assertSingleLineLabel(label: string): void;
+/**
+ * True if the string contains any line-breaking or control character. Covers
+ * C0 controls + DEL, plus the Unicode separators a non-cron parser might honor
+ * (NEL U+0085, LS U+2028, PS U+2029, VT U+000B, FF U+000C) — defense-in-depth
+ * for the future modal/aws scaffold renderers whose target formats may treat
+ * those as line breaks.
+ */
+export declare function hasControlChar(value: string): boolean;
+/**
  * Split a `schedule add "<command>"` string into argv, honoring single and
  * double quotes (no escapes, no expansion — this is tokenization, not shell).
  */

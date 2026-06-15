@@ -44,8 +44,11 @@ export function createHubspotConnector(options) {
             throw new Error(`Cannot reach HubSpot at ${baseUrl}${cause}. Check network access.`);
         }
         if (!response.ok) {
-            const body = await response.text();
-            throw new Error(`HubSpot API error ${response.status}: ${body}`);
+            // Status line only — HubSpot 4xx bodies echo submitted property values
+            // (contact emails, company domains) and the request payload, and these
+            // errors are persisted into scheduled-run records. Never interpolate it.
+            await response.text().catch(() => undefined);
+            throw new Error(`HubSpot API error ${response.status}. Check the token scopes and request.`);
         }
         // DELETE and some association writes return 204 with an empty body.
         const text = await response.text();

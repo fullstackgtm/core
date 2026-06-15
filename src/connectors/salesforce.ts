@@ -88,8 +88,10 @@ export function createSalesforceConnector(
       );
     }
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Salesforce API error ${response.status}: ${body}`);
+      // Status line only — the body echoes submitted field values and the
+      // request, and these errors are persisted into scheduled-run records.
+      await response.text().catch(() => undefined);
+      throw new Error(`Salesforce API error ${response.status}. Check the token and request.`);
     }
     // Salesforce PATCH returns 204 No Content on success.
     const text = await response.text();

@@ -56,9 +56,12 @@ export function createApolloClient(options) {
             if (response.status === 404)
                 return null;
             if (!response.ok) {
-                const body = await response.text();
+                // Status line only — never interpolate the response body. It can echo
+                // the submitted query (contact emails / company domains) or the API key,
+                // and these errors are persisted verbatim into scheduled-run records.
+                await response.text().catch(() => undefined);
                 const exhausted = response.status === 429 ? ` (rate limited; ${maxRetries} retries exhausted)` : "";
-                throw new Error(`Apollo API error ${response.status}${exhausted}: ${body}`);
+                throw new Error(`Apollo API error ${response.status}${exhausted}. Check the API key and request.`);
             }
             const text = await response.text();
             return text ? JSON.parse(text) : null;

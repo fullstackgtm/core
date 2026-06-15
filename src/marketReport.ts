@@ -40,6 +40,23 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * Serialize JSON for embedding inside an inline <script> block. JSON.stringify
+ * does not escape `<`, `>`, `&`, or the U+2028/U+2029 line separators, so a
+ * vendor name containing `</script>` (these are untrusted, competitor-authored
+ * strings) would close the tag and inject markup. Replacing them with their
+ * \uXXXX escapes keeps the parsed value identical while making the breakout
+ * sequence unrepresentable in the HTML source.
+ */
+export function safeJsonForScript(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 type MapModel = {
   config: MarketConfig;
   set: ObservationSet;
@@ -374,7 +391,7 @@ function axisSectionsHtml(
       <table class="legend"><thead><tr><th></th><th>vendor</th><th class="num">${legendMeasureHead}</th></tr></thead><tbody>${legendRows}</tbody></table>
     </div>
     <div class="map-tip" id="map-tip" hidden></div>
-    <script type="application/json" id="map-data">${JSON.stringify(tipData)}</script>
+    <script type="application/json" id="map-data">${safeJsonForScript(tipData)}</script>
     <script>
     (function () {
       var data = JSON.parse(document.getElementById("map-data").textContent);
@@ -385,7 +402,16 @@ function axisSectionsHtml(
       function show(v, evt) {
         var d = data[v];
         if (!d) return;
-        tip.innerHTML = "<b>" + d.n + " · " + d.name + "</b>" + d.lines.map(function (l) { return "<div>" + l + "</div>"; }).join("");
+        // textContent only — vendor names / axis labels are untrusted (competitor-controlled).
+        tip.textContent = "";
+        var head = document.createElement("b");
+        head.textContent = d.n + " · " + d.name;
+        tip.appendChild(head);
+        d.lines.forEach(function (l) {
+          var div = document.createElement("div");
+          div.textContent = l;
+          tip.appendChild(div);
+        });
         tip.hidden = false;
         var box = fig.getBoundingClientRect();
         tip.style.left = Math.min(evt.clientX - box.left + 14, box.width - tip.offsetWidth - 8) + "px";
@@ -481,7 +507,7 @@ export function marketMapToHtml(config: MarketConfig, set: ObservationSet): stri
     const anchorLoud = anchor
       ? claimIds.filter((claimId) => model.cell(anchor, claimId)?.intensity === "loud").length
       : 0;
-    const anchorNote = anchor ? ` · ${vendorNamesById.get(anchor) ?? anchor} loud on ${anchorLoud}` : "";
+    const anchorNote = anchor ? ` · ${e(vendorNamesById.get(anchor) ?? anchor)} loud on ${anchorLoud}` : "";
     return `<details class="claim-group"><summary><b>${e(group.title)}</b> — ${claimIds.length} claim${claimIds.length === 1 ? "" : "s"} <span class="sum-soft">(${e(group.blurb)}${anchorNote})</span></summary>
       <table><thead><tr><th></th>${vendorHeads}<th></th></tr></thead><tbody>${claimIds.map(matrixRow).join("")}</tbody></table>
     </details>`;
@@ -543,7 +569,7 @@ export function marketMapToHtml(config: MarketConfig, set: ObservationSet): stri
         if (!obs || obs.evidence.length === 0) return [];
         return obs.evidence.map(
           (evidence) =>
-            `<div class="ev"><span class="ev-head">${e(claimId)} · ${obs.intensity.toUpperCase()} (${obs.confidence})</span>` +
+            `<div class="ev"><span class="ev-head">${e(claimId)} · ${e(obs.intensity.toUpperCase())} (${e(String(obs.confidence ?? ""))})</span>` +
             `<blockquote>“${e(evidence.text)}”</blockquote>` +
             `<span class="ev-src">${e(String(evidence.metadata?.url ?? ""))} · capture ${e(String(evidence.metadata?.captureHash ?? "").slice(0, 12))}</span></div>`,
         );
