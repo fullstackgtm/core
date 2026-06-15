@@ -78,18 +78,21 @@ values win, **merges cannot be undone**, and a record stops merging after
 250 cumulative merges. Salesforce merge is SOAP/Apex only (no REST), only
 Lead/Contact/Account/Case, max 3 records per call.
 
-**The gap:** our three duplicate rules (`duplicate-account-domain`,
-`duplicate-contact-email`, `duplicate-open-deal`) detect groups but emit
-only merge-review *tasks* — detection without remediation.
+**The gap (closed in 0.12):** our three duplicate rules
+(`duplicate-account-domain`, `duplicate-contact-email`,
+`duplicate-open-deal`) used to detect groups but emit only merge-review
+*tasks* — detection without remediation.
 
-**The plan (0.12):** a `merge_records` operation type —
+**Shipped (0.12):** a `merge_records` operation type —
 `requires_human_survivor_selection` placeholder, survivor heuristics in
 `suggest` (ordered, evidence-based: most engagements → oldest → most
 complete, each with a written reason), high risk, approval required, with
 the irreversibility called out in the plan text. The dry-run plan is the
 preview every commercial tool charges for; the pre-apply snapshot is the
 loser-record archive. HubSpot first; Salesforce merge documented as
-unsupported until an Apex path justifies itself.
+unsupported until an Apex path justifies itself. 0.23 added `dedupe` as a
+first-class verb over the same operation type (groups → one governed merge
+per group, deterministic survivor).
 
 ## D — Delete/Archive: the exit ramp
 
@@ -131,5 +134,7 @@ Lessons from auditing our own apply path:
 | 0.11.1 | Fix our own faucet: resolve-first `create:` + plan-scoped dedup, HubSpot association-aware CAS for `link_record`, domain normalization in `duplicate-account-domain`, `create_task` idempotency token |
 | 0.12 (shipped) | `merge_records` (HubSpot contacts/companies/deals) + survivor suggestions capped at low confidence; the three duplicate rules emit governed merges instead of review tasks |
 | 0.15 (shipped) | `resolve` gate (CLI/lib/MCP, gate exit codes), provenance capture (`hs_object_source*` → `RecordProvenance`) + attribution in duplicate findings, self-stamped creates |
-| 0.16 | prevention-posture checks (native duplicate rules active? unique-value properties defined?) · live targeted resolve lookups |
+| 0.16 (shipped the market map instead) | prevention-posture checks (native duplicate rules active? unique-value properties defined?) and live targeted resolve lookups were slated here but did not ship — they remain future work; 0.16 went to the market map layer |
+| 0.23 (shipped) | `dedupe <object> --key <domain\|email\|name>` — the Remediate layer as a first-class verb: duplicate groups by normalized identity key, one governed `merge_records` per group, deterministic survivor (`richest`/`oldest`) |
+| 0.24 (shipped) | schedule layer — recurring Detect: the nightly watch recipe becomes a declared cadence (`schedule add "audit --provider hubspot --save" --cron "0 2 * * *"`); read/plan-side allowlist only, scheduling never auto-approves |
 | docs | The nightly watch recipe (existing flags, documented as CRM CI) |

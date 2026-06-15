@@ -21,7 +21,7 @@ release.
 - `GtmAuditRule` — `{ id, title, description, category?, evaluate(context) }`; the public extension point.
 - `GtmRuleContext` — `{ snapshot, policy, index }` with the prebuilt O(n) `GtmSnapshotIndex`.
 - `auditSnapshot(snapshot, policy?, rules?)` → `PatchPlan`.
-- `builtinAuditRules` (11 rules) plus each rule exported individually.
+- `builtinAuditRules` (12 rules) plus each rule exported individually.
 - **Determinism guarantee**: identical inputs produce identical findings and operations with identical ids (`auditFindingId`, `patchOperationId` are stable hashes of rule + record).
 
 ## Patch plans and application
@@ -62,7 +62,9 @@ Commands: `login` / `logout`, `snapshot`, `audit`, `report`, `diff`, `merge`, `p
 `bulk-update`, `dedupe`, `reassign`, `fix`,
 `market` (`init` / `capture` / `classify` / `worksheet` / `observe` / `fronts` /
 `axes` / `overlay` / `scale` / `report` / `refresh`),
-`enrich` (`append` / `refresh` / `ingest` / `status`), `rules`, `profiles`, `doctor`.
+`enrich` (`append` / `refresh` / `ingest` / `status`),
+`schedule` (`add` / `list` / `remove` / `enable` / `disable` / `run` /
+`install` / `uninstall` / `status`), `rules`, `profiles`, `doctor`.
 Exit codes: `0` success · `1` error · `2` findings/regressions at the requested gate
 (`--fail-on`, `--fail-on-new-findings`). `--json` everywhere; JSON output shapes are stable.
 
@@ -114,6 +116,30 @@ stamps read by `latestStamps` / `selectStaleWork`). `parseCsv` is the
 dependency-free CSV intake; the Apollo client (`createApolloClient`,
 `pullApolloRecords`, 429-aware with `Retry-After`) is the first `api`-kind
 source.
+
+## Schedule
+
+The horizontal scheduler: a declarative schedule-entry store, a
+dependency-free 5-field cron parser, and the read/plan-side `SCHEDULABLE`
+allowlist. `validateSchedulableArgv` enforces the allowlist at `schedule add`
+time and re-checks it at run time (`tokenizeCommand` splits the quoted command
+string — tokenization, never shell). `apply` is schedulable only as
+`apply --plan-id <id>`, with the plan's `approved` status re-checked at every
+firing — an unapproved plan records a `plan_not_approved` no-op run
+(`ScheduleRunRecord.noopReason`) instead of executing.
+
+- Entries: `ScheduleEntry` (`ScheduleProvider` is `"local"` for now),
+  `scheduleId`, `ScheduleStore` / `createFileScheduleStore`.
+- Run history: `ScheduleRunRecord` (`ScheduleRunTrigger`: `cron` | `manual`),
+  `ScheduleRunStore` / `createFileScheduleRunStore`, with `schedulesPath` /
+  `scheduleRunsDir` for the profile-scoped file layout.
+- Cron: `parseCron` → `CronExpression`, `cronMatches`, `nextCronFiring`,
+  `expectedFirings`, `computeMissedFirings` (status and missed-firing
+  visibility — local cron has no catch-up).
+- Local provider: `schedule install` renders enabled entries into a
+  sentinel-managed crontab block — `crontabSentinels`, `renderManagedBlock`,
+  `replaceManagedBlock`, and `systemCrontabIo` behind the injectable
+  `CrontabIo` seam (tests never touch a real crontab).
 
 ## Market map
 

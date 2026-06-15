@@ -3,6 +3,10 @@
 Deterministic install-and-verify steps. Every command is non-interactive, every
 check has an expected output, and nothing here writes to a CRM.
 
+If your harness supports agent skills, `npx skills add fullstackgtm/core`
+installs the compact operating guide; this document remains the deterministic
+install-and-verify path.
+
 ## 1. Install
 
 ```bash
@@ -60,6 +64,11 @@ page texts — every span is checked character-for-character against the stored
 capture, and paraphrased quotes are rejected. In non-interactive contexts the
 CLI never prompts — it fails with this guidance.
 
+Apollo enrichment (`enrich append --source apollo`) needs `APOLLO_API_KEY` in
+the environment, or have the human run `echo "$KEY" | fullstackgtm login apollo`
+once. Without it, `enrich ingest <file> --source clay` still stages push-style
+data keyless.
+
 Provider prerequisites (what the human must create, and which scopes) are in
 the README's **"Connect your CRM"** section: HubSpot needs a private app with
 four `crm.objects.*.read` scopes (plus write scopes only for `apply`);
@@ -111,8 +120,12 @@ If the working directory's project already has the peers in its node_modules,
 the server resolves them from there (peer-dependency semantics) — so this
 works from inside existing projects too.
 
-Tools exposed over stdio: `fullstackgtm_audit` (read-only),
-`fullstackgtm_rules`, `fullstackgtm_apply` (requires `approvedOperationIds`).
+Tools exposed over stdio — read-only: `fullstackgtm_audit`,
+`fullstackgtm_rules`, `fullstackgtm_suggest`, `fullstackgtm_call_parse`,
+`fullstackgtm_resolve`, `fullstackgtm_market_worksheet`. Gated:
+`fullstackgtm_apply` (requires explicit `approvedOperationIds`),
+`fullstackgtm_market_observe` (every quoted span is verified against the
+stored captures before anything is appended).
 
 ## Troubleshooting
 

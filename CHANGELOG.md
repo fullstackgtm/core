@@ -5,6 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.25.1] — 2026-06-12
+
+Docs-sync release — no code changes.
+
+### Fixed
+
+- README, INSTALL_FOR_AGENTS.md, the agent skill, and docs/api.md corrected
+  against the shipped surface: the MCP tool list now enumerates all 8 tools
+  (read-only vs gated), the builtin rule count is 12, docs/api.md gains a
+  Schedule section and the `schedule` command in its CLI list, the README
+  cites the 612-run CRM-ops benchmark and the `diff --fail-on-new-findings`
+  CI gate, the bulk-update section covers `!~` / `--create-task` /
+  `--force-archive-duplicates`, and the skill's verb map completes the
+  `schedule`, `market`, and `plans` rows and adds `report`.
+- The 0.23.0 entry below is amended retroactively: `dedupe`, `reassign`,
+  `fix`, and `--set <field>=from:<sourceField>` shipped in 0.23.0 without a
+  changelog record.
+
 ## [0.25.0] — 2026-06-12
 
 ### Added
@@ -136,6 +154,29 @@ everything that shipped 0.19–0.23. (No code changes.)
   - Every `enrich` subcommand catches `--help`/`-h` before config load,
     credential resolution, or any network call. No scheduling/cron logic —
     that is the horizontal schedule layer's job (docs/schedule.md).
+- **Four task-shaped verbs** (entry added retroactively — these shipped in
+  0.23.0 without a changelog record). The 612-run benchmark's gated-agent
+  failures clustered into four missing verbs; all four compile to plans
+  through the existing plan → approve → apply gate — nothing writes directly.
+  - `dedupe <account|contact|deal> --key <domain|email|name>` — duplicate
+    groups by normalized identity key, one `merge_records` operation per
+    group with a deterministic survivor (`richest` = most populated data
+    fields, ties to lowest id; `oldest` = lowest id). High risk, approval
+    required; merges are irreversible on apply.
+  - `reassign --from <ownerId> --to <ownerId>` — the ownership-handoff
+    playbook: one bulk-update-style plan per object type, extra `--where`
+    scoping account-lifted for deals/contacts, `--except-deal-stage`
+    excluding the stage AND records whose account has an open deal in it —
+    re-verified per record at apply time.
+  - `fix --rule <id>` — one-shot composite: audit one rule → save → suggest
+    → approve only suggestion-backed values at the confidence bar → apply
+    (`--yes` required), with a stage-by-stage summary.
+  - `bulk-update --set <field>=from:<sourceField>` — per-record derived
+    values resolved from the filter view (relational sources like
+    `account.ownerId` included); empty-source records are skipped and
+    counted, never guessed. Plus the `--archive` duplicate guard: archiving
+    a record that shares its identity key with another is refused and
+    pointed at `dedupe`, overridable with `--force-archive-duplicates`.
 
 ## [0.22.0] — 2026-06-12
 
