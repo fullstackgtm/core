@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { platform } from "node:process";
@@ -13,6 +13,7 @@ import {
   mergeSnapshots,
   storeCredential,
   getCredential,
+  deleteCredential,
   credentialsPath,
   verifyApprovalDigests,
   type CanonicalGtmSnapshot,
@@ -684,4 +685,71 @@ test("audit-log: the chain head is signed with the install key and a foreign/edi
     // Forge the signature → caught.
     const forged = { ...log, signature: "deadbeef".repeat(8) };
     assert.equal(verifyAuditLog(forged).ok, false);
+  }));
+
+// ===========================================================================
+// 0.28.0 — Connectors, credentials & supply chain
+// ===========================================================================
+
+test("broker --via must be https (localhost http allowed for dev; other schemes refused)", async () => {
+  const { assertSecureBrokerUrl } = await import("../src/cli.ts");
+  assert.equal(assertSecureBrokerUrl("https://gtm.yourco.com").origin, "https://gtm.yourco.com");
+  assert.doesNotThrow(() => assertSecureBrokerUrl("http://localhost:3000"));
+  assert.throws(() => assertSecureBrokerUrl("http://gtm.attacker.com"), /must use https/);
+  assert.throws(() => assertSecureBrokerUrl("ftp://x"), /must use https|full URL/);
+});
+
+test("credential store: with FSGTM_KEYCHAIN=1 secrets go to the OS keychain, not a plaintext file", () =>
+  withTempHomeAsync(async () => {
+    const keychain = await import("../src/keychain.ts");
+    const vault = new Map<string, string>();
+    keychain.setKeychainBackendForTests({
+      name: "mock",
+      get: (a) => vault.get(a) ?? null,
+      set: (a, s) => void vault.set(a, s),
+      delete: (a) => void vault.delete(a),
+    });
+    const prevFlag = process.env.FSGTM_KEYCHAIN;
+    process.env.FSGTM_KEYCHAIN = "1";
+    try {
+      storeCredential("hubspot", { kind: "private_app", accessToken: "pat-keychain", createdAt: "t", updatedAt: "t" } as never);
+      // The secret round-trips via the keychain backend...
+      assert.equal(getCredential("hubspot")?.accessToken, "pat-keychain");
+      assert.equal(vault.size, 1, "the blob was written to the keychain");
+      // ...and NO plaintext credentials.json was written.
+      assert.equal(existsSync(credentialsPath()), false, "no plaintext credential file on disk");
+      // delete clears the keychain entry.
+      assert.equal(deleteCredential("hubspot"), true);
+      assert.equal(vault.size, 0);
+      assert.equal(getCredential("hubspot"), null);
+    } finally {
+      if (prevFlag === undefined) delete process.env.FSGTM_KEYCHAIN;
+      else process.env.FSGTM_KEYCHAIN = prevFlag;
+      keychain.setKeychainBackendForTests(undefined);
+    }
+  }));
+
+test("enabling keychain migrates an existing plaintext credentials.json into the keychain and removes it", () =>
+  withTempHomeAsync(async () => {
+    const keychain = await import("../src/keychain.ts");
+    // 1. Write a credential with keychain OFF (plaintext file on disk).
+    storeCredential("hubspot", { kind: "private_app", accessToken: "pat-legacy", createdAt: "t", updatedAt: "t" } as never);
+    assert.equal(existsSync(credentialsPath()), true, "plaintext file exists before migration");
+
+    // 2. Turn keychain ON and read — should migrate, then remove the file.
+    const vault = new Map<string, string>();
+    keychain.setKeychainBackendForTests({
+      name: "mock", get: (a) => vault.get(a) ?? null, set: (a, s) => void vault.set(a, s), delete: (a) => void vault.delete(a),
+    });
+    const prevFlag = process.env.FSGTM_KEYCHAIN;
+    process.env.FSGTM_KEYCHAIN = "1";
+    try {
+      assert.equal(getCredential("hubspot")?.accessToken, "pat-legacy", "credential still readable after migration");
+      assert.equal(existsSync(credentialsPath()), false, "plaintext file removed after migration");
+      assert.equal(vault.size, 1, "credential now lives in the keychain");
+    } finally {
+      if (prevFlag === undefined) delete process.env.FSGTM_KEYCHAIN;
+      else process.env.FSGTM_KEYCHAIN = prevFlag;
+      keychain.setKeychainBackendForTests(undefined);
+    }
   }));

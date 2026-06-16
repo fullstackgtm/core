@@ -5,6 +5,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.28.0] — 2026-06-16
+
+Connectors, credentials & supply chain — the last of the hardening train.
+Each security change was re-attacked; the keychain and supply-chain gates each
+took two rounds (the re-attack found the stale-plaintext-on-migration gap and
+the orphan-dist gap that round 1 left open).
+
+### Added
+
+- **Opt-in OS-keychain credential storage** (`FSGTM_KEYCHAIN=1`). The credential
+  blob is stored in the macOS Keychain (`security`) or Linux libsecret
+  (`secret-tool`) instead of a 0600 file — no native dependency. Enabling it on
+  an existing install migrates `credentials.json` into the keychain and removes
+  the plaintext file. Default (unset) is unchanged: the 0600 file. macOS caveat
+  (transient argv exposure during the keychain write) documented in SECURITY.md.
+
+### Security
+
+- **Broker URL must be https.** `login --via` and the token-mint path refuse a
+  cleartext/non-https broker (localhost dev excepted), and the device
+  verification URL is only auto-opened when it shares the `--via` origin — so a
+  long-lived pairing bearer and minted live-CRM tokens can't go over cleartext
+  or to an attacker-redirected URL.
+- **Supply-chain: published dist is provably from source.** `npm run build` now
+  cleans first; release rebuilds from source and refuses to publish if the
+  committed `dist/` doesn't match (catching a poisoned or *orphaned* dist file),
+  and a CI `dist-integrity` job enforces the same on every push — protecting
+  `npm install github:` consumers who run the committed dist unbuilt.
+- npx peer resolution from the current directory is now logged (running the MCP
+  server in an untrusted directory could otherwise silently load a peer from it).
+
+### Changed
+
+- **Salesforce merge is documented as unsupported**, with a connector
+  capability matrix in the README — no REST merge exists (SOAP/Apex only), so
+  `merge_records` is refused honestly; deduplicate in the UI or archive the
+  non-survivors. No silent half-merge, no demo surprise.
+
 ## [0.27.0] — 2026-06-16
 
 Trust, compliance & transparency — the artifacts a skeptical buyer's security

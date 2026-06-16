@@ -24,7 +24,20 @@ environment variable or stdin only, and are stored `0600` under a `0700` home
 (`$FSGTM_HOME`, default `~/.fullstackgtm`), re-tightened on read. This is the
 same custody model as the `gcloud`/`aws` CLIs. The hosted broker
 (`login --via`) exists so a team can connect a CRM once, server-side, and hand
-laptops only a revocable pairing token instead of a long-lived super-admin key.
+laptops only a revocable pairing token instead of a long-lived super-admin key;
+the broker URL must be https (cleartext is refused except for localhost dev).
+
+**OS keychain (opt-in).** Set `FSGTM_KEYCHAIN=1` to store the credential blob
+in the OS secret store instead of a plaintext file — macOS Keychain (via
+`security`) or Linux libsecret (via `secret-tool`); no native dependency. When
+enabled, a pre-existing `credentials.json` is migrated into the keychain and the
+plaintext file is removed, so a cloned home or restored backup finds no token at
+rest. Caveat: on macOS, `security add-generic-password` only accepts the secret
+via an argv flag, so it is briefly visible to a same-user `ps` during the write
+— a transient exposure strictly smaller than a persistent plaintext file, but a
+real one (Linux `secret-tool` reads the secret from stdin, with no such window).
+Backups or clones taken *before* enabling keychain already captured the file;
+rotate those credentials if that is a concern.
 
 **Writes are approval-gated.** Reads are safe by default. Every change is a
 typed patch operation in a dry-run plan that a human must approve before

@@ -37,6 +37,19 @@ jobs:
       - name: Test
         run: npm test
 
+      # Publish from a fresh build, never the committed dist — the npm tarball is
+      # then provably from source even if the committed dist were tampered.
+      - name: Build from source
+        run: npm run build
+
+      - name: Verify committed dist matches the fresh build (supply-chain integrity)
+        run: |
+          if ! git diff --quiet -- dist; then
+            echo "::error::Committed dist/ does not match a fresh build from src/ — refusing to publish. Rebuild and recommit, or investigate tampering." >&2
+            git diff --stat -- dist
+            exit 1
+          fi
+
       - name: Verify tag matches package version
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")

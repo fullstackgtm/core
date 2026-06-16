@@ -2948,7 +2948,31 @@ function rejectArgvSecret(args: string[], ...flags: string[]) {
   }
 }
 
+/**
+ * The broker channel carries a long-lived pairing bearer and receives freshly
+ * minted live-CRM tokens, so it must be TLS unless it's an explicit localhost
+ * dev target. Refuse http:// (and non-http schemes) otherwise — single-quote
+ * shell escaping does nothing for a token sent in cleartext.
+ */
+export function assertSecureBrokerUrl(raw: string): URL {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`--via must be a full URL (e.g. https://gtm.yourco.com), got "${raw}".`);
+  }
+  const isLocalhost =
+    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1" || url.hostname === "[::1]";
+  if (url.protocol === "https:") return url;
+  if (url.protocol === "http:" && isLocalhost) return url; // local dev only
+  throw new Error(
+    `Refusing to pair over ${url.protocol}//${url.host}: the broker exchanges a long-lived token and mints live CRM ` +
+      "credentials, so it must use https (http is allowed only for localhost dev).",
+  );
+}
+
 async function brokerLogin(baseUrl: string) {
+  const viaUrl = assertSecureBrokerUrl(baseUrl);
   const base = baseUrl.replace(/\/$/, "");
   const os = await import("node:os");
   // Self-reported, shown to the approver so they can recognize this request
@@ -2971,10 +2995,22 @@ async function brokerLogin(baseUrl: string) {
     );
   }
   const start = await startResponse.json();
+  // Only auto-open a verification URL that belongs to the --via origin the user
+  // typed — a malicious/typo'd deployment cannot redirect the browser elsewhere.
+  let sameOrigin = false;
+  try {
+    sameOrigin = new URL(start.verificationUrl).origin === viaUrl.origin;
+  } catch {
+    sameOrigin = false;
+  }
   console.error(
     `\nPairing code: ${start.userCode}\n\nApprove this CLI ("${requesterLabel}") in your dashboard:\n\n  ${start.verificationUrl}\n`,
   );
-  void openInBrowser(start.verificationUrl);
+  if (sameOrigin) {
+    void openInBrowser(start.verificationUrl);
+  } else {
+    console.error(`(Not auto-opening: the verification URL is not on ${viaUrl.origin}. Open it manually only if you trust it.)`);
+  }
 
   const deadline = Date.now() + (start.expiresInSeconds ?? 600) * 1000;
   const intervalMs = Math.max(0, (start.intervalSeconds ?? 3) * 1000);
