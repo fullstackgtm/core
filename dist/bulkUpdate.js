@@ -27,6 +27,7 @@
  * `account.ownerId`, `account.contactCount`; accounts get `contactCount`
  * and `openDealCount`.
  */
+import { recoverableFields } from "./dedupe.js";
 import { normalizeDomain } from "./merge.js";
 import { stableHash } from "./rules.js";
 const FIELD_PATTERN = "[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z][a-zA-Z0-9_]*)?";
@@ -319,7 +320,11 @@ export function buildBulkUpdatePlan(snapshot, options) {
                 beforeValue: null,
                 afterValue: null,
                 riskLevel: "high",
-                rollback: "Archived records can be restored from the provider's recycle bin within its retention window.",
+                // Carry the human's explicit force decision to the apply-time guard, and
+                // snapshot the record so it can be recreated if the archive was wrong.
+                ...(options.forceArchiveDuplicates ? { forceArchiveDuplicate: true } : {}),
+                recoverySnapshot: [recoverableFields(record)],
+                rollback: "Archived records can be restored from the provider's recycle bin within its retention window; recoverySnapshot also retains the field values.",
             });
             continue;
         }

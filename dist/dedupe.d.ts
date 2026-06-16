@@ -9,6 +9,12 @@ export type DedupeOptions = {
     /** refuse to build plans larger than this (default 500 operations) */
     maxOperations?: number;
 };
+/**
+ * The subset of a record worth keeping as a merge-recovery artifact: its id (to
+ * reference) plus every populated data field, dropping bulky/plumbing fields
+ * (raw, identities, provenance) that aren't needed to recreate it by hand.
+ */
+export declare function recoverableFields(record: Record<string, unknown>): Record<string, unknown>;
 /** Normalize a record's identity key; undefined when the field is empty. */
 export declare function dedupeKey(record: Record<string, unknown>, key: DedupeOptions["key"]): string | undefined;
 export declare function buildDedupePlan(snapshot: CanonicalGtmSnapshot, options: DedupeOptions): PatchPlan;

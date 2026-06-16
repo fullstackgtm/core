@@ -61,6 +61,10 @@ export function validateSchedulableArgv(argv) {
             throw new Error("A scheduled apply cannot take --plan/--approve — file-based approval would bypass the " +
                 "plan store's approval state. Use `apply --plan-id <id>` and approve via `plans approve`.");
         }
+        if (argv.includes("--value")) {
+            throw new Error("A scheduled apply cannot take --value — an unattended run must write exactly the values " +
+                "signed at approval. Set the value with `plans approve --value <op>=<v>` and re-approve.");
+        }
         return;
     }
     if (!Object.hasOwn(SCHEDULABLE, head)) {

@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { credentialsDir, ensureSecureHomeDir, writeSecureFile } from "./credentials.ts";
+import { computeApprovalDigests, loadOrCreateSigningKey } from "./integrity.ts";
 import type { ApprovalStatus, PatchPlan, PatchPlanRun } from "./types.ts";
 
 /**
@@ -16,6 +17,12 @@ export type StoredPlan = {
   status: ApprovalStatus;
   approvedOperationIds: string[];
   valueOverrides: Record<string, unknown>;
+  /**
+   * HMAC of each approved operation's content at approval time (see
+   * integrity.ts). Apply re-verifies these so a post-approval edit to the plan
+   * file is caught instead of written. Absent on plans approved before 0.26.0.
+   */
+  approvalDigests?: Record<string, string>;
   runs: PatchPlanRun[];
   createdAt: string;
   updatedAt: string;
@@ -125,13 +132,25 @@ export function createFilePlanStore(directory?: string): PlanStore {
           throw new Error(`Plan ${planId} has no operation ${operationId}.`);
         }
       }
+      const approvedOperationIds = Array.from(
+        new Set([...stored.approvedOperationIds, ...operationIds]),
+      );
+      const mergedOverrides = { ...stored.valueOverrides, ...valueOverrides };
+      // Bind the approval to the operation content so apply can detect a
+      // post-approval edit. Recompute over ALL approved ops (a later approve
+      // call may add overrides that change an earlier op's resolved value).
+      const approvalDigests = computeApprovalDigests(
+        stored.plan.operations,
+        approvedOperationIds,
+        mergedOverrides,
+        loadOrCreateSigningKey(),
+      );
       return write({
         ...stored,
         status: "approved",
-        approvedOperationIds: Array.from(
-          new Set([...stored.approvedOperationIds, ...operationIds]),
-        ),
-        valueOverrides: { ...stored.valueOverrides, ...valueOverrides },
+        approvedOperationIds,
+        valueOverrides: mergedOverrides,
+        approvalDigests,
       });
     },
 

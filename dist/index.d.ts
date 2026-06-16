@@ -16,6 +16,7 @@ export { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, 
 export { diffFindings, diffSnapshots, diffToMarkdown, type CollectionDiff, type FieldChange, type FindingsDrift, type RecordChange, type SnapshotDiff, } from "./diff.ts";
 export { mergeSnapshots, type MergeConflict, type MergeMatch, type MergeReport, type MergeSuggestion, } from "./merge.ts";
 export { createFilePlanStore, type PlanStore, type StoredPlan } from "./planStore.ts";
+export { computeApprovalDigests, loadOrCreateSigningKey, loadSigningKey, signApproval, verifyApprovalDigests, type ApprovalVerification, } from "./integrity.ts";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
 export { auditReportToHtml, auditReportToMarkdown, type ReportOptions } from "./report.ts";
 export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, normalizeFieldMappings, readMappedValue, type CrmObjectType, type FieldMappings, } from "./mappings.ts";

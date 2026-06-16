@@ -1,5 +1,7 @@
+import { dedupeKey } from "./dedupe.ts";
 import { requiresHumanInput } from "./rules.ts";
 import type {
+  CanonicalGtmSnapshot,
   GtmConnector,
   PatchOperation,
   PatchOperationResult,
@@ -7,6 +9,75 @@ import type {
   PatchPlanRun,
   PatchPlanRunStatus,
 } from "./types.ts";
+
+const IRREVERSIBLE_OPERATIONS = new Set(["merge_records", "archive_record"]);
+const IDENTITY_KEY_BY_TYPE: Partial<Record<string, "domain" | "email">> = {
+  account: "domain",
+  contact: "email",
+};
+
+/** snapshot collection for an object type */
+function collectionFor(objectType: string): "accounts" | "contacts" | "deals" | null {
+  if (objectType === "account") return "accounts";
+  if (objectType === "contact") return "contacts";
+  if (objectType === "deal") return "deals";
+  return null;
+}
+
+/**
+ * Drift/safety check for the two IRREVERSIBLE operations against a fresh
+ * snapshot. Returns a conflict detail string, or null if the op is safe to
+ * apply. These operations get NO field compare-and-set (there is no single
+ * field to compare), so this snapshot check is their only guard.
+ */
+function checkIrreversibleOp(operation: PatchOperation, snapshot: CanonicalGtmSnapshot): string | null {
+  const collection = collectionFor(operation.objectType);
+  if (!collection) return null;
+  const records = snapshot[collection] as Array<Record<string, unknown>>;
+  const byId = (id: string) => records.find((record) => String(record.id) === id);
+
+  if (operation.operation === "archive_record") {
+    if (!byId(operation.objectId)) {
+      return `Record ${operation.objectType}/${operation.objectId} no longer exists (already archived or merged). Re-plan against current data.`;
+    }
+    // Archiving a duplicate discards data a merge would keep — refuse unless the
+    // human explicitly forced it. This catches every archive_record path (agent,
+    // hand-edited plan, audit), not just `bulk-update --archive`.
+    if (!operation.forceArchiveDuplicate) {
+      const keyName = IDENTITY_KEY_BY_TYPE[operation.objectType];
+      if (keyName) {
+        const target = byId(operation.objectId)!;
+        const key = dedupeKey(target, keyName);
+        if (key) {
+          const sharers = records.filter(
+            (record) => String(record.id) !== operation.objectId && dedupeKey(record, keyName) === key,
+          );
+          if (sharers.length > 0) {
+            return (
+              `Refusing to archive ${operation.objectType}/${operation.objectId}: it shares ${keyName} "${key}" with ` +
+              `${sharers.length} other record(s) — that's a duplicate, and archiving discards its data where merging keeps it. ` +
+              `Merge with \`fullstackgtm dedupe ${operation.objectType} --key ${keyName}\` instead, or rebuild the op with --force-archive-duplicates.`
+            );
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  if (operation.operation === "merge_records") {
+    if (!byId(operation.objectId)) {
+      return `Merge survivor ${operation.objectType}/${operation.objectId} no longer exists (archived or merged away since the plan was built). Re-plan — merges are irreversible.`;
+    }
+    const groupIds = Array.isArray(operation.beforeValue) ? (operation.beforeValue as unknown[]).map(String) : [];
+    const losersStillPresent = groupIds.filter((id) => id !== operation.objectId && byId(id));
+    if (groupIds.length > 0 && losersStillPresent.length === 0) {
+      return `Every record to merge into ${operation.objectType}/${operation.objectId} is already gone (merge already applied?). Nothing to do — re-plan if duplicates remain.`;
+    }
+    return null;
+  }
+  return null;
+}
 
 export type ApplyPatchPlanOptions = {
   /**
@@ -79,10 +150,20 @@ export async function applyPatchPlan(
   // closed — but it can be shrunk: re-run the snapshot checks after the
   // first write and every `recheckEvery` writes, conflicting out any
   // operation whose record went stale mid-run.
+  // Irreversible ops (merge/archive) need a fresh snapshot too — it is their
+  // only drift/safety guard (no field to compare-and-set). Respect a caller's
+  // explicit checkConflicts:false opt-out (a stub/known-stale snapshot).
+  const hasIrreversibleApproved =
+    checkConflicts &&
+    plan.operations.some(
+      (operation) => approved.has(operation.id) && IRREVERSIBLE_OPERATIONS.has(operation.operation),
+    );
   const needsSnapshot =
-    ((plan.guards && plan.guards.length > 0) || plan.filter) && connector.fetchSnapshot;
+    ((plan.guards && plan.guards.length > 0) || plan.filter || hasIrreversibleApproved) &&
+    connector.fetchSnapshot;
   const recheckEvery = Math.max(1, options.recheckEvery ?? 25);
   const staleIds = new Set<string>();
+  const irreversibleStale = new Map<string, string>();
   let guardFailure: string | null = null;
   const refreshSnapshotChecks = async (): Promise<void> => {
     if (!needsSnapshot) return;
@@ -93,6 +174,14 @@ export async function applyPatchPlan(
       staleIds.clear();
       for (const operation of plan.operations) {
         if (!stillEligible.has(operation.objectId)) staleIds.add(operation.objectId);
+      }
+    }
+    irreversibleStale.clear();
+    if (checkConflicts) {
+      for (const operation of plan.operations) {
+        if (!approved.has(operation.id) || !IRREVERSIBLE_OPERATIONS.has(operation.operation)) continue;
+        const detail = checkIrreversibleOp(operation, liveSnapshot);
+        if (detail) irreversibleStale.set(operation.id, detail);
       }
     }
     for (const guard of plan.guards ?? []) {
@@ -229,6 +318,12 @@ export async function applyPatchPlan(
         status: "conflict",
         detail: `Record ${operation.objectType}/${operation.objectId} no longer matches the plan's filter [${plan.filter!.where.join(" AND ")}] (changed mid-apply). Not applied — re-plan against current data.`,
       });
+      if (operation.groupId) poisonedGroups.add(operation.groupId);
+      continue;
+    }
+    const irreversibleConflict = irreversibleStale.get(operation.id);
+    if (irreversibleConflict) {
+      results.push({ operationId: operation.id, status: "conflict", detail: irreversibleConflict });
       if (operation.groupId) poisonedGroups.add(operation.groupId);
       continue;
     }
