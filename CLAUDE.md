@@ -14,9 +14,9 @@ Convex guidance does not apply here).
   `node --experimental-strip-types --test tests/fullstackgtm*.test.ts` (Node ≥ 22.6).
   `npm test` *inside this dir* intentionally fails with a pointer (tests live at
   the root, not here). Add tests in `tests/fullstackgtm*.test.ts`.
-- **Boundary & releases:** [CONTRIBUTING.md](./CONTRIBUTING.md) and
-  [docs/open-core-boundary.md](../../docs/open-core-boundary.md) — monorepo is
+- **Boundary & releases:** [CONTRIBUTING.md](./CONTRIBUTING.md) — the monorepo is
   the source of truth; `scripts/sync-oss.sh` mirrors to `fullstackgtm/core` + npm.
+  (Maintainers: full boundary policy in `docs/open-core-boundary.md` in the monorepo.)
 - **Keep it zero-dependency.** No runtime deps (MCP `@modelcontextprotocol/sdk`
   + `zod` are optional peers). Don't weaken the safety invariants
   (read-only audits, approval-gated + HMAC-signed writes, CAS, verbatim

@@ -16,11 +16,12 @@ github:fullstackgtm/core` works without a build step).
 - **Issues / PRs:** open them on the public mirror (`fullstackgtm/core`). A
   maintainer applies accepted changes in the monorepo with credit
   (`Co-authored-by`); they land in the next mirrored release.
-- The open/closed boundary is defined in [docs/open-core-boundary.md](../../docs/open-core-boundary.md)
-  (monorepo) — client tools, the canonical model, rules, the plan/apply
-  contract, connectors, CLI, and MCP server are open; hosted-app server code is
-  not. **Features never move from open to closed**, and new work here must run
-  standalone (no hosted deployment required).
+- The open/closed boundary: client tools, the canonical model, rules, the
+  plan/apply contract, connectors, CLI, and MCP server are open; the hosted Full
+  Stack GTM application's server code is not. **Features never move from open to
+  closed**, and new work here must run standalone (no hosted deployment
+  required). (Maintainers: the full boundary policy lives in
+  `docs/open-core-boundary.md` in the development monorepo.)
 
 ## Architecture
 
@@ -72,9 +73,8 @@ the spec) and run the security suite (`fullstackgtmSecurity.test.ts`).
 
 ## Releasing (maintainers)
 
-The full ritual, with rationale, is in
-[docs/open-core-boundary.md](../../docs/open-core-boundary.md). In short, from
-the monorepo:
+The steps are below (deeper rationale lives in `docs/open-core-boundary.md` in
+the development monorepo). From the monorepo:
 
 1. Bump `packages/fullstackgtm/package.json` version + add a `CHANGELOG.md`
    entry; merge to `main`.
