@@ -5,6 +5,51 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.27.0] — 2026-06-16
+
+Trust, compliance & transparency — the artifacts a skeptical buyer's security
+and procurement review asks for, plus an exportable audit trail and two
+content-grounding fixes. Security-relevant additions were re-attacked before
+release (the audit-log signing and the transcript gate each took two rounds).
+
+### Added
+
+- **`audit-log export` / `audit-log verify`** — a tamper-evident record of every
+  apply run, flattened across all plans into a hash chain, with the head
+  HMAC-signed by the per-install key. Exports are always signed; `verify`
+  recomputes the chain and refuses an edited, reordered, truncated, or
+  signature-stripped log (and reports it as unverifiable on a machine without
+  the key). The change-management/SIEM artifact the prior audit flagged as
+  missing.
+- **`SECURITY.md`** — disclosure address (security@fullstackgtm.com) and the
+  full trust model (credential custody, approval gating, approval-integrity
+  signing, scheduling, untrusted-input handling, auditability).
+- **`DATA-FLOWS.md`** — exactly what data leaves the machine, to which endpoint,
+  for which command, and under whose account; the "CLI is BYO-key, no
+  vendor data path, no sub-processors" statement procurement needs; and how to
+  run the whole loop with zero third-party calls.
+- **Company-of-record** — `package.json` author and a `NOTICE` file now name
+  Full Stack GTM with a contact; LICENSE unchanged (Apache-2.0).
+
+### Security
+
+- **Call-transcript insight grounding.** LLM-extracted call insights are now
+  mechanically verified: the evidence quote must be a non-trivial verbatim span
+  of the transcript, and for `next_step` (the only insight whose text is written
+  to the CRM) the written action itself must be grounded in that quote — every
+  number/amount must appear in the quote, and the action's distinctive terms
+  must overlap it. This closes the prompt-injection path where a transcript
+  fabricates a malicious next step accompanied by an innocuous real quote. (This
+  is defense-in-depth on a human-approved path; a determined paraphrase-style
+  injection still surfaces to the approver as the proposed value.)
+
+### Changed
+
+- README now states the design as **deterministic apply, governed suggest** and
+  cites the current 1,020-run / five-model benchmark (was a stale 612-run line);
+  a CI guard fails if the documented synthetic-scenario count drifts from the
+  code.
+
 ## [0.26.0] — 2026-06-15
 
 Write-path integrity — the "no write without approval" guarantee now binds to

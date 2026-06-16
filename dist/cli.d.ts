@@ -33,7 +33,7 @@ export declare function doctorReport(env?: Record<string, string | undefined>): 
     llm: {
         configured: boolean;
         provider: LlmProvider;
-        source: "env" | "stored";
+        source: "stored" | "env";
         detail?: undefined;
     } | {
         configured: boolean;

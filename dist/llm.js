@@ -70,8 +70,23 @@ export async function extractInsightsLlm(transcript, options) {
     const text = truncateTranscript(transcript);
     const prompt = `${EXTRACT_INSTRUCTIONS}\n\n${options.title ? `Call: ${options.title}\n` : ""}Transcript:\n${text}`;
     const result = (await forcedToolCall(prompt, "extract_call_insights", EXTRACT_SCHEMA, model, options));
+    const normalizedTranscript = normalizeSpan(text);
     const insights = (result.insights ?? [])
         .filter((insight) => INSIGHT_TYPES.includes(insight.type))
+        // Mechanical verbatim gate (mirrors market classify): the prompt asks for a
+        // verbatim quote, but a prompt-injected or hallucinated transcript could
+        // fabricate a grounded-looking insight that drives a governed writeback.
+        // (1) The evidence quote must be a non-trivial verbatim span of the transcript.
+        .filter((insight) => {
+        const quote = normalizeSpan(insight.evidence ?? "");
+        return quote.length >= 12 && normalizedTranscript.includes(quote);
+    })
+        // (2) For next_step — the only insight type whose `text` is WRITTEN to the CRM
+        // (set_field nextStep / create_task body) — the written action must itself be
+        // grounded in the verified quote, not just accompanied by an innocuous one.
+        // This closes the decoupling attack: a prompt-injected transcript that emits a
+        // malicious `text` while quoting an unrelated real span no longer survives.
+        .filter((insight) => insight.type !== "next_step" || actionGroundedInEvidence(insight.text, insight.evidence ?? ""))
         .map((insight) => ({
         ...insight,
         title: insight.type.replace(/_/g, " "),
@@ -80,6 +95,39 @@ export async function extractInsightsLlm(transcript, options) {
     }))
         .sort((a, b) => b.importance - a.importance || b.confidence - a.confidence);
     return { insights, model };
+}
+/** Whitespace/punctuation-spacing-normalized match (same rule as market spans). */
+function normalizeSpan(value) {
+    return value
+        .replace(/\s+([.,;:!?])/g, "$1")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+}
+/**
+ * Is the written next-step action grounded in its (already transcript-verified)
+ * evidence quote? A legitimate next step paraphrases the quote, so it reuses the
+ * quote's salient terms; a prompt-injected action ("wire $50,000 to account
+ * 1234") quoting an unrelated innocuous span does not. Two checks: every
+ * number/amount in the action must appear in the evidence (defeats the
+ * financial-exfil class cleanly), and a meaningful share of the action's
+ * distinctive (≥4-char) words must appear in the evidence.
+ */
+function actionGroundedInEvidence(text, evidence) {
+    const action = normalizeSpan(text);
+    const quote = normalizeSpan(evidence);
+    if (!action)
+        return false;
+    const numbers = action.match(/\d[\d,.]*/g) ?? [];
+    for (const n of numbers) {
+        if (!quote.includes(n))
+            return false; // an ungrounded amount/account/id is a red flag
+    }
+    const distinctive = [...new Set(action.split(/[^a-z0-9$]+/).filter((token) => token.length >= 4))];
+    if (distinctive.length === 0)
+        return true; // nothing distinctive to ground (a short generic step)
+    const grounded = distinctive.filter((token) => quote.includes(token)).length;
+    return grounded / distinctive.length >= 0.4;
 }
 export const DEFAULT_RUBRIC = {
     scale: 5,

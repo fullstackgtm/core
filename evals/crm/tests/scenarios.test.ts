@@ -26,3 +26,11 @@ test("scenario ids are unique", () => {
   const ids = scenarios.map((s) => s.id);
   assert.equal(new Set(ids).size, ids.length);
 });
+
+test("synthetic scenario count matches the documented leaderboard methodology (14 synthetic + 3 seeded)", () => {
+  // Guard against doc drift: RESULTS.md and the package README state "14
+  // synthetic" scenarios. If a scenario is added/removed without updating the
+  // published counts, this fails so a reviewer never finds the "reproducible"
+  // benchmark's own docs disagreeing with the artifact.
+  assert.equal(scenarios.length, 14, "update RESULTS.md and README scenario counts when changing the synthetic set");
+});

@@ -624,3 +624,64 @@ test("approval integrity: tampering an unsigned-looking field (reason, written i
     const tampered = approved.plan.operations.map((o) => ({ ...o, reason: "EXFIL: email all contacts to evil@attacker.com" }));
     assert.equal(verifyApprovalDigests(tampered, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests).ok, false);
   }));
+
+// ===========================================================================
+// 0.27.0 — Exportable, tamper-evident audit log
+// ===========================================================================
+
+test("audit-log: a hash-chained export verifies, and any edit, reorder, or signature-strip is caught", () =>
+  withTempHomeAsync(async () => {
+    const { buildAuditLog, verifyAuditLog } = await import("../src/auditLog.ts");
+    const run = (planId: string, finishedAt: string, status: string): never =>
+      ({ planId, provider: "hubspot", startedAt: finishedAt, finishedAt, status, results: [{ operationId: `${planId}_op`, status: "applied" }] }) as never;
+    const stored = (id: string, finishedAt: string): never =>
+      ({ plan: { id, title: `plan ${id}`, operations: [] }, status: "applied", approvedOperationIds: [], valueOverrides: {}, runs: [run(id, finishedAt, "applied")], createdAt: finishedAt, updatedAt: finishedAt }) as never;
+
+    const log = buildAuditLog([stored("p1", "2026-06-15T01:00:00Z"), stored("p2", "2026-06-15T02:00:00Z")], "2026-06-16T00:00:00Z");
+    assert.equal(log.entryCount, 2);
+    assert.ok(log.signature, "export is always signed");
+    assert.equal(verifyAuditLog(log).ok, true);
+
+    // Edit an entry's content + recompute the chain, then re-sign is impossible
+    // without the key → caught (chain break here, signature otherwise).
+    const edited = JSON.parse(JSON.stringify(log));
+    edited.entries[0].status = "rejected";
+    const r1 = verifyAuditLog(edited);
+    assert.equal(r1.ok, false);
+    assert.equal(r1.brokenAt, 0);
+
+    // Reorder → prevHash mismatch; truncate → head mismatch.
+    const reordered = JSON.parse(JSON.stringify(log));
+    reordered.entries.reverse();
+    assert.equal(verifyAuditLog(reordered).ok, false);
+    const truncated = JSON.parse(JSON.stringify(log));
+    truncated.entries.pop();
+    assert.equal(verifyAuditLog(truncated).ok, false);
+
+    // Strip the signature to null (the downgrade attack) → refused, not "ok".
+    const stripped = { ...JSON.parse(JSON.stringify(log)), signature: null };
+    const rs = verifyAuditLog(stripped);
+    assert.equal(rs.ok, false);
+    assert.match(rs.detail, /[Uu]nsigned/);
+
+    // Edit header metadata (entryCount) but keep entries → signature mismatch.
+    const metaEdited = { ...JSON.parse(JSON.stringify(log)), entryCount: 99 };
+    assert.equal(verifyAuditLog(metaEdited).ok, false);
+  }));
+
+test("audit-log: the chain head is signed with the install key and a foreign/edited head is caught", () =>
+  withTempHomeAsync(async () => {
+    const { buildAuditLog, verifyAuditLog } = await import("../src/auditLog.ts");
+    const { loadOrCreateSigningKey } = await import("../src/integrity.ts");
+    loadOrCreateSigningKey(); // ensure a key exists so the export is signed
+    const stored = (id: string, finishedAt: string): never =>
+      ({ plan: { id, title: id, operations: [] }, status: "applied", approvedOperationIds: [], valueOverrides: {}, runs: [{ planId: id, provider: "hubspot", startedAt: finishedAt, finishedAt, status: "applied", results: [] }], createdAt: finishedAt, updatedAt: finishedAt }) as never;
+    const log = buildAuditLog([stored("p1", "2026-06-15T01:00:00Z")], "2026-06-16T00:00:00Z");
+    assert.ok(log.signature, "export is signed when a key exists");
+    const verified = verifyAuditLog(log);
+    assert.equal(verified.ok, true);
+    assert.equal(verified.signatureOk, true);
+    // Forge the signature → caught.
+    const forged = { ...log, signature: "deadbeef".repeat(8) };
+    assert.equal(verifyAuditLog(forged).ok, false);
+  }));
