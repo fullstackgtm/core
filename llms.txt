@@ -61,7 +61,13 @@ Storage is profile-scoped under `<home>/market/<category>`. MCP:
 snapshot into a dry-run plan; the FULL filter is re-verified per record at
 apply time (plus mid-apply rechecks); equality filters double as
 preconditions, `--require`/`--guard` add explicit ones, `--max-operations`
-caps blast radius. `--set f=from:<source>` derives per-record values (empty
+caps blast radius. Filter operators: `=` `!=` `~` `!~` `:empty` `:notempty`,
+plus type-aware comparisons `<` `>` `<=` `>=` (`today` resolves to the policy
+date, e.g. `closeDate<today`; date fields compare as dates, numeric as
+numbers, unset/non-parseable values do not match). For date/count hygiene
+(past close dates, stale deals, missing accounts, duplicates) prefer the
+rule-backed `fix --rule <id>` — it encodes the date/open-deal logic
+deterministically; reach for bulk-update only when no rule covers the task. `--set f=from:<source>` derives per-record values (empty
 source = skip + count, never guess). `--archive` refuses records sharing an
 identity key — merge with `dedupe` instead. `dedupe <object> --key
 <domain|email|name>` = one merge_records op per duplicate group,

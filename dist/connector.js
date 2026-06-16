@@ -117,7 +117,11 @@ export async function applyPatchPlan(connector, plan, options) {
         const { evaluateGuard, eligibleIds } = await import("./bulkUpdate.js");
         const liveSnapshot = await connector.fetchSnapshot();
         if (plan.filter) {
-            const stillEligible = eligibleIds(liveSnapshot, plan.filter.objectType, plan.filter.where);
+            // Resolve the comparison `today` literal to the date the plan was built
+            // with (stored on plan.filter), so apply-time re-verification of a
+            // `closeDate<today`-style filter agrees with plan time. eligibleIds
+            // defaults to the system date when the plan predates comparison ops.
+            const stillEligible = eligibleIds(liveSnapshot, plan.filter.objectType, plan.filter.where, plan.filter.today);
             staleIds.clear();
             for (const operation of plan.operations) {
                 if (!stillEligible.has(operation.objectId))
@@ -135,7 +139,7 @@ export async function applyPatchPlan(connector, plan, options) {
             }
         }
         for (const guard of plan.guards ?? []) {
-            const failure = evaluateGuard(liveSnapshot, guard);
+            const failure = evaluateGuard(liveSnapshot, guard, plan.filter?.today);
             if (failure) {
                 guardFailure = failure;
                 return;

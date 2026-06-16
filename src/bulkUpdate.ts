@@ -18,8 +18,21 @@
  *   field=value     case-insensitive equality
  *   field!=value    case-insensitive inequality
  *   field~value     case-insensitive substring
+ *   field!~value    case-insensitive not-substring
  *   field:empty     unset or empty string
  *   field:notempty  set and non-empty
+ *   field<value     type-aware less-than (date or numeric)
+ *   field>value     type-aware greater-than
+ *   field<=value    type-aware less-than-or-equal
+ *   field>=value    type-aware greater-than-or-equal
+ *
+ * Comparison operators (`<` `>` `<=` `>=`) are type-aware, unlike the string
+ * operators above: if both the field value and the RHS parse as finite dates
+ * they compare as dates; else if both parse as finite numbers they compare
+ * numerically; otherwise the clause does not match (never throws at match
+ * time). The bare literal `today` on the RHS resolves to the policy/today date
+ * (`--today`, defaulting to the system date) and forces a date comparison —
+ * so `closeDate<today` is the canonical "past close date" filter.
  *
  * Fields are canonical (ownerId, stage, closeDate, amount, domain, name,
  * email, isClosed, accountId, …). Relational pseudo-fields are available in
@@ -72,16 +85,43 @@ export type BulkUpdateOptions = {
   reason?: string;
   /** refuse to build plans larger than this (default 500 operations) */
   maxOperations?: number;
+  /**
+   * Date the comparison `today` literal resolves to (ISO yyyy-mm-dd). Set from
+   * the policy/--today date at the CLI; defaults to the system date. Stored on
+   * plan.filter so apply-time filter re-verification resolves `today`
+   * identically to plan time.
+   */
+  today?: string;
 };
 
 type WhereClause = {
   field: string;
-  op: "eq" | "neq" | "contains" | "notcontains" | "empty" | "notempty";
+  op: "eq" | "neq" | "contains" | "notcontains" | "empty" | "notempty" | "lt" | "gt" | "lte" | "gte";
   value?: string;
   raw: string;
 };
 
 const FIELD_PATTERN = "[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z][a-zA-Z0-9_]*)?";
+
+/**
+ * Is a comparison RHS (a single `|`-alternative) authorable for comparison?
+ * Accept `today`, OR a plain number, OR a date-SHAPED string — using the exact
+ * same `isPlainNumber`/`isDateLike` predicates the match-time branch uses, so
+ * the parse-time authoring check and the runtime branch cannot diverge. The
+ * intentional asymmetry: parse-time validates one literal in isolation (EITHER
+ * number OR date is fine), whereas match-time's `compareValues` additionally
+ * requires the FIELD and the RHS to agree on type (BOTH number, or BOTH date).
+ * Requiring a date *shape* here (not bare `Date.parse`-finite) means a prose
+ * typo like `July 4` or a stray `<5` fails loudly at parse instead of silently
+ * matching nothing. `isDateLike`/`isPlainNumber` are hoisted function decls.
+ */
+function isComparableValue(rhs: string): boolean {
+  const trimmed = rhs.trim();
+  if (trimmed === "today") return true;
+  if (isPlainNumber(trimmed)) return true;
+  if (isDateLike(trimmed)) return true;
+  return false;
+}
 
 export function parseWhere(expr: string): WhereClause {
   const empty = expr.match(new RegExp(`^(${FIELD_PATTERN}):(empty|notempty)$`));
@@ -90,13 +130,43 @@ export function parseWhere(expr: string): WhereClause {
   if (neq) return { field: neq[1], op: "neq", value: neq[2], raw: expr };
   const notContains = expr.match(new RegExp(`^(${FIELD_PATTERN})!~(.*)$`));
   if (notContains) return { field: notContains[1], op: "notcontains", value: notContains[2], raw: expr };
+  // Comparison operators: two-char tokens (`<=`/`>=`) MUST be tried before the
+  // one-char ones (`<`/`>`) so a prefix isn't stolen (`field<=5` → lte, not
+  // lt + stray `=`). They slot in after `!=`/`!~` and before `~`/`=` (different
+  // lead chars, no collision). The RHS is validated at parse time: an
+  // un-comparable literal (neither today, number, nor date) is a static
+  // authoring error and throws here, so a typo never silently matches nothing.
+  const lte = expr.match(new RegExp(`^(${FIELD_PATTERN})<=(.*)$`));
+  if (lte) return assertComparable({ field: lte[1], op: "lte", value: lte[2], raw: expr });
+  const gte = expr.match(new RegExp(`^(${FIELD_PATTERN})>=(.*)$`));
+  if (gte) return assertComparable({ field: gte[1], op: "gte", value: gte[2], raw: expr });
+  const lt = expr.match(new RegExp(`^(${FIELD_PATTERN})<(.*)$`));
+  if (lt) return assertComparable({ field: lt[1], op: "lt", value: lt[2], raw: expr });
+  const gt = expr.match(new RegExp(`^(${FIELD_PATTERN})>(.*)$`));
+  if (gt) return assertComparable({ field: gt[1], op: "gt", value: gt[2], raw: expr });
   const contains = expr.match(new RegExp(`^(${FIELD_PATTERN})~(.*)$`));
   if (contains) return { field: contains[1], op: "contains", value: contains[2], raw: expr };
   const eq = expr.match(new RegExp(`^(${FIELD_PATTERN})=(.*)$`));
   if (eq) return { field: eq[1], op: "eq", value: eq[2], raw: expr };
   throw new Error(
-    `Cannot parse --where "${expr}". Use field=value, field!=value, field~substring, field!~substring, field:empty, or field:notempty.`,
+    `Cannot parse --where "${expr}". Use field=value, field!=value, field~substring, field!~substring, field:empty, field:notempty, field<value, field>value, field<=value, or field>=value.`,
   );
+}
+
+/**
+ * Parse-time validity for a comparison clause: every `|`-alternative of the
+ * RHS must be a comparable literal (today / number / date). An un-comparable
+ * value (e.g. `amount>`, `closeDate<garbage`) throws here — a comparison that
+ * can never coerce is an authoring error, not a silent empty match.
+ */
+function assertComparable(clause: WhereClause): WhereClause {
+  const alternatives = (clause.value ?? "").split("|");
+  if (alternatives.some((a) => !isComparableValue(a))) {
+    throw new Error(
+      `Cannot parse --where "${clause.raw}": the comparison value must be a number, an ISO date, or "today" (got "${clause.value ?? ""}").`,
+    );
+  }
+  return clause;
 }
 
 function fieldValue(view: Record<string, unknown>, field: string): string {
@@ -105,7 +175,60 @@ function fieldValue(view: Record<string, unknown>, field: string): string {
   return String(value);
 }
 
-function matches(view: Record<string, unknown>, clause: WhereClause): boolean {
+/** System date as ISO yyyy-mm-dd — the default `today` when none is threaded. */
+function systemToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** A non-empty trimmed string that parses as a finite JS number. */
+function isPlainNumber(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed !== "" && Number.isFinite(Number(trimmed));
+}
+
+/**
+ * "Looks like a date": Date.parse-finite AND not a plain number. The guard
+ * against plain numbers is essential — `Date.parse("5000")` is finite (it reads
+ * as the YEAR 5000), so without it `closeDate<5000` and `amount>2026-04-30`
+ * would silently take the date branch and produce wrong, broad matches. Pure
+ * numbers are numbers; only date-SHAPED strings (with `-`/`/`/`T`, like the
+ * canonical ISO `2026-04-30`) are dates. Mirrors the ISO-date assumption the
+ * past-close-date rule already makes (rules.ts compareDate).
+ */
+function isDateLike(value: string): boolean {
+  // Require an ISO-ish date separator (`-`/`/`/`T`/`:`) in addition to a finite
+  // Date.parse: excludes plain numbers (`Date.parse("5000")` = year 5000) AND
+  // locale-fragile prose (`Date.parse("July 4")` is finite but is not a date we
+  // want to accept). Canonical dates are ISO (`2026-04-30`), so this never
+  // rejects real data; it only rejects authoring typos.
+  return !isPlainNumber(value) && /[-/T:]/.test(value) && Number.isFinite(Date.parse(value));
+}
+
+/**
+ * Type-aware comparison for a single (un-lowercased) field value against one
+ * resolved RHS alternative. Date-first, then numeric; any non-coercible side
+ * (including empty/unset, type mismatch) yields null (caller → no match). Never
+ * throws. `today` is already resolved to a date string by the caller.
+ * Returns a<0 / 0 / a>0 in the chosen type's space, or null when not comparable.
+ */
+function compareValues(rawField: string, rhs: string): number | null {
+  if (rawField.trim() === "") return null; // empty/unset is "not comparable", never epoch-0
+  // Date comparison when BOTH sides are date-shaped (mirrors compareDate in rules.ts).
+  if (isDateLike(rawField) && isDateLike(rhs)) {
+    return Date.parse(rawField) - Date.parse(rhs);
+  }
+  // Numeric comparison when BOTH sides are plain finite numbers.
+  if (isPlainNumber(rawField) && isPlainNumber(rhs)) {
+    return Number(rawField) - Number(rhs);
+  }
+  return null; // type mismatch / non-parseable → no match (caller returns false)
+}
+
+/**
+ * `today` is threaded from the policy/--today date (default: system date), so
+ * plan-time and apply-time re-verification resolve the literal identically.
+ */
+function matches(view: Record<string, unknown>, clause: WhereClause, today: string): boolean {
   const actual = fieldValue(view, clause.field).toLowerCase();
   // `|` alternation: eq/contains match ANY alternative; neq/notcontains
   // must hold against ALL alternatives.
@@ -123,6 +246,34 @@ function matches(view: Record<string, unknown>, clause: WhereClause): boolean {
       return actual === "";
     case "notempty":
       return actual !== "";
+    // Comparison ops are type-aware and use the RAW (un-lowercased) field
+    // value, not `actual` — lowercasing an ISO date still parses, but the
+    // helper must read from fieldValue() directly (see §6.3 risk 2). `today`
+    // resolves to the threaded policy date. Alternation is OR for all four
+    // (`some`): each alternative is coerced independently; one that fails
+    // coercion contributes false.
+    case "lt":
+    case "gt":
+    case "lte":
+    case "gte": {
+      const rawField = fieldValue(view, clause.field);
+      const rawAlternatives = (clause.value ?? "").split("|");
+      return rawAlternatives.some((a) => {
+        const rhs = a.trim() === "today" ? today : a;
+        const cmp = compareValues(rawField, rhs);
+        if (cmp === null) return false;
+        switch (clause.op) {
+          case "lt":
+            return cmp < 0;
+          case "gt":
+            return cmp > 0;
+          case "lte":
+            return cmp <= 0;
+          case "gte":
+            return cmp >= 0;
+        }
+      });
+    }
   }
 }
 
@@ -232,24 +383,30 @@ export function parseGuard(raw: string): PlanGuard {
   return { objectType: objectType as PlanGuard["objectType"], where, expect: expect as PlanGuard["expect"], description: raw };
 }
 
-/** Ids of records matching a filter — used for apply-time filter re-verification. */
+/**
+ * Ids of records matching a filter — used for apply-time filter
+ * re-verification. `today` resolves the comparison `today` literal; apply-time
+ * callers pass the value the plan was built with (stored on plan.filter.today)
+ * so re-verification uses the SAME today, defaulting to the system date.
+ */
 export function eligibleIds(
   snapshot: CanonicalGtmSnapshot,
   objectType: BulkUpdateOptions["objectType"],
   where: string[],
+  today: string = systemToday(),
 ): Set<string> {
   const clauses = where.map(parseWhere);
   const views = buildViews(snapshot, objectType);
   return new Set(
-    views.filter(({ view }) => clauses.every((c) => matches(view, c))).map(({ record }) => String(record.id)),
+    views.filter(({ view }) => clauses.every((c) => matches(view, c, today))).map(({ record }) => String(record.id)),
   );
 }
 
 /** Evaluate a plan guard against a snapshot. Returns null when satisfied, else a failure detail. */
-export function evaluateGuard(snapshot: CanonicalGtmSnapshot, guard: PlanGuard): string | null {
+export function evaluateGuard(snapshot: CanonicalGtmSnapshot, guard: PlanGuard, today: string = systemToday()): string | null {
   const clauses = guard.where.map(parseWhere);
   const views = buildViews(snapshot, guard.objectType);
-  const matchCount = views.filter(({ view }) => clauses.every((c) => matches(view, c))).length;
+  const matchCount = views.filter(({ view }) => clauses.every((c) => matches(view, c, today))).length;
   const ok = guard.expect === "none" ? matchCount === 0 : matchCount > 0;
   if (ok) return null;
   return `Guard failed: expected ${guard.expect === "none" ? "no" : "at least one"} ${guard.objectType}(s) matching [${guard.where.join(" AND ")}], found ${matchCount}.`;
@@ -260,6 +417,10 @@ export function buildBulkUpdatePlan(
   options: BulkUpdateOptions,
 ): PatchPlan {
   const maxOperations = options.maxOperations ?? 500;
+  // Resolve `today` once: the comparison `today` literal in both --where and
+  // --guard binds to this value at plan time, and it is stored on plan.filter
+  // so apply-time re-verification (eligibleIds) resolves it identically.
+  const today = options.today ?? systemToday();
   if (options.where.length === 0) {
     throw new Error(
       "bulk-update requires at least one --where filter — refusing to build an unscoped mass write.",
@@ -273,6 +434,12 @@ export function buildBulkUpdatePlan(
 
   const clauses = options.where.map(parseWhere);
   assertValidFields(options.objectType, clauses, "--where");
+  // Whether any comparison clause references the `today` literal — drives
+  // whether the resolved `today` is persisted on plan.filter (see below).
+  const isComparisonOp = (op: WhereClause["op"]) => op === "lt" || op === "gt" || op === "lte" || op === "gte";
+  const referencesToday = clauses.some(
+    (c) => isComparisonOp(c.op) && (c.value ?? "").split("|").some((a) => a.trim() === "today"),
+  );
   const WRITABLE_BLOCKLIST = new Set(["id", "crmId", "contactCount", "openDealCount", "openDealStages"]);
   // `from:<sourceField>` values resolve per record from the filter view —
   // the source is validated with the same strictness as filters (relational
@@ -295,7 +462,7 @@ export function buildBulkUpdatePlan(
     }
   }
   const views = buildViews(snapshot, options.objectType);
-  const matched = views.filter(({ view }) => clauses.every((c) => matches(view, c)));
+  const matched = views.filter(({ view }) => clauses.every((c) => matches(view, c, today)));
   if (matched.length > maxOperations) {
     throw new Error(
       `Filter matched ${matched.length} ${COLLECTIONS[options.objectType]} — above the ${maxOperations}-record safety cap. Narrow the --where filter or raise --max-operations explicitly.`,
@@ -461,9 +628,21 @@ export function buildBulkUpdatePlan(
   // guards must hold at plan time too — building a plan whose guard already
   // fails is a footgun, surface it immediately
   for (const guard of guards) {
-    const failure = evaluateGuard(snapshot, guard);
+    const failure = evaluateGuard(snapshot, guard, today);
     if (failure) throw new Error(`${failure} The guard already fails against the current snapshot — the plan would never apply.`);
   }
+  // A `today` literal inside a --guard (not just --where) must also pin
+  // plan.filter.today: connector.ts re-evaluates guards at apply time and,
+  // without the persisted date, would resolve `today` to the apply-day system
+  // date — silently drifting a fail-closed guard. Persist `today` if EITHER a
+  // --where or a --guard clause references the literal.
+  const guardReferencesToday = guards.some((g) =>
+    g.where.some((raw) => {
+      const c = parseWhere(raw);
+      return isComparisonOp(c.op) && (c.value ?? "").split("|").some((a) => a.trim() === "today");
+    }),
+  );
+  const persistToday = referencesToday || guardReferencesToday;
 
   const skippedText = [...skippedBySource.entries()]
     .map(([sourceField, count]) => ` ${count} skipped: empty ${sourceField}.`)
@@ -477,7 +656,18 @@ export function buildBulkUpdatePlan(
     summary: `${matched.length} ${COLLECTIONS[options.objectType]} matched (${whereText}); ${operations.length} proposed dry-run operations (${action}).${skippedText}${guards.length > 0 ? ` ${guards.length} apply-time guard(s).` : ""}`,
     findings: [],
     operations,
-    filter: { objectType: options.objectType, where: options.where },
+    // Persist the resolved `today` ONLY when a filter clause actually
+    // references the `today` literal, so apply-time re-verification (eligibleIds
+    // in connector.ts) resolves it to the same date the plan was built with —
+    // the apply command carries no --today of its own. Plans without `today`
+    // (the vast majority — equality filters, reassign, etc.) keep the original
+    // `{ objectType, where }` shape unchanged; eligibleIds defaults to the
+    // system date for them, which never affects a non-`today` filter.
+    filter: {
+      objectType: options.objectType,
+      where: options.where,
+      ...(persistToday ? { today } : {}),
+    },
     ...(guards.length > 0 ? { guards } : {}),
   };
 }

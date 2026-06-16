@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildBulkUpdatePlan } from "../src/bulkUpdate.ts";
+import { buildBulkUpdatePlan, eligibleIds, parseWhere } from "../src/bulkUpdate.ts";
 import type { CanonicalGtmSnapshot } from "../src/types.ts";
 
 const snapshot: CanonicalGtmSnapshot = {
@@ -390,4 +390,235 @@ test("apply re-verifies the full filter per record, negations and relational fie
   assert.match(run.results.find((r: any) => r.status === "conflict")!.detail!, /no longer matches the plan's filter/);
   assert.equal(byObject.d3, "applied");
   assert.deepEqual(writes, ["d3"]);
+});
+
+// --- Comparison operators (lt/gt/lte/gte) -----------------------------------
+
+// A deals snapshot for the comparison tests: open + closed deals with a spread
+// of close dates around the fixed today, plus numeric amounts/probabilities.
+const cmpToday = "2026-06-11";
+const cmpSnapshot: CanonicalGtmSnapshot = {
+  generatedAt: "2026-06-11T00:00:00.000Z",
+  provider: "hubspot",
+  users: [{ id: "u1", name: "Dana" }],
+  accounts: [{ id: "a1", name: "Acme", domain: "acme.com", ownerId: "u1" }],
+  contacts: [],
+  deals: [
+    { id: "past1", name: "Past 1", accountId: "a1", ownerId: "u1", stage: "qualifiedtobuy", amount: 10000, probability: 20, closeDate: "2026-04-30", isClosed: false },
+    { id: "past2", name: "Past 2", accountId: "a1", ownerId: "u1", stage: "presentationscheduled", amount: 5000, probability: 50, closeDate: "2026-05-15", isClosed: false },
+    { id: "future1", name: "Future 1", accountId: "a1", ownerId: "u1", stage: "qualifiedtobuy", amount: 18000, probability: 10, closeDate: "2026-08-31", isClosed: false },
+    { id: "closedpast", name: "Closed Past", accountId: "a1", ownerId: "u1", stage: "closedwon", amount: 25000, probability: 100, closeDate: "2026-03-31", isClosed: true, isWon: true },
+    { id: "noclose", name: "No Close", accountId: "a1", ownerId: "u1", stage: "qualifiedtobuy", amount: 4999, probability: 0, isClosed: false },
+  ],
+  activities: [],
+};
+
+// T1 — parse: comparison tokens, <= before < ordering, unparseable RHS throws.
+test("T1 parseWhere: comparison tokens, ordering, and RHS validation", () => {
+  assert.deepEqual(parseWhere("closeDate<today"), { field: "closeDate", op: "lt", value: "today", raw: "closeDate<today" });
+  assert.equal(parseWhere("amount>5000").op, "gt");
+  assert.equal(parseWhere("probability<=20").op, "lte");
+  assert.equal(parseWhere("closeDate>=2026-07-01").op, "gte");
+  // ordering: <= must win over < + stray "=" (two-char before one-char)
+  const lte = parseWhere("probability<=5");
+  assert.equal(lte.op, "lte");
+  assert.equal(lte.value, "5");
+  const gte = parseWhere("amount>=50");
+  assert.equal(gte.op, "gte");
+  assert.equal(gte.value, "50");
+  // unparseable RHS (empty / non-date non-number) throws at parse time
+  assert.throws(() => parseWhere("amount>"), /comparison value must be a number/);
+  assert.throws(() => parseWhere("closeDate<garbage"), /comparison value must be a number/);
+  assert.throws(() => parseWhere("amount>=abc"), /comparison value must be a number/);
+  // the throw message for a wholly unparseable expr lists the new tokens
+  assert.throws(() => parseWhere("amount"), /field<value, field>value, field<=value, or field>=value/);
+});
+
+// T2 — date match: closeDate<today partitions past from future, excludes unset.
+test("T2 comparison date match: closeDate<today and its complement", () => {
+  const past = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal",
+    where: ["closeDate<today", "isClosed=false"],
+    set: { closeDate: "2026-06-30" },
+    today: cmpToday,
+  });
+  // open + past: past1, past2. future1 excluded (future), closedpast excluded
+  // (isClosed=false), noclose excluded (empty closeDate is not comparable).
+  assert.deepEqual(past.operations.map((o) => o.objectId).sort(), ["past1", "past2"]);
+
+  const future = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal",
+    where: ["closeDate>=2026-07-01"],
+    set: { stage: "qualifiedtobuy" },
+    today: cmpToday,
+  });
+  assert.deepEqual(future.operations.map((o) => o.objectId), ["future1"]);
+});
+
+// T3 — numeric match: strict vs inclusive bounds on numeric fields.
+test("T3 comparison numeric match: strict and inclusive bounds", () => {
+  const gt = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal", where: ["amount>5000"], createTask: "x", today: cmpToday,
+  });
+  // 10000, 18000, 25000 > 5000; 5000 excluded (strict), 4999 excluded
+  assert.deepEqual(gt.operations.map((o) => o.objectId).sort(), ["closedpast", "future1", "past1"]);
+
+  const gte = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal", where: ["amount>=5000"], createTask: "x", today: cmpToday,
+  });
+  // adds past2 (5000) to the gt set
+  assert.deepEqual(gte.operations.map((o) => o.objectId).sort(), ["closedpast", "future1", "past1", "past2"]);
+
+  const lte = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal", where: ["probability<=20"], createTask: "x", today: cmpToday,
+  });
+  // probability 20 (past1), 10 (future1), 0 (noclose) ≤ 20; 50 and 100 excluded
+  assert.deepEqual(lte.operations.map((o) => o.objectId).sort(), ["future1", "noclose", "past1"]);
+
+  // numeric on accounts: employeeCount>=50
+  const accSnap = structuredClone(cmpSnapshot);
+  accSnap.accounts = [
+    { id: "big", name: "Big", domain: "big.com", employeeCount: 80 } as any,
+    { id: "small", name: "Small", domain: "small.com", employeeCount: 10 } as any,
+  ];
+  const emp = buildBulkUpdatePlan(accSnap, {
+    objectType: "account", where: ["employeeCount>=50"], createTask: "x", today: cmpToday,
+  });
+  assert.deepEqual(emp.operations.map((o) => o.objectId), ["big"]);
+});
+
+// T4 — no precondition leakage: comparison clauses never become preconditions.
+test("T4 comparison clauses do not leak into preconditions", () => {
+  const plan = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal",
+    where: ["closeDate<today", "isClosed=false"],
+    set: { closeDate: "2026-06-30" },
+    today: cmpToday,
+  });
+  // isClosed is excluded from preconditions only because it is a derived
+  // (non-readable) field, so add a readable eq clause to prove the COMPARISON
+  // clause is the one that is dropped, not the eq.
+  const withEq = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal",
+    where: ["closeDate<today", "ownerId=u1"],
+    set: { stage: "presentationscheduled" },
+    today: cmpToday,
+  });
+  for (const op of withEq.operations) {
+    // ownerId (eq, readable, non-written) → precondition; closeDate (lt) → none
+    assert.deepEqual(op.preconditions, [{ field: "ownerId", expectedValue: "u1" }]);
+    assert.ok(!(op.preconditions ?? []).some((p) => p.field === "closeDate"));
+  }
+  // and the canonical close-date plan carries no precondition for closeDate
+  for (const op of plan.operations) {
+    assert.ok(!(op.preconditions ?? []).some((p) => p.field === "closeDate"));
+  }
+});
+
+// T5 — apply-time round-trip: stored raw strings re-evaluate via eligibleIds.
+test("T5 eligibleIds re-parses comparison filters at apply time", () => {
+  const plan = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal",
+    where: ["closeDate<today", "isClosed=false"],
+    set: { closeDate: "2026-06-30" },
+    today: cmpToday,
+  });
+  // the resolved today is persisted on the plan filter for apply-time agreement
+  assert.equal(plan.filter?.today, cmpToday);
+  // round-trip the stored raw strings + stored today, exactly as connector.ts does
+  const ids = eligibleIds(cmpSnapshot, "deal", plan.filter!.where, plan.filter!.today);
+  assert.deepEqual([...ids].sort(), ["past1", "past2"]);
+  // sanity: a different today shifts the partition (proves today is honored).
+  // Nothing in the snapshot closes before 2026-01-01 → empty set.
+  const idsEarly = eligibleIds(cmpSnapshot, "deal", ["closeDate<today"], "2026-01-01");
+  assert.equal(idsEarly.size, 0);
+});
+
+// T6 — alternation: OR (`some`) across comparison alternatives, with the SAME
+// operator applied to each (the operator is the token; the value is what splits
+// on `|`). See deviation note in the report: the spec's literal example mixes
+// `<` and `>` in one clause, which the single-operator grammar cannot express;
+// this tests the reachable `some`-OR semantics §2.5 actually defines ("5|10").
+test("T6 comparison alternation uses some (OR)", () => {
+  const snap = structuredClone(cmpSnapshot);
+  snap.deals = [
+    { id: "d2025", name: "2025", accountId: "a1", stage: "qualifiedtobuy", closeDate: "2025-06-01", isClosed: false } as any,
+    { id: "d2026", name: "2026", accountId: "a1", stage: "qualifiedtobuy", closeDate: "2026-06-01", isClosed: false } as any,
+    { id: "d2027", name: "2027", accountId: "a1", stage: "qualifiedtobuy", closeDate: "2027-06-01", isClosed: false } as any,
+  ];
+  // closeDate < 2026-01-01 OR closeDate < 2025-12-31 → both bound out 2026/2027,
+  // so only the 2025 deal qualifies under the looser alternative.
+  const plan = buildBulkUpdatePlan(snap, {
+    objectType: "deal",
+    where: ["closeDate<2026-01-01|2025-12-31"],
+    createTask: "review",
+    today: cmpToday,
+  });
+  assert.deepEqual(plan.operations.map((o) => o.objectId), ["d2025"]);
+
+  // numeric `some`-OR: amount>20000 OR amount>5000 ≡ amount>5000 (looser wins)
+  const numPlan = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal",
+    where: ["amount>20000|5000"],
+    createTask: "review",
+    today: cmpToday,
+  });
+  // 10000, 18000, 25000 > 5000; 5000 and 4999 excluded
+  assert.deepEqual(numPlan.operations.map((o) => o.objectId).sort(), ["closedpast", "future1", "past1"]);
+  // alternation comparison clauses still leak no precondition
+  for (const op of plan.operations) assert.equal(op.preconditions, undefined);
+});
+
+// T7 — mixed-type safety: type mismatch matches nothing and never throws.
+test("T7 comparison mixed-type safety matches nothing without throwing", () => {
+  // date field vs numeric RHS: Date.parse("5000") finite? no ISO date → falls
+  // to numeric, Number("2026-04-30") is NaN → no match. Must not throw.
+  const a = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal", where: ["closeDate<5000"], createTask: "x", today: cmpToday,
+  });
+  assert.equal(a.operations.length, 0);
+  // numeric field vs date RHS: amount>2026-04-30 — Date.parse(amount) not finite
+  // (a bare number is not an ISO date), Number("2026-04-30") is NaN → no match.
+  const b = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal", where: ["amount>2026-04-30"], createTask: "x", today: cmpToday,
+  });
+  assert.equal(b.operations.length, 0);
+});
+
+// T8 — a `today` literal inside a --guard (not just --where) must pin
+// plan.filter.today, or apply-time guard re-evaluation drifts to system-now.
+test("T8 comparison: --guard referencing today pins plan.filter.today", () => {
+  // --where uses an ABSOLUTE date (no `today`); only the --guard references it.
+  const withGuardToday = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal",
+    where: ["closeDate<2026-06-11", "isClosed=false"],
+    set: { stage: "closedlost" },
+    // refuse if any CONTRACTSENT deal closes on/after today — none exist, so the
+    // guard is satisfied at plan time and the plan builds; it still references `today`.
+    guard: ["deal:stage=contractsent;closeDate>=today:none"],
+    today: cmpToday,
+  });
+  assert.equal(withGuardToday.filter?.today, cmpToday, "guard `today` must persist on plan.filter");
+
+  // No `today` anywhere → not persisted (shape stays stable for non-today plans).
+  const noToday = buildBulkUpdatePlan(cmpSnapshot, {
+    objectType: "deal",
+    where: ["closeDate<2026-06-11"],
+    set: { stage: "closedlost" },
+    guard: ["deal:stage=contractsent:none"],
+    today: cmpToday,
+  });
+  assert.equal(noToday.filter?.today, undefined, "absent `today` must not persist on plan.filter");
+});
+
+// T9 — parse-time strictness: prose/typo RHS that is not a plain number, an ISO
+// date shape, or `today` must throw at parse, not silently match nothing.
+test("T9 comparison: prose/typo RHS fails loudly at parse", () => {
+  for (const bad of ["closeDate<July", "amount>abc", "closeDate<=notadate", "amount>"]) {
+    assert.throws(() => parseWhere(bad), /number, an ISO date, or "today"/, `expected ${bad} to throw`);
+  }
+  // date-shaped and plain-number RHS still parse fine
+  assert.doesNotThrow(() => parseWhere("closeDate<2026-06-11"));
+  assert.doesNotThrow(() => parseWhere("amount>=5000"));
+  assert.doesNotThrow(() => parseWhere("closeDate<today"));
 });

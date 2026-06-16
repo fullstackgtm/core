@@ -281,6 +281,12 @@ export type PatchPlan = {
     filter?: {
         objectType: "account" | "contact" | "deal";
         where: string[];
+        /**
+         * The date the filter's comparison `today` literal resolves to (ISO
+         * yyyy-mm-dd). Stored so apply-time re-verification resolves `today`
+         * identically to plan time; absent on plans built before comparison ops.
+         */
+        today?: string;
     };
     /**
      * Plan-level guards re-evaluated against a FRESH snapshot at apply time.
