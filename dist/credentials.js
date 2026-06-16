@@ -1,8 +1,10 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync, } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { refreshHubspotToken } from "./connectors/hubspotAuth.js";
 import { refreshSalesforceToken } from "./connectors/salesforceAuth.js";
+import { detectKeychainBackend } from "./keychain.js";
 /**
  * Local CLI credential store: ~/.fullstackgtm/credentials.json (0600), or
  * $FSGTM_HOME/credentials.json when set. Environment tokens always win over
@@ -118,18 +120,73 @@ function enforceCredentialFileMode(path) {
         // Missing file or non-POSIX filesystem: nothing to enforce.
     }
 }
-function readFile() {
+/**
+ * Persistence backend for the credential blob: the OS keychain when
+ * FSGTM_KEYCHAIN=1 and one is available, otherwise the 0600 file. The keychain
+ * account is derived from the credential file path so distinct homes/profiles
+ * never collide in the machine-wide store.
+ */
+function activeKeychain() {
+    if (process.env.FSGTM_KEYCHAIN !== "1")
+        return null;
+    const backend = detectKeychainBackend();
+    if (!backend)
+        return null;
+    return { account: createHash("sha256").update(credentialsPath()).digest("hex").slice(0, 24), backend };
+}
+/**
+ * When keychain is enabled on an install that previously wrote a plaintext
+ * credentials.json, that file would otherwise sit on disk forever (readFile only
+ * looks at the keychain). Import it into the keychain and remove it — the whole
+ * point of keychain mode is that no plaintext credential remains at rest.
+ */
+function migratePlaintextToKeychain(keychain) {
+    if (!existsSync(credentialsPath()))
+        return;
     try {
-        enforceCredentialFileMode(credentialsPath());
-        const parsed = JSON.parse(readFileSync(credentialsPath(), "utf8"));
-        if (parsed && typeof parsed === "object" && parsed.version === 1 && parsed.providers) {
-            return parsed;
+        const fileParsed = JSON.parse(readFileSync(credentialsPath(), "utf8"));
+        if (fileParsed && fileParsed.version === 1 && fileParsed.providers) {
+            const current = keychain.backend.get(keychain.account);
+            const existing = current ? (JSON.parse(current).providers ?? {}) : {};
+            // Keychain entries win over the file on conflict (the file is the older copy).
+            const merged = { version: 1, providers: { ...fileParsed.providers, ...existing } };
+            keychain.backend.set(keychain.account, `${JSON.stringify(merged, null, 2)}\n`);
+        }
+        unlinkSync(credentialsPath());
+        console.error("fullstackgtm: migrated credentials.json into the OS keychain and removed the plaintext file.");
+    }
+    catch {
+        // Best effort: a malformed/locked file is left in place rather than lost.
+    }
+}
+function readFile() {
+    const keychain = activeKeychain();
+    if (keychain)
+        migratePlaintextToKeychain(keychain);
+    try {
+        const raw = keychain ? keychain.backend.get(keychain.account) : (enforceCredentialFileMode(credentialsPath()), readFileSync(credentialsPath(), "utf8"));
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object" && parsed.version === 1 && parsed.providers) {
+                return parsed;
+            }
         }
     }
     catch {
-        // Missing or unreadable file falls through to an empty store.
+        // Missing or unreadable store falls through to an empty one.
     }
     return { version: 1, providers: {} };
+}
+function persist(file) {
+    const keychain = activeKeychain();
+    const blob = `${JSON.stringify(file, null, 2)}\n`;
+    if (keychain) {
+        keychain.backend.set(keychain.account, blob);
+    }
+    else {
+        ensureSecureHomeDir();
+        writeSecureFile(credentialsPath(), blob);
+    }
 }
 export function getCredential(provider) {
     return readFile().providers[provider] ?? null;
@@ -137,19 +194,29 @@ export function getCredential(provider) {
 export function storeCredential(provider, credential) {
     const file = readFile();
     file.providers[provider] = credential;
-    ensureSecureHomeDir();
-    writeSecureFile(credentialsPath(), `${JSON.stringify(file, null, 2)}\n`);
+    persist(file);
 }
 export function deleteCredential(provider) {
     const file = readFile();
     if (!file.providers[provider])
         return false;
     delete file.providers[provider];
-    if (Object.keys(file.providers).length === 0 && existsSync(credentialsPath())) {
-        unlinkSync(credentialsPath());
-        return true;
+    const keychain = activeKeychain();
+    if (Object.keys(file.providers).length === 0) {
+        if (keychain) {
+            keychain.backend.delete(keychain.account);
+            // Defensive: remove any leftover plaintext file too (migration normally
+            // already did, but never leave a credential blob on disk after logout).
+            if (existsSync(credentialsPath()))
+                unlinkSync(credentialsPath());
+            return true;
+        }
+        if (existsSync(credentialsPath())) {
+            unlinkSync(credentialsPath());
+            return true;
+        }
     }
-    writeSecureFile(credentialsPath(), `${JSON.stringify(file, null, 2)}\n`);
+    persist(file);
     return true;
 }
 const REFRESH_SKEW_MS = 2 * 60 * 1000;
@@ -222,6 +289,13 @@ async function brokerMint(provider, options) {
     const broker = getCredential("broker");
     if (!broker?.baseUrl)
         return null;
+    // The mint replays the long-lived bearer and receives a live CRM token —
+    // refuse to do so over cleartext even if a tampered store points us at http.
+    const brokerUrl = new URL(broker.baseUrl);
+    const localhost = brokerUrl.hostname === "localhost" || brokerUrl.hostname === "127.0.0.1" || brokerUrl.hostname === "::1" || brokerUrl.hostname === "[::1]";
+    if (brokerUrl.protocol !== "https:" && !(brokerUrl.protocol === "http:" && localhost)) {
+        throw new Error(`Refusing to mint a CRM token over ${brokerUrl.protocol}//${brokerUrl.host} — the broker must use https. Re-pair with an https deployment.`);
+    }
     const fetchImpl = options.fetchImpl ?? fetch;
     const response = await fetchImpl(`${broker.baseUrl.replace(/\/$/, "")}/api/cli/token`, {
         method: "POST",

@@ -1,4 +1,11 @@
 import { type LlmProvider } from "./llm.ts";
+/**
+ * The broker channel carries a long-lived pairing bearer and receives freshly
+ * minted live-CRM tokens, so it must be TLS unless it's an explicit localhost
+ * dev target. Refuse http:// (and non-http schemes) otherwise — single-quote
+ * shell escaping does nothing for a token sent in cleartext.
+ */
+export declare function assertSecureBrokerUrl(raw: string): URL;
 type ProviderDoctorStatus = {
     source: "env" | "stored" | "broker" | "none";
     detail: string;

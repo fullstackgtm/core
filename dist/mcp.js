@@ -23,8 +23,15 @@ async function importPeer(specifier) {
     }
     catch (error) {
         try {
+            // Last-resort fallback to the invoking project's node_modules (the npx
+            // landmine: peers there, fullstackgtm in the npx cache). This loads code
+            // from the current working directory, so make it VISIBLE — running the
+            // MCP server in an untrusted directory could otherwise silently load a
+            // malicious `zod`/SDK from its node_modules.
             const projectRequire = createRequire(join(process.cwd(), "package.json"));
-            return (await import(__rewriteRelativeImportExtension(pathToFileURL(projectRequire.resolve(specifier)).href)));
+            const resolved = projectRequire.resolve(specifier);
+            console.error(`fullstackgtm-mcp: loading peer "${specifier}" from the current directory (${resolved}). Only run the MCP server in a directory you trust.`);
+            return (await import(__rewriteRelativeImportExtension(pathToFileURL(resolved).href)));
         }
         catch {
             throw error; // the original error carries the missing-peer signal mcp-bin reports on

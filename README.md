@@ -271,6 +271,20 @@ A direct `login hubspot` always wins over a broker pairing, so an operator can o
 
 What each provider actually requires before `audit --provider <name>` works on your data.
 
+### Connector capabilities
+
+Connectors differ in what the provider's API allows — stated up front so nothing surprises you mid-evaluation:
+
+| Operation | HubSpot | Salesforce | Stripe |
+| --- | --- | --- | --- |
+| Read / snapshot / audit | ✅ | ✅ | ✅ (read-only) |
+| Field writes (`set_field`, `clear_field`, `link_record`) | ✅ | ✅ | — |
+| `create_task` | ✅ | ✅ | — |
+| `archive_record` | ✅ | ✅ | — |
+| `merge_records` (`dedupe`) | ✅ | ❌ **not supported** | — |
+
+**Salesforce merge** has no REST resource — it exists only in the SOAP API / Apex (Lead, Contact, Account, Case; max 3 records). This connector refuses a Salesforce `merge_records` operation honestly rather than half-merging; on Salesforce, deduplicate in the UI (or via SOAP/Apex), or use `bulk-update --archive` for the non-survivors. Native Salesforce merge is tracked future work, not a silent gap.
+
 ### HubSpot: create a private app (~2 minutes, needs super-admin)
 
 1. In HubSpot: **Settings → Integrations → Private Apps → Create a private app.**

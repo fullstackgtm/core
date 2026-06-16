@@ -29,6 +29,31 @@ jobs:
       - name: Test
         run: npm test
 
+  # Supply-chain integrity: the mirror commits dist/ so `npm install github:…`
+  # works without a build step. Verify that committed dist is exactly a fresh
+  # build from src/ — a poisoned or stale committed dist (which git-install
+  # users would run unbuilt) fails here.
+  dist-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Rebuild dist from source
+        run: npm run build
+      - name: Committed dist must match the fresh build
+        run: |
+          if ! git diff --quiet -- dist; then
+            echo "::error::Committed dist/ differs from a fresh build of src/. Rebuild and recommit (scripts/sync-oss.sh), or investigate tampering." >&2
+            git diff --stat -- dist
+            exit 1
+          fi
+          echo "dist integrity OK"
+
   # The runtime supports node >=20 (engines), but type stripping for the test
   # runner does not exist there — so validate 20 against the built output.
   node20-smoke:
