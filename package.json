@@ -1,9 +1,9 @@
 {
   "name": "fullstackgtm",
-  "version": "0.28.0",
+  "version": "0.28.1",
   "description": "Open-source agentic GTM ops framework: canonical GTM data model, pluggable deterministic audits, reviewable dry-run patch plans, approval-gated write-back with conflict detection, and cross-system entity resolution. HubSpot, Salesforce, and Stripe connectors included.",
   "license": "Apache-2.0",
-  "author": "Full Stack GTM <security@fullstackgtm.com> (https://fullstackgtm.com)",
+  "author": "Full Stack GTM LLC <ryan@fullstackgtm.com> (https://fullstackgtm.com)",
   "homepage": "https://github.com/fullstackgtm/core#readme",
   "bugs": {
     "url": "https://github.com/fullstackgtm/core/issues"

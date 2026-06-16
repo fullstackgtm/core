@@ -38,8 +38,8 @@ Commands not listed (`plans`, `rules`, `doctor`, `schedule`, `audit-log`,
   CRM-only.
 - **No data is sent for training.** Anthropic, OpenAI, and Apollo are reached
   with your own API keys under your own agreements; their data-handling terms
-  (and any DPA you have with them) govern that traffic. Full Stack GTM is not
-  in that path and is not a sub-processor for the open-source CLI.
+  (and any DPA you have with them) govern that traffic. Full Stack GTM LLC is
+  not in that path and is not a sub-processor for the open-source CLI.
 
 ## Sub-processors
 
@@ -49,4 +49,4 @@ controllers are you and the providers whose keys you supply.
 For the **hosted application** (a separate, proprietary product — not this
 package): a sub-processor list and DPA are provided through that product's
 agreement. If you are evaluating the hosted product, request them from
-security@fullstackgtm.com.
+ryan@fullstackgtm.com.
