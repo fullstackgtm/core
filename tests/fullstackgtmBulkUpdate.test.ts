@@ -622,3 +622,22 @@ test("T9 comparison: prose/typo RHS fails loudly at parse", () => {
   assert.doesNotThrow(() => parseWhere("amount>=5000"));
   assert.doesNotThrow(() => parseWhere("closeDate<today"));
 });
+
+// T10 — inline-conjunction footgun: multiple conditions crammed into one
+// --where (the exact GPT-5.4-mini stale-deal-tasks failure) must throw loud,
+// while a value that merely CONTAINS the word and/or must still parse.
+test("T10 inline AND/OR conjunction rejected, incidental and/or allowed", () => {
+  const footguns = [
+    "stage!=closedwon AND stage!=closedlost",
+    "stage!=closedwon AND stage!=closedlost AND closeDate<2026-05-12",
+    "ownerId=u1 OR ownerId=u2",
+    "amount>5000 and amount<10000",
+  ];
+  for (const f of footguns) {
+    assert.throws(() => parseWhere(f), /multiple conditions in one clause/, `expected "${f}" to throw`);
+  }
+  // legitimate values that merely contain the word and/or (no clause follows)
+  for (const ok of ["name~Procter AND Gamble", "name~research and development", "name~Tom and Jerry", "industry~oil or gas"]) {
+    assert.doesNotThrow(() => parseWhere(ok), `"${ok}" must parse — and/or is incidental value content`);
+  }
+});
