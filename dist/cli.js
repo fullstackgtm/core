@@ -13,6 +13,7 @@ import { activeProfile, credentialsPath, DEFAULT_PROFILE, deleteCredential, getC
 import { generateDemoSnapshot } from "./demo.js";
 import { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
 import { mergeSnapshots } from "./merge.js";
+import { verifyApprovalDigests } from "./integrity.js";
 import { createFilePlanStore } from "./planStore.js";
 import { auditReportToHtml, auditReportToMarkdown } from "./report.js";
 import { builtinAuditRules } from "./rules.js";
@@ -22,6 +23,7 @@ import { captureMarket, computeFrontStates, createFileObservationStore, diffFron
 import { assessAxes, axesReportToText } from "./marketAxes.js";
 import { computeDirectives, computeOverlayStats, directivesToPlan, overlayToMarkdown, } from "./marketOverlay.js";
 import { computeScaleIndex, scaleReportToText } from "./marketScale.js";
+import { suggestMarketConfig } from "./marketTaxonomy.js";
 import { buildWorksheet, classifyMarket } from "./marketClassify.js";
 import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
 import { DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
@@ -827,6 +829,8 @@ async function marketCommand(args) {
     if (!subcommand || subcommand === "--help" || subcommand === "-h" || rest.includes("--help") || rest.includes("-h")) {
         console.log(`Usage:
 market init --category <name> [--out <path>]   write a starter market.config.json
+market init --category <name> --auto --vendor <url> [--vendor <url>...] [--anchor <url>] [--max-claims n]
+                                               LLM-propose vendors + claim taxonomy from seed pages (needs an API key)
 market capture [--config <path>] [--run <label>]
 market classify [--run <label>] [--capture-run <label>] [--vendor <id>] [--model m] [--out <path>]
 market worksheet --vendor <id> [--capture-run <label>] [--out <path>]
@@ -877,6 +881,27 @@ recomputed deterministically on every invocation — never stored.`);
         const outPath = resolve(process.cwd(), option(rest, "--out") ?? "market.config.json");
         if (existsSync(outPath))
             throw new Error(`${outPath} already exists — refusing to overwrite`);
+        if (rest.includes("--auto")) {
+            const vendorUrls = repeatedOption(rest, "--vendor");
+            if (vendorUrls.length === 0) {
+                throw new Error("market init --auto requires at least one --vendor <url> (the competitor homepages to seed from)");
+            }
+            const anchorUrl = option(rest, "--anchor");
+            const credential = await requireLlmCredential("market classify");
+            console.error(`Capturing ${vendorUrls.length} seed page(s) and proposing a claim taxonomy with ${credential.provider}…`);
+            const { config, unreadableVendorIds, model } = await suggestMarketConfig({
+                category,
+                vendors: vendorUrls.map((url) => ({ url, anchor: anchorUrl ? url === anchorUrl : false })),
+                llm: { ...credential, model: option(rest, "--model") ?? undefined },
+                maxClaims: numericOption(rest, "--max-claims"),
+            });
+            writeFileSync(outPath, `${JSON.stringify(config, null, 2)}\n`);
+            if (unreadableVendorIds.length > 0) {
+                console.error(`Note: no readable text for ${unreadableVendorIds.join(", ")} — excluded from taxonomy grounding.`);
+            }
+            console.log(`Wrote ${outPath}: ${config.vendors.length} vendors, ${config.claims.length} proposed claims (${model}). Review it, then: fullstackgtm market refresh`);
+            return;
+        }
         writeFileSync(outPath, `${JSON.stringify(starterMarketConfig(category), null, 2)}\n`);
         console.log(`Wrote ${outPath}. Fill in vendors and claims, then: fullstackgtm market capture`);
         return;
@@ -2277,7 +2302,32 @@ async function apply(args) {
         }
         plan = stored.plan;
         approvedOperationIds = stored.approvedOperationIds;
+        // Downgrade guard: an approved plan with no signatures is either pre-0.26
+        // (re-approve to gain them) or had its approvalDigests stripped to skip the
+        // integrity check. Either way, refuse rather than fall back to trusting the
+        // file. (A plan with zero approved operations has nothing to apply anyway.)
+        if (stored.approvedOperationIds.length > 0 && !stored.approvalDigests) {
+            throw new Error(`Refusing to apply plan ${planId}: it was approved without integrity signatures ` +
+                "(approved before 0.26.0, or its signatures were removed). Re-approve it with " +
+                `\`fullstackgtm plans approve ${planId} --operations <ids|all>\`.`);
+        }
+        // Integrity gate: the plan file is re-read from disk, so verify each approved
+        // operation still matches what was signed at approval. Verify against the
+        // EFFECTIVE overrides (stored ∪ apply-time --value): the invariant is "what
+        // gets written must equal what was signed", so an apply-time --value that
+        // changes a value the human did not approve is treated as tamper, not a live
+        // override. A mismatch means the plan/overrides were edited after approval —
+        // refuse the whole apply rather than write an unapproved value.
         valueOverrides = { ...stored.valueOverrides, ...parseValueOverrides(args) };
+        const verification = verifyApprovalDigests(stored.plan.operations, stored.approvedOperationIds, valueOverrides, stored.approvalDigests);
+        if (!verification.ok) {
+            const detail = verification.reason === "no_key"
+                ? "the plan-signing key is missing (was this plan approved on another machine?). Re-approve it here with `fullstackgtm plans approve`."
+                : `these operations differ from what was approved: ${verification.tampered.join(", ")}. ` +
+                    "If you changed a value at apply time, set it at approval instead (`plans approve --value <op>=<v>`) and re-approve; " +
+                    "otherwise the plan was edited after approval — review and re-approve.";
+            throw new Error(`Refusing to apply plan ${planId}: ${detail}`);
+        }
     }
     else {
         const approve = option(args, "--approve");

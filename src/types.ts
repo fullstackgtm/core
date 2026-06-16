@@ -303,6 +303,22 @@ export type PatchOperation = {
    * member of the group.
    */
   groupId?: string;
+  /**
+   * Set only when a human explicitly chose to archive a record that shares an
+   * identity key with another (`bulk-update --archive --force-archive-duplicates`).
+   * Without it, apply refuses to archive_record a record the live snapshot still
+   * sees as a duplicate — archiving a duplicate discards data that merging keeps,
+   * and an agent on a dedupe task must not silently substitute archive for merge.
+   */
+  forceArchiveDuplicate?: boolean;
+  /**
+   * For irreversible operations (merge_records, archive_record): the field
+   * values of the records that will be destroyed, captured at plan-build time.
+   * Merges and archives cannot be undone on any provider, so this is the
+   * recovery artifact a human uses to recreate a record by hand if a merge or
+   * archive was wrong — the plan file IS the backup.
+   */
+  recoverySnapshot?: Record<string, unknown>[];
 };
 
 /**

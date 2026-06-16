@@ -115,6 +115,14 @@ export {
   type MergeSuggestion,
 } from "./merge.ts";
 export { createFilePlanStore, type PlanStore, type StoredPlan } from "./planStore.ts";
+export {
+  computeApprovalDigests,
+  loadOrCreateSigningKey,
+  loadSigningKey,
+  signApproval,
+  verifyApprovalDigests,
+  type ApprovalVerification,
+} from "./integrity.ts";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
 export { auditReportToHtml, auditReportToMarkdown, type ReportOptions } from "./report.ts";
 export {

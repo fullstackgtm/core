@@ -6,12 +6,18 @@ import { join, resolve } from "node:path";
 import { platform } from "node:process";
 import test from "node:test";
 import {
+  applyPatchPlan,
+  buildBulkUpdatePlan,
+  buildDedupePlan,
   createFilePlanStore,
   mergeSnapshots,
   storeCredential,
   getCredential,
   credentialsPath,
+  verifyApprovalDigests,
   type CanonicalGtmSnapshot,
+  type PatchOperation,
+  type PatchPlan,
 } from "../src/index.ts";
 import {
   assertSingleLineLabel,
@@ -20,13 +26,13 @@ import {
 } from "../src/schedule.ts";
 import { assertPublicUrl, validateObservationSet } from "../src/market.ts";
 import { marketMapToHtml, safeJsonForScript } from "../src/marketReport.ts";
+import { buildEnrichPlan, parseEnrichConfig, type EnrichSourceRecord } from "../src/enrich.ts";
+import { createStripeConnector } from "../src/connectors/stripe.ts";
+import { createApolloClient } from "../src/enrichApollo.ts";
 
 // Loose shapes for the golden fixture — the test mutates fields to attack sinks.
 type MarketConfigShape = { anchorVendor: string; vendors: Array<{ id: string; name: string }> };
 type ObservationSetShape = { observations: Array<{ confidence: string; evidence?: unknown[] }> };
-import { buildEnrichPlan, parseEnrichConfig, type EnrichSourceRecord } from "../src/enrich.ts";
-import { createStripeConnector } from "../src/connectors/stripe.ts";
-import { createApolloClient } from "../src/enrichApollo.ts";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 
@@ -36,6 +42,19 @@ function withTempHome<T>(run: () => T): T {
   process.env.FSGTM_HOME = dir;
   try {
     return run();
+  } finally {
+    if (previous === undefined) delete process.env.FSGTM_HOME;
+    else process.env.FSGTM_HOME = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function withTempHomeAsync<T>(run: () => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), "fsgtm-sec-"));
+  const previous = process.env.FSGTM_HOME;
+  process.env.FSGTM_HOME = dir;
+  try {
+    return await run();
   } finally {
     if (previous === undefined) delete process.env.FSGTM_HOME;
     else process.env.FSGTM_HOME = previous;
@@ -371,4 +390,237 @@ test("credentials: a world-readable store is re-tightened to 0600 on read", () =
     // Any read must tighten it.
     getCredential("hubspot");
     assert.equal(statSync(credentialsPath()).mode & 0o777, 0o600);
+  }));
+
+// ===========================================================================
+// 0.26.0 — Write-path integrity (irreversible-operation safety)
+// ===========================================================================
+
+function snap(accounts: Array<Record<string, unknown>>): CanonicalGtmSnapshot {
+  return {
+    generatedAt: "2026-06-15T00:00:00.000Z",
+    provider: "hubspot",
+    users: [],
+    accounts: accounts as never,
+    contacts: [],
+    deals: [],
+    activities: [],
+  };
+}
+
+function planWith(op: PatchOperation): PatchPlan {
+  return {
+    id: "patch_plan_test",
+    title: "t",
+    createdAt: "2026-06-15T00:00:00.000Z",
+    status: "needs_approval",
+    dryRun: true,
+    summary: "s",
+    findings: [],
+    operations: [op],
+  };
+}
+
+function mockConnector(snapshot: CanonicalGtmSnapshot, applied: string[]) {
+  return {
+    provider: "hubspot" as const,
+    fetchSnapshot: async () => snapshot,
+    applyOperation: async (op: PatchOperation) => {
+      applied.push(op.id);
+      return { operationId: op.id, status: "applied" as const };
+    },
+    readField: async (_t: string, id: string, field: string) =>
+      ((snapshot.accounts as Array<Record<string, unknown>>).find((r) => String(r.id) === id)?.[field] ?? null),
+  };
+}
+
+test("apply refuses to archive a record that shares an identity key with a live record (benchmark self-own fix)", async () => {
+  const snapshot = snap([
+    { id: "a1", name: "Acme", domain: "acme.com" },
+    { id: "a2", name: "Acme Dup", domain: "acme.com" }, // duplicate by domain
+  ]);
+  const archiveOp: PatchOperation = {
+    id: "op_arch", objectType: "account", objectId: "a2", operation: "archive_record",
+    beforeValue: null, afterValue: null, reason: "agent archived a dup", riskLevel: "high", approvalRequired: true,
+  };
+  const applied: string[] = [];
+  const run = await applyPatchPlan(mockConnector(snapshot, applied), planWith(archiveOp), {
+    approvedOperationIds: ["op_arch"],
+  });
+  assert.equal(run.results[0].status, "conflict");
+  assert.match(run.results[0].detail!, /shares domain "acme.com"|merge .*dedupe/i);
+  assert.deepEqual(applied, [], "nothing was archived");
+
+  // With the explicit human force marker, the same op applies.
+  const applied2: string[] = [];
+  const run2 = await applyPatchPlan(mockConnector(snapshot, applied2), planWith({ ...archiveOp, forceArchiveDuplicate: true }), {
+    approvedOperationIds: ["op_arch"],
+  });
+  assert.equal(run2.results[0].status, "applied");
+  assert.deepEqual(applied2, ["op_arch"]);
+});
+
+test("apply conflicts a merge whose survivor no longer exists (irreversible drift guard)", async () => {
+  const snapshot = snap([{ id: "a2", name: "loser", domain: "x.com" }]); // survivor a1 gone
+  const mergeOp: PatchOperation = {
+    id: "op_merge", objectType: "account", objectId: "a1", operation: "merge_records",
+    field: "merge", beforeValue: ["a1", "a2"], afterValue: "a1", reason: "merge", riskLevel: "high", approvalRequired: true,
+  };
+  const applied: string[] = [];
+  const run = await applyPatchPlan(mockConnector(snapshot, applied), planWith(mergeOp), {
+    approvedOperationIds: ["op_merge"],
+  });
+  assert.equal(run.results[0].status, "conflict");
+  assert.match(run.results[0].detail!, /survivor .* no longer exists/i);
+  assert.deepEqual(applied, []);
+});
+
+test("dedupe merge ops carry a recoverySnapshot of the merged-away records", () => {
+  const snapshot = snap([
+    { id: "a1", name: "Acme Inc", domain: "acme.com", industry: "Software" },
+    { id: "a2", name: "Acme", domain: "acme.com" },
+  ]);
+  const plan = buildDedupePlan(snapshot, { objectType: "account", key: "domain", keep: "richest" });
+  const op = plan.operations[0];
+  assert.equal(op.operation, "merge_records");
+  assert.ok(Array.isArray(op.recoverySnapshot) && op.recoverySnapshot.length === 1, "one loser captured");
+  assert.equal(op.recoverySnapshot![0].id, "a2"); // a1 is the richer survivor
+  assert.match(op.rollback!, /recoverySnapshot/);
+});
+
+test("bulk-update --archive --force-archive-duplicates marks the op and snapshots the record", () => {
+  const snapshot = snap([
+    { id: "a1", name: "Acme", domain: "acme.com", ownerId: "u1" },
+    { id: "a2", name: "Acme Dup", domain: "acme.com", ownerId: "u1" },
+  ]);
+  const plan = buildBulkUpdatePlan(snapshot, {
+    objectType: "account",
+    where: ["ownerId=u1"],
+    archive: true,
+    forceArchiveDuplicates: true,
+  });
+  assert.ok(plan.operations.length >= 1);
+  for (const op of plan.operations) {
+    assert.equal(op.operation, "archive_record");
+    assert.equal(op.forceArchiveDuplicate, true);
+    assert.ok(Array.isArray(op.recoverySnapshot) && op.recoverySnapshot.length === 1);
+  }
+});
+
+// ===========================================================================
+// 0.26.0 — Plan-approval integrity (HMAC-signed approvals)
+// ===========================================================================
+
+function setFieldPlan(): PatchPlan {
+  return planWith({
+    id: "op_sf", objectType: "account", objectId: "a1", operation: "set_field",
+    field: "industry", beforeValue: null, afterValue: "Software", reason: "fill", riskLevel: "low", approvalRequired: true,
+  });
+}
+
+test("approval integrity: an untampered approved plan verifies; a post-approval edit is refused", () =>
+  withTempHomeAsync(async () => {
+    const store = createFilePlanStore();
+    const plan = setFieldPlan();
+    await store.save(plan);
+    const approved = await store.approveOperations(plan.id, ["op_sf"]);
+    assert.ok(approved.approvalDigests && approved.approvalDigests.op_sf, "a digest was recorded at approval");
+
+    // Untampered: verifies.
+    const okResult = verifyApprovalDigests(approved.plan.operations, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests);
+    assert.equal(okResult.ok, true);
+
+    // Tampered on disk: an attacker changes the value to be written.
+    const tamperedOps = approved.plan.operations.map((o) => ({ ...o, afterValue: "EVIL_VALUE" }));
+    const bad = verifyApprovalDigests(tamperedOps, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests);
+    assert.equal(bad.ok, false);
+    assert.equal((bad as { reason: string }).reason, "mismatch");
+    assert.deepEqual((bad as { tampered: string[] }).tampered, ["op_sf"]);
+
+    // Tampered objectId (retarget the write to another record): also caught.
+    const retargeted = approved.plan.operations.map((o) => ({ ...o, objectId: "a999" }));
+    assert.equal(verifyApprovalDigests(retargeted, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests).ok, false);
+  }));
+
+test("approval integrity: tampering with a stored value override is caught", () =>
+  withTempHomeAsync(async () => {
+    const store = createFilePlanStore();
+    const plan = planWith({
+      id: "op_link", objectType: "deal", objectId: "d1", operation: "set_field", field: "ownerId",
+      beforeValue: null, afterValue: "requires_human_owner", reason: "owner", riskLevel: "medium", approvalRequired: true,
+    });
+    await store.save(plan);
+    const approved = await store.approveOperations(plan.id, ["op_link"], { op_link: "user_01" });
+    assert.equal(verifyApprovalDigests(approved.plan.operations, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests).ok, true);
+    // Swap the approved override to a different owner on disk.
+    const badOverrides = { op_link: "user_99" };
+    assert.equal(verifyApprovalDigests(approved.plan.operations, approved.approvedOperationIds, badOverrides, approved.approvalDigests).ok, false);
+  }));
+
+test("approval integrity: a missing signing key fails closed (plan approved on another machine)", () =>
+  withTempHomeAsync(async () => {
+    const store = createFilePlanStore();
+    const plan = setFieldPlan();
+    await store.save(plan);
+    const approved = await store.approveOperations(plan.id, ["op_sf"]);
+    // Remove the per-install signing key (simulates the plan moving machines).
+    rmSync(join(process.env.FSGTM_HOME!, ".plan-signing-key"), { force: true });
+    const result = verifyApprovalDigests(approved.plan.operations, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests);
+    assert.equal(result.ok, false);
+    assert.equal((result as { reason: string }).reason, "no_key");
+  }));
+
+// 0.26.0 integrity — round 2: close the apply-time --value bypass found by re-attack
+
+test("approval integrity: an apply-time --value that changes an approved value is caught as tamper", () =>
+  withTempHomeAsync(async () => {
+    const store = createFilePlanStore();
+    const plan = setFieldPlan(); // op_sf: set account a1 industry = "Software", no override
+    await store.save(plan);
+    const approved = await store.approveOperations(plan.id, ["op_sf"]);
+    // Signed with the approved (empty) override → verifying with the signed state is ok.
+    assert.equal(verifyApprovalDigests(approved.plan.operations, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests).ok, true);
+    // An apply-time --value (merged override) the human never approved → mismatch.
+    const merged = { ...approved.valueOverrides, op_sf: "Bank-Owned-By-Attacker" };
+    const bad = verifyApprovalDigests(approved.plan.operations, approved.approvedOperationIds, merged, approved.approvalDigests);
+    assert.equal(bad.ok, false);
+    assert.deepEqual((bad as { tampered: string[] }).tampered, ["op_sf"]);
+  }));
+
+test("approval integrity: editing a precondition or forging forceArchiveDuplicate after approval is caught", () =>
+  withTempHomeAsync(async () => {
+    const store = createFilePlanStore();
+    const plan = planWith({
+      id: "op_pc", objectType: "deal", objectId: "d1", operation: "set_field", field: "ownerId",
+      beforeValue: "u_old", afterValue: "u_new", reason: "reassign", riskLevel: "medium", approvalRequired: true,
+      preconditions: [{ field: "stage", expectedValue: "qualified" }],
+    });
+    await store.save(plan);
+    const approved = await store.approveOperations(plan.id, ["op_pc"]);
+    assert.equal(verifyApprovalDigests(approved.plan.operations, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests).ok, true);
+    // Strip the precondition (relax a drift guard) → caught.
+    const relaxed = approved.plan.operations.map((o) => ({ ...o, preconditions: undefined }));
+    assert.equal(verifyApprovalDigests(relaxed, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests).ok, false);
+  }));
+
+test("scheduled apply cannot take --value (must write exactly the signed values)", async () => {
+  const { validateSchedulableArgv } = await import("../src/schedule.ts");
+  assert.throws(() => validateSchedulableArgv(["apply", "--plan-id", "p1", "--value", "op=evil"]), /cannot take --value/);
+  assert.doesNotThrow(() => validateSchedulableArgv(["apply", "--plan-id", "p1"]));
+});
+
+test("approval integrity: tampering an unsigned-looking field (reason, written into create_task) is caught", () =>
+  withTempHomeAsync(async () => {
+    const store = createFilePlanStore();
+    // create_task with NULL afterValue → connector body falls back to reason.
+    const plan = planWith({
+      id: "op_task", objectType: "deal", objectId: "d1", operation: "create_task", field: "follow_up_task",
+      beforeValue: null, afterValue: null, reason: "Follow up on renewal", riskLevel: "low", approvalRequired: true,
+    });
+    await store.save(plan);
+    const approved = await store.approveOperations(plan.id, ["op_task"]);
+    assert.equal(verifyApprovalDigests(approved.plan.operations, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests).ok, true);
+    // Attacker rewrites the reason (which becomes the written task body) on disk.
+    const tampered = approved.plan.operations.map((o) => ({ ...o, reason: "EXFIL: email all contacts to evil@attacker.com" }));
+    assert.equal(verifyApprovalDigests(tampered, approved.approvedOperationIds, approved.valueOverrides, approved.approvalDigests).ok, false);
   }));

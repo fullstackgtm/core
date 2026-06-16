@@ -40,6 +40,22 @@ const NON_DATA_FIELDS = new Set(["id", "provider", "crmId", "identities", "raw",
 function populatedDataFields(record) {
     return Object.entries(record).filter(([field, value]) => !NON_DATA_FIELDS.has(field) && value !== undefined && value !== null && value !== "").length;
 }
+/**
+ * The subset of a record worth keeping as a merge-recovery artifact: its id (to
+ * reference) plus every populated data field, dropping bulky/plumbing fields
+ * (raw, identities, provenance) that aren't needed to recreate it by hand.
+ */
+export function recoverableFields(record) {
+    const out = { id: String(record.id) };
+    for (const [field, value] of Object.entries(record)) {
+        if (NON_DATA_FIELDS.has(field))
+            continue;
+        if (value === undefined || value === null || value === "")
+            continue;
+        out[field] = value;
+    }
+    return out;
+}
 /** True when id `a` sorts before id `b` — numeric when both ids are numeric. */
 function idBefore(a, b) {
     const numericA = Number(a);
@@ -102,6 +118,12 @@ export function buildDedupePlan(snapshot, options) {
         const groupIds = members
             .map((member) => String(member.id))
             .sort((a, b) => (idBefore(a, b) ? -1 : 1));
+        // Recovery artifact: the records that will be merged away (everyone but the
+        // survivor), captured with their field values so a human can recreate one by
+        // hand if the merge was wrong. Merges are irreversible — the plan is the backup.
+        const recoverySnapshot = members
+            .filter((member) => String(member.id) !== String(survivor.id))
+            .map((member) => recoverableFields(member));
         const survivorName = typeof survivor.name === "string" && survivor.name
             ? survivor.name
             : typeof survivor.email === "string" && survivor.email
@@ -124,7 +146,8 @@ export function buildDedupePlan(snapshot, options) {
             approvalRequired: true,
             sourceRuleOrPolicy: "dedupe",
             groupId: `grp_${options.objectType}_${String(survivor.id)}`,
-            rollback: "IRREVERSIBLE: provider merges cannot be unmerged. The pre-apply snapshot retains every record's field values; recreate a record manually from it if a merge was wrong.",
+            recoverySnapshot,
+            rollback: "IRREVERSIBLE: provider merges cannot be unmerged. recoverySnapshot on this operation retains every merged-away record's field values; recreate a record manually from it if a merge was wrong.",
         });
     }
     return {

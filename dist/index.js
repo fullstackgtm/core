@@ -16,6 +16,7 @@ export { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, 
 export { diffFindings, diffSnapshots, diffToMarkdown, } from "./diff.js";
 export { mergeSnapshots, } from "./merge.js";
 export { createFilePlanStore } from "./planStore.js";
+export { computeApprovalDigests, loadOrCreateSigningKey, loadSigningKey, signApproval, verifyApprovalDigests, } from "./integrity.js";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
 export { auditReportToHtml, auditReportToMarkdown } from "./report.js";
 export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, normalizeFieldMappings, readMappedValue, } from "./mappings.js";

@@ -27,6 +27,7 @@
  * `account.ownerId`, `account.contactCount`; accounts get `contactCount`
  * and `openDealCount`.
  */
+import { recoverableFields } from "./dedupe.ts";
 import { normalizeDomain } from "./merge.ts";
 import { stableHash } from "./rules.ts";
 import type {
@@ -399,7 +400,11 @@ export function buildBulkUpdatePlan(
         beforeValue: null,
         afterValue: null,
         riskLevel: "high",
-        rollback: "Archived records can be restored from the provider's recycle bin within its retention window.",
+        // Carry the human's explicit force decision to the apply-time guard, and
+        // snapshot the record so it can be recreated if the archive was wrong.
+        ...(options.forceArchiveDuplicates ? { forceArchiveDuplicate: true } : {}),
+        recoverySnapshot: [recoverableFields(record)],
+        rollback: "Archived records can be restored from the provider's recycle bin within its retention window; recoverySnapshot also retains the field values.",
       });
       continue;
     }

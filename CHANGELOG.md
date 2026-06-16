@@ -5,6 +5,59 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.26.0] — 2026-06-15
+
+Write-path integrity — the "no write without approval" guarantee now binds to
+operation *content*, and the two irreversible operations finally get a guard.
+Each fix verified by a refute-by-default re-attack; the integrity binding took
+three rounds (the re-attack kept finding unsigned fields that reach a write).
+
+### Added
+
+- **Plan-approval integrity signatures.** `plans approve` now HMAC-signs each
+  approved operation's full apply-relevant content (operation, object, field,
+  before/after value, group, preconditions, force flags, the approved value
+  override, and reason) with a per-install key (`$FSGTM_HOME/.plan-signing-key`,
+  0600). `apply --plan-id` re-verifies and refuses the whole apply if any
+  approved operation changed since approval, if the plan was approved without
+  signatures (downgrade guard), or if the signing key is absent (a plan
+  approved on another machine fails closed). The invariant: **what gets written
+  equals what the human signed** — a plan file edited between approval and apply
+  (by a synced/backed-up copy, a co-tenant, or a compromised dependency) is
+  caught instead of executed. apply-time `--value` is folded into the check, and
+  a scheduled `apply` may not take `--value` (it must write exactly the signed
+  values).
+- **Recovery snapshots on irreversible operations.** `dedupe` merge ops and
+  `bulk-update --archive` ops now carry `recoverySnapshot` — the field values of
+  every record that will be destroyed — so the rollback instruction ("recreate
+  it by hand") is backed by actual data in the plan, which is the backup.
+
+### Security
+
+- **Apply-time guard against destroying duplicates (the benchmark self-own).**
+  `apply` now refuses any `archive_record` whose target still shares an identity
+  key (account domain / contact email) with another live record — unless the
+  human explicitly forced it (`--force-archive-duplicates`, which is recorded on
+  the operation and signed). This catches every path (agent-driven, hand-edited,
+  audit), not just `bulk-update`, so an agent on a dedupe task can no longer
+  silently archive a record where it should merge — the rail is safe regardless
+  of model strength.
+- **Drift guard for irreversible operations.** `merge_records` and
+  `archive_record` got no compare-and-set (there is no single field to compare).
+  Apply now checks a fresh snapshot: a merge whose survivor is gone, or whose
+  duplicates are already merged, and an archive of a record that no longer
+  exists, all conflict out instead of firing an irreversible, replay-unsafe write.
+
+### Notes
+
+- The CAS empty/null equivalence in field compare-and-set is intentional (CRMs
+  normalize `""`↔`null` server-side; distinguishing them would cause false
+  conflicts). Known residuals for a follow-up: the archive-duplicate guard keys
+  on domain/email only, so `dedupe --key name` (and deal dedupe, which has no
+  identity key) are not guarded against destructive archive — use `dedupe`
+  (merge) for those; and `marketMapToMarkdown` is not HTML-escaped (the HTML
+  report is).
+
 ## [0.25.2] — 2026-06-15
 
 Security hardening I — confirmed fixes from an adversarial audit (each verified

@@ -11,6 +11,12 @@ export type StoredPlan = {
     status: ApprovalStatus;
     approvedOperationIds: string[];
     valueOverrides: Record<string, unknown>;
+    /**
+     * HMAC of each approved operation's content at approval time (see
+     * integrity.ts). Apply re-verifies these so a post-approval edit to the plan
+     * file is caught instead of written. Absent on plans approved before 0.26.0.
+     */
+    approvalDigests?: Record<string, string>;
     runs: PatchPlanRun[];
     createdAt: string;
     updatedAt: string;
