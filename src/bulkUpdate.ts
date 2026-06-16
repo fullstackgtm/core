@@ -123,7 +123,33 @@ function isComparableValue(rhs: string): boolean {
   return false;
 }
 
+/**
+ * Catch the "multiple conditions crammed into one --where" footgun: a weak
+ * agent writes `--where 'stage!=closedwon AND stage!=closedlost'`, which the
+ * grammar would otherwise parse as a single neq clause whose VALUE is the
+ * literal string `closedwon AND stage!=closedlost` — matching almost nothing
+ * (or, with `!=`, almost EVERYTHING), so the gate faithfully applies a
+ * wildly-wrong-but-authorized plan.
+ *
+ * Fire only when a connector ` AND `/` OR ` is followed by a clause-LIKE
+ * structure (a field name + an operator), so incidental prose in a value —
+ * `name~Procter AND Gamble`, `name~research and development` — is NOT
+ * rejected (the word after the connector has no operator). Case-insensitive.
+ */
+const INLINE_CONJUNCTION = new RegExp(
+  `\\s(and|or)\\s+${FIELD_PATTERN}\\s*(!=|<=|>=|!~|=|<|>|~|:(empty|notempty)\\b)`,
+  "i",
+);
+
 export function parseWhere(expr: string): WhereClause {
+  if (INLINE_CONJUNCTION.test(expr)) {
+    throw new Error(
+      `Cannot parse "${expr}": looks like multiple conditions in one clause. ` +
+        `AND is implicit — use a SEPARATE --where for each condition ` +
+        `(e.g. --where stage!=closedwon --where stage!=closedlost). ` +
+        `For OR within one field, use value1|value2 (e.g. --where stage=closedwon|closedlost).`,
+    );
+  }
   const empty = expr.match(new RegExp(`^(${FIELD_PATTERN}):(empty|notempty)$`));
   if (empty) return { field: empty[1], op: empty[2] as "empty" | "notempty", raw: expr };
   const neq = expr.match(new RegExp(`^(${FIELD_PATTERN})!=(.*)$`));
