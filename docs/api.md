@@ -91,8 +91,11 @@ emits a standard dry-run `PatchPlan` for the normal approve → apply chain:
 
 - `buildBulkUpdatePlan(snapshot, options: BulkUpdateOptions)` with
   `parseWhere` (filter expressions: `=`, `!=`, `~`, `!~`, `:empty`,
-  `:notempty`, `|` any-of, relational pseudo-fields) and
-  `isFilterableField`. Filters are re-verified per record at apply time;
+  `:notempty`, type-aware comparisons `<`, `>`, `<=`, `>=` — `today` resolves
+  to `options.today`/the policy date, date and numeric fields coerce by value
+  form, `|` any-of, relational pseudo-fields) and `isFilterableField`. Filters
+  are re-verified per record at apply time (the resolved `today` rides along on
+  `plan.filter.today` so re-verification agrees with plan time);
   `from:<sourceField>` values derive per record from the snapshot.
 - `buildDedupePlan(snapshot, options: DedupeOptions)` with `dedupeKey` —
   duplicate groups by normalized identity key, one `merge_records` per group,

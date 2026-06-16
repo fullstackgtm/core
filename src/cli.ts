@@ -2282,6 +2282,9 @@ async function bulkUpdateCommand(args: string[]) {
     guard: repeatedOption(rest, "--guard"),
     reason: option(rest, "--reason") ?? undefined,
     maxOperations: numericOption(rest, "--max-operations"),
+    // --today resolves the comparison `today` literal (e.g. closeDate<today);
+    // defaults to the system date inside buildBulkUpdatePlan when omitted.
+    today: option(rest, "--today") ?? undefined,
   });
   await emitPlan(plan, rest);
 }

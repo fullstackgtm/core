@@ -33,10 +33,17 @@ export type BulkUpdateOptions = {
     reason?: string;
     /** refuse to build plans larger than this (default 500 operations) */
     maxOperations?: number;
+    /**
+     * Date the comparison `today` literal resolves to (ISO yyyy-mm-dd). Set from
+     * the policy/--today date at the CLI; defaults to the system date. Stored on
+     * plan.filter so apply-time filter re-verification resolves `today`
+     * identically to plan time.
+     */
+    today?: string;
 };
 type WhereClause = {
     field: string;
-    op: "eq" | "neq" | "contains" | "notcontains" | "empty" | "notempty";
+    op: "eq" | "neq" | "contains" | "notcontains" | "empty" | "notempty" | "lt" | "gt" | "lte" | "gte";
     value?: string;
     raw: string;
 };
@@ -44,9 +51,14 @@ export declare function parseWhere(expr: string): WhereClause;
 /** True when `field` is filterable for this object type (relational pseudo-fields included). */
 export declare function isFilterableField(objectType: BulkUpdateOptions["objectType"], field: string): boolean;
 export declare function parseGuard(raw: string): PlanGuard;
-/** Ids of records matching a filter — used for apply-time filter re-verification. */
-export declare function eligibleIds(snapshot: CanonicalGtmSnapshot, objectType: BulkUpdateOptions["objectType"], where: string[]): Set<string>;
+/**
+ * Ids of records matching a filter — used for apply-time filter
+ * re-verification. `today` resolves the comparison `today` literal; apply-time
+ * callers pass the value the plan was built with (stored on plan.filter.today)
+ * so re-verification uses the SAME today, defaulting to the system date.
+ */
+export declare function eligibleIds(snapshot: CanonicalGtmSnapshot, objectType: BulkUpdateOptions["objectType"], where: string[], today?: string): Set<string>;
 /** Evaluate a plan guard against a snapshot. Returns null when satisfied, else a failure detail. */
-export declare function evaluateGuard(snapshot: CanonicalGtmSnapshot, guard: PlanGuard): string | null;
+export declare function evaluateGuard(snapshot: CanonicalGtmSnapshot, guard: PlanGuard, today?: string): string | null;
 export declare function buildBulkUpdatePlan(snapshot: CanonicalGtmSnapshot, options: BulkUpdateOptions): PatchPlan;
 export {};

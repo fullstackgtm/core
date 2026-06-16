@@ -9,6 +9,10 @@
  *  (c) territory-handoff       — `reassign … --except-deal-stage contractsent`
  *                                (drift surfaces as conflict, not a violation)
  *  (d) link-or-create-companies — `fix --rule missing-deal-account --yes`
+ *  (e) past-close-dates        — bulk-update --where closeDate<today (comparison
+ *                                operator path: one concurrency-safe batch)
+ *  (f) past-close-dates        — `fix --rule past-close-date` (rule-backed path,
+ *                                close date supplied via --value override)
  *
  * Run: node --experimental-strip-types src/proofDeterministic.ts
  */
@@ -129,6 +133,51 @@ function report(label: string, grade: Grade): void {
     assert.match(out, /approved:\s+5 of 5/, `fix should approve all 5 link operations:\n${out}`);
   });
   report("link-or-create-companies", grade);
+}
+
+// (e) past-close-dates via the comparison-operator path: one bulk-update with
+// `closeDate<today` + `isClosed=false` exactly partitions the seeded set
+// (openPast match; closedPast excluded by isClosed=false; openFuture excluded
+// by the date comparison), approve all, apply. No rule, no per-record logic —
+// the filter expresses the intent in a single concurrency-safe batch.
+{
+  const grade = await withScenario("past-close-dates", async (fsgtm) => {
+    const planned = await fsgtm(
+      "bulk-update deal --where closeDate<today --where isClosed=false --set closeDate=2026-06-30 --provider hubspot --today 2026-06-11 --save",
+    );
+    expectOk(planned, "bulk-update closeDate<today");
+    assert.match(planned, /8 proposed dry-run operations/, `expected 8 open-past deals:\n${planned}`);
+    const [planId] = planIds(planned);
+    assert.ok(planId, `no plan id in bulk-update output:\n${planned}`);
+    expectOk(await fsgtm(`plans approve ${planId} --operations all`), "approve");
+    expectOk(await fsgtm(`apply --plan-id ${planId} --provider hubspot`), "apply");
+  });
+  report("past-close-dates (comparison)", grade);
+}
+
+// (f) past-close-dates via the rule-backed path: `fix --rule past-close-date`
+// audits + saves the plan (the rule emits requires_human_close_date_selection,
+// so its one-shot leaves the placeholders below the bar), then approve all
+// operations with the human-supplied close date as an explicit --value override
+// per op, and apply. Same end state: 8/8, 0 violations.
+{
+  const grade = await withScenario("past-close-dates", async (fsgtm) => {
+    const fixed = await fsgtm("fix --rule past-close-date --provider hubspot --today 2026-06-11");
+    expectOk(fixed, "fix --rule past-close-date");
+    const [planId] = planIds(fixed);
+    assert.ok(planId, `no plan id in fix output:\n${fixed}`);
+    // `suggest` lists one line per requires_human_* placeholder op (the rule
+    // emits requires_human_close_date_selection with no deterministic value),
+    // a compact way to read back the 8 operation ids to fill via --value.
+    const suggested = await fsgtm(`suggest --plan-id ${planId} --provider hubspot --today 2026-06-11`);
+    expectOk(suggested, "suggest");
+    const opIds = [...new Set(suggested.match(/op_[0-9a-z]+/g) ?? [])];
+    assert.equal(opIds.length, 8, `expected 8 past-close-date operations, got ${opIds.length}:\n${suggested}`);
+    const valueFlags = opIds.map((id) => `--value ${id}=2026-06-30`).join(" ");
+    expectOk(await fsgtm(`plans approve ${planId} --operations all ${valueFlags}`), "approve with overrides");
+    expectOk(await fsgtm(`apply --plan-id ${planId} --provider hubspot`), "apply");
+  });
+  report("past-close-dates (rule)", grade);
 }
 
 console.log("\nALL DETERMINISTIC PROOFS PASSED");
