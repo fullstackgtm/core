@@ -106,7 +106,7 @@ The original thesis: GTM data disagrees across systems.
 - Docs site with the operating-model registry as browsable reference.
 - Performance pass: streaming snapshots for very large orgs.
 
-## 0.10 → 0.25 — the layers, as shipped
+## 0.10 → 0.28 — the layers, as shipped
 
 The plan above ended at the freeze; what shipped next grew the surface
 outward, one layer per release, each consolidating before the next expanded:
@@ -129,9 +129,19 @@ outward, one layer per release, each consolidating before the next expanded:
 - **0.24** — the schedule layer: horizontal cron, read/plan-side allowlist,
   scheduling never auto-approves.
 - **0.25** — agent skill distribution (`npx skills add fullstackgtm/core`).
+- **0.25.2–0.26** — the security-hardening train: write-path integrity
+  (HMAC-signed approvals re-verified at apply; archive-of-duplicate and
+  irreversible-op drift guards; recovery snapshots) plus crontab/SSRF/XSS/
+  error-body/CSV/credential-mode fixes, each verified by adversarial re-attack.
+- **0.27** — trust & transparency: `audit-log export|verify` (hash-chained,
+  signed apply-run record), SECURITY.md + DATA-FLOWS.md + company-of-record,
+  call-transcript insight grounding.
+- **0.28** — connectors, credentials & supply chain: opt-in OS keychain,
+  broker-https enforcement, the build/CI dist-integrity gate (published dist is
+  provably from source), Salesforce-merge capability matrix.
 
 The known-gaps list below predates these layers and has been re-verified
-against the 0.25 surface: still accurate, still open.
+against the 0.28 surface: still accurate, still open.
 
 ## Known real-portal gaps to close before 1.0
 

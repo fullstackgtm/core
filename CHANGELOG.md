@@ -5,6 +5,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.28.2] — 2026-06-16
+
+Collaborator/co-maintainer onboarding (from a readiness review). No runtime
+code changes; one dev-ergonomics fix.
+
+### Fixed
+
+- **Package-local `npm test` no longer silently passes with zero tests.** A
+  `pretest` guard fails with a pointer to run package tests from the monorepo
+  root (the tests live there; the package-local script is meaningful only on the
+  published mirror). Previously a maintainer could change code, run the package's
+  test command, see green, and ship a regression.
+
+### Added
+
+- **CONTRIBUTING.md at the package root** (the README link previously 404'd in
+  the source repo — it existed only in the mirror-staging dir). Covers dev setup,
+  the test-from-root rule, the open-core mirror topology, the release ritual, and
+  the access a co-maintainer needs to cut a release.
+- **docs/architecture.md** — module map + snapshot → audit → plan → apply data
+  flow + "where do I add a rule / connector / operation".
+- A package-scoped **CLAUDE.md** so an agent/maintainer isn't pointed at the
+  hosted app's Convex stack.
+
+### Changed
+
+- README benchmark line reconciled with RESULTS.md (1,088-run, six models);
+  roadmap-to-1.0 shipped-layers list extended through 0.28.
+
 ## [0.28.1] — 2026-06-16
 
 Company-of-record correction: the legal entity is **Full Stack GTM LLC** and the

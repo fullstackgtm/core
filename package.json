@@ -1,6 +1,6 @@
 {
   "name": "fullstackgtm",
-  "version": "0.28.1",
+  "version": "0.28.2",
   "description": "Open-source agentic GTM ops framework: canonical GTM data model, pluggable deterministic audits, reviewable dry-run patch plans, approval-gated write-back with conflict detection, and cross-system entity resolution. HubSpot, Salesforce, and Stripe connectors included.",
   "license": "Apache-2.0",
   "author": "Full Stack GTM LLC <ryan@fullstackgtm.com> (https://fullstackgtm.com)",
@@ -29,6 +29,7 @@
     "README.md",
     "CHANGELOG.md",
     "INSTALL_FOR_AGENTS.md",
+    "CONTRIBUTING.md",
     "llms.txt",
     "skills",
     "LICENSE",
@@ -38,6 +39,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "pretest": "test -d tests || { echo 'No tests/ in this directory. In the published mirror, tests live here and `npm test` works. In the monorepo, run package tests from the repo ROOT: `node --experimental-strip-types --test tests/fullstackgtm*.test.ts` (the tests live at the monorepo root tests/).' >&2; exit 1; }",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "prepublishOnly": "npm run build"
   },
