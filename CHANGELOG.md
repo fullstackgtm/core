@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.28.3] — 2026-06-16
+
+Fix broken links in the published mirror. CONTRIBUTING.md and CLAUDE.md
+referenced `../../docs/open-core-boundary.md` — a monorepo-root path that
+escapes the repo on the mirror (where the package is the repo root) and targets
+a doc the mirror doesn't carry. Made those references self-contained (the
+open-core model and release ritual are explained inline). A full sweep confirms
+every relative link in the shipped docs now resolves within the package/mirror.
+
 ## [0.28.2] — 2026-06-16
 
 Collaborator/co-maintainer onboarding (from a readiness review). No runtime
