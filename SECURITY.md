@@ -7,7 +7,7 @@ security reviewer needs.
 
 ## Reporting a vulnerability
 
-Email **security@fullstackgtm.com** with a description and, ideally, a
+Email **ryan@fullstackgtm.com** with a description and, ideally, a
 reproduction. Please do not open a public issue for a security report. We aim
 to acknowledge within 3 business days and to ship a fix or mitigation before
 any public disclosure. There is no bounty program yet; credit is given in the

@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.28.1] — 2026-06-16
+
+Company-of-record correction: the legal entity is **Full Stack GTM LLC** and the
+contact/disclosure address is **ryan@fullstackgtm.com** (package.json author,
+NOTICE copyright, SECURITY.md, DATA-FLOWS.md). No code changes.
+
 ## [0.28.0] — 2026-06-16
 
 Connectors, credentials & supply chain — the last of the hardening train.
