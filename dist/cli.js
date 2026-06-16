@@ -14,6 +14,7 @@ import { generateDemoSnapshot } from "./demo.js";
 import { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
 import { mergeSnapshots } from "./merge.js";
 import { verifyApprovalDigests } from "./integrity.js";
+import { buildAuditLog, verifyAuditLog } from "./auditLog.js";
 import { createFilePlanStore } from "./planStore.js";
 import { auditReportToHtml, auditReportToMarkdown } from "./report.js";
 import { builtinAuditRules } from "./rules.js";
@@ -155,6 +156,7 @@ Usage:
   fullstackgtm plans approve <id> --values-from <suggestions.json> [--min-confidence high|low] [--include-creates]
   fullstackgtm apply --plan-id <id> --provider <name>
   fullstackgtm apply --plan <path> --provider <name> --approve <ids|all> [options]
+  fullstackgtm audit-log export [--out <path>] | verify --in <path>   tamper-evident apply-run record
   fullstackgtm rules [--json]
   fullstackgtm profiles [--json]               list credential profiles
   fullstackgtm doctor [--json]                 check install, credentials, and next step
@@ -2281,6 +2283,52 @@ function readSuggestionValues(path, minConfidence, includeCreates) {
     }
     return { overrides, skipped };
 }
+async function auditLogCommand(args) {
+    const [sub, ...rest] = args;
+    if (!sub || sub === "--help" || sub === "-h" || (sub !== "export" && sub !== "verify")) {
+        console.log(`Usage:
+audit-log export [--out <path>] [--json]   hash-chained, signed record of every apply run
+audit-log verify [--in <path>]             re-check an exported log's chain and signature
+
+export flattens every apply run across all stored plans (this profile) into a
+tamper-evident chain — each entry carries the prior entry's hash, and the chain
+head is HMAC-signed with this install's key — so a change-management process can
+archive one file and later prove it was not edited. verify recomputes the chain
+and (if the signing key is present) the signature.`);
+        return;
+    }
+    if (sub === "export") {
+        const plans = await createFilePlanStore().list();
+        const log = buildAuditLog(plans, new Date().toISOString());
+        const payload = `${JSON.stringify(log, null, 2)}\n`;
+        const outPath = option(rest, "--out");
+        if (outPath) {
+            writeFileSync(resolve(process.cwd(), outPath), payload);
+            console.log(`Wrote ${outPath}: ${log.entryCount} run(s), chain head ${log.chainHead.slice(0, 12)}${log.signature ? " (signed)" : " (unsigned — no signing key on this install)"}.`);
+        }
+        else if (rest.includes("--json")) {
+            console.log(payload);
+        }
+        else {
+            console.log(`${log.entryCount} apply run(s); chain head ${log.chainHead.slice(0, 12)}${log.signature ? ", signed" : ", unsigned"}. Pass --out <path> to archive, or --json to print.`);
+        }
+        return;
+    }
+    // verify
+    const inPath = option(rest, "--in");
+    if (!inPath)
+        throw new Error("audit-log verify requires --in <exported-log.json>");
+    const log = JSON.parse(readFileSync(resolve(process.cwd(), inPath), "utf8"));
+    const result = verifyAuditLog(log);
+    if (rest.includes("--json")) {
+        console.log(JSON.stringify(result, null, 2));
+    }
+    else {
+        console.log(result.ok ? `OK — ${result.detail}` : `TAMPERED — ${result.detail}`);
+    }
+    if (!result.ok)
+        process.exitCode = 2;
+}
 async function apply(args) {
     const provider = option(args, "--provider");
     if (!provider)
@@ -3051,6 +3099,10 @@ export async function runCli(argv) {
     }
     if (command === "plans") {
         await plansCommand(args);
+        return;
+    }
+    if (command === "audit-log") {
+        await auditLogCommand(args);
         return;
     }
     if (command === "apply") {

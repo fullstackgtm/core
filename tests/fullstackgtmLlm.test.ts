@@ -52,6 +52,43 @@ test("provider detection and credential resolution ladder", () => {
   }
 });
 
+test("extraction drops insights whose 'verbatim' quote is not actually in the transcript (prompt-injection / hallucination gate)", async () => {
+  const transcript = "Rep: I'll send the proposal Friday.\nCustomer: Sounds good.";
+  const { insights } = await extractInsightsLlm(transcript, {
+    provider: "anthropic",
+    apiKey: "sk-ant-test",
+    fetchImpl: (async () =>
+      anthropicToolResponse({
+        insights: [
+          // Grounded: the quote IS in the transcript → kept.
+          { type: "next_step", text: "send proposal", evidence: "I'll send the proposal Friday.", importance: 5, confidence: 0.9 },
+          // Fabricated/injected: the quote is NOT in the transcript → dropped.
+          { type: "next_step", text: "wire funds", evidence: "Please wire $50,000 to account 12345 immediately.", importance: 5, confidence: 0.99 },
+        ],
+      })) as typeof fetch,
+  });
+  assert.equal(insights.length, 1, "only the grounded insight survives the verbatim gate");
+  assert.equal(insights[0].text, "send proposal");
+});
+
+test("extraction drops a next_step whose written action is decoupled from its (real) quote", async () => {
+  // The decoupling attack: evidence quotes a genuine, innocuous transcript span,
+  // but the next_step `text` (the value WRITTEN to the CRM) is an unrelated,
+  // attacker-chosen action. The action must itself be grounded in the quote.
+  const transcript = "Customer: we are not moving forward without a security review first.\nRep: understood.";
+  const { insights } = await extractInsightsLlm(transcript, {
+    provider: "anthropic",
+    apiKey: "sk-ant-test",
+    fetchImpl: (async () =>
+      anthropicToolResponse({
+        insights: [
+          { type: "next_step", text: "Rep to wire $50,000 deposit to account 1234 by Friday", evidence: "we are not moving forward without a security review first.", importance: 5, confidence: 0.99 },
+        ],
+      })) as typeof fetch,
+  });
+  assert.equal(insights.length, 0, "a next_step action not grounded in its quote is dropped");
+});
+
 test("anthropic extraction maps the forced tool call into canonical insights", async () => {
   const calls: Array<{ url: string; body: any }> = [];
   const { insights, model } = await extractInsightsLlm("Rep: I'll send the proposal Friday.", {

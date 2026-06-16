@@ -123,6 +123,13 @@ export {
   verifyApprovalDigests,
   type ApprovalVerification,
 } from "./integrity.ts";
+export {
+  buildAuditLog,
+  verifyAuditLog,
+  type AuditLogEntry,
+  type AuditLogExport,
+  type AuditLogVerification,
+} from "./auditLog.ts";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
 export { auditReportToHtml, auditReportToMarkdown, type ReportOptions } from "./report.ts";
 export {
