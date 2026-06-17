@@ -42,6 +42,13 @@ const SOBJECT_TYPES: Partial<Record<GtmObjectType, string>> = {
   deal: "Opportunity",
 };
 
+// SObjects the SOAP merge() call supports. Opportunity is deliberately absent —
+// Salesforce has no opportunity merge at all (API or UI).
+const SOAP_MERGEABLE: Partial<Record<GtmObjectType, string>> = {
+  account: "Account",
+  contact: "Contact",
+};
+
 const MAPPING_OBJECT_TYPES: Partial<Record<GtmObjectType, Exclude<CrmObjectType, "owners">>> = {
   account: "accounts",
   contact: "contacts",
@@ -378,6 +385,105 @@ export function createSalesforceConnector(
     };
   }
 
+  function escapeXml(value: string): string {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  /**
+   * One SOAP merge() call: master + up to 2 records to merge. Salesforce has no
+   * REST merge resource, but the Partner SOAP API's merge() works for Account,
+   * Contact, Lead, and Case, and accepts the OAuth access token as the SOAP
+   * session id. Returns ok/detail (the SOAP fault/error message is operational
+   * — MALFORMED_ID, entity-locked — not a data echo, so it's surfaced, capped).
+   */
+  async function soapMerge(
+    sobjectType: string,
+    masterId: string,
+    loserIds: string[],
+  ): Promise<{ ok: boolean; detail?: string }> {
+    const connection = await options.getConnection();
+    const version = apiVersion.replace(/^v/, ""); // SOAP path uses "59.0", not "v59.0"
+    const url = `${connection.instanceUrl.replace(/\/$/, "")}/services/Soap/u/${version}`;
+    const toMerge = loserIds.map((id) => `<urn:recordToMergeIds>${escapeXml(id)}</urn:recordToMergeIds>`).join("");
+    const envelope =
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:partner.soap.sforce.com" xmlns:urn1="urn:sobject.partner.soap.sforce.com">` +
+      `<soapenv:Header><urn:SessionHeader><urn:sessionId>${escapeXml(connection.accessToken)}</urn:sessionId></urn:SessionHeader></soapenv:Header>` +
+      `<soapenv:Body><urn:merge><urn:request>` +
+      `<urn:masterRecord><urn1:type>${sobjectType}</urn1:type><urn1:Id>${escapeXml(masterId)}</urn1:Id></urn:masterRecord>` +
+      toMerge +
+      `</urn:request></urn:merge></soapenv:Body></soapenv:Envelope>`;
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method: "POST",
+        headers: { "Content-Type": "text/xml; charset=UTF-8", SOAPAction: '""' },
+        body: envelope,
+      });
+    } catch (error) {
+      const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+      return { ok: false, detail: `Cannot reach the Salesforce SOAP endpoint${cause}.` };
+    }
+    const text = await response.text().catch(() => "");
+    if (!response.ok) {
+      const fault = /<faultstring>([\s\S]*?)<\/faultstring>/.exec(text)?.[1]?.trim();
+      return { ok: false, detail: `Salesforce SOAP merge failed (HTTP ${response.status})${fault ? `: ${fault.slice(0, 200)}` : ""}.` };
+    }
+    if (!/<success>\s*true\s*<\/success>/i.test(text)) {
+      const message = /<message>([\s\S]*?)<\/message>/.exec(text)?.[1]?.trim();
+      return { ok: false, detail: `Salesforce rejected the merge${message ? `: ${message.slice(0, 200)}` : ""}.` };
+    }
+    return { ok: true };
+  }
+
+  async function mergeRecords(operation: PatchOperation): Promise<PatchOperationResult> {
+    const sobjectType = SOAP_MERGEABLE[operation.objectType];
+    if (!sobjectType) {
+      return {
+        operationId: operation.id,
+        status: "skipped",
+        detail:
+          operation.objectType === "deal"
+            ? "Salesforce opportunities cannot be merged (no merge exists in the API or the UI). Pick a survivor and close/archive the duplicate opportunities instead."
+            : `Salesforce merge supports Account and Contact only (not ${operation.objectType}).`,
+      };
+    }
+    const master = operation.objectId;
+    const group = Array.isArray(operation.beforeValue) ? (operation.beforeValue as unknown[]).map(String) : [];
+    const losers = group.filter((id) => id !== master);
+    if (losers.length === 0) {
+      return { operationId: operation.id, status: "skipped", detail: "Nothing to merge — no records besides the survivor." };
+    }
+    // SOAP merge() takes the master + at most 2 records per call; batch larger
+    // duplicate groups. A mid-batch failure is reported with what was merged so
+    // far (merges are irreversible).
+    const merged: string[] = [];
+    for (let i = 0; i < losers.length; i += 2) {
+      const batch = losers.slice(i, i + 2);
+      const result = await soapMerge(sobjectType, master, batch);
+      if (!result.ok) {
+        return {
+          operationId: operation.id,
+          status: "failed",
+          detail: `${result.detail} Merged ${merged.length} of ${losers.length} into ${master} before failing — IRREVERSIBLE; the remaining duplicates were not merged.`,
+          providerData: { survivorId: master, mergedRecordIds: merged },
+        };
+      }
+      merged.push(...batch);
+    }
+    return {
+      operationId: operation.id,
+      status: "applied",
+      detail: `Merged ${merged.length} ${sobjectType} record(s) into ${master} (irreversible).`,
+      providerData: { survivorId: master, mergedRecordIds: merged },
+    };
+  }
+
   async function applyOperation(operation: PatchOperation): Promise<PatchOperationResult> {
     try {
       switch (operation.operation) {
@@ -438,15 +544,7 @@ export function createSalesforceConnector(
         case "create_task":
           return await createTask(operation);
         case "merge_records":
-          // Salesforce merge exists only in the SOAP API and Apex (Lead,
-          // Contact, Account, Case; max 3 records) — there is no REST merge
-          // resource. Surface that honestly instead of half-merging.
-          return {
-            operationId: operation.id,
-            status: "skipped",
-            detail:
-              "Salesforce merge requires the SOAP API or Apex (Lead/Contact/Account/Case only) — this REST connector cannot merge. Merge in the Salesforce UI, or archive the duplicates explicitly.",
-          };
+          return await mergeRecords(operation);
         case "archive_record":
           return await archiveRecord(operation);
         default:
