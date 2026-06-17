@@ -227,6 +227,12 @@ export {
   type SpanVerificationFailure,
 } from "./market.ts";
 export {
+  suggestMarketConfig,
+  type SeedVendor,
+  type SuggestTaxonomyOptions,
+  type SuggestTaxonomyResult,
+} from "./marketTaxonomy.ts";
+export {
   assessAxes,
   axesReportToText,
   axisPosition,

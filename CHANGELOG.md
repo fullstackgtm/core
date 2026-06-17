@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.29.0] — 2026-06-16
+
+### Added
+
+- **`suggestMarketConfig` and its taxonomy types (`SeedVendor`,
+  `SuggestTaxonomyOptions`, `SuggestTaxonomyResult`) are now exported from the
+  package root.** The cold-start claim-taxonomy bootstrap behind `market init
+  --auto` (shipped in 0.26.0) is now usable as a library API, not just the CLI —
+  a consumer can run it with an injected `fetchPage` (e.g. a browser-rendered
+  capture) and compose it with the already-exported `captureMarket` /
+  `classifyMarket` / `marketMapToHtml`. No behaviour change to the CLI.
+
 ## [0.28.3] — 2026-06-16
 
 Fix broken links in the published mirror. CONTRIBUTING.md and CLAUDE.md
