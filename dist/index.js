@@ -27,6 +27,7 @@ export { sampleSnapshot } from "./sampleData.js";
 export { DEFAULT_MODELS, DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, forcedToolCall, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
 export { resolveRecord } from "./resolve.js";
 export { captureMarket, computeFrontStates, createFileObservationStore, diffFrontStates, extractReadableText, loadCaptureTexts, loadMarketConfig, marketHome, normalizeForMatch, observationId, parseMarketConfig, starterMarketConfig, validateObservationSet, verifyEvidenceSpans, } from "./market.js";
+export { suggestMarketConfig, } from "./marketTaxonomy.js";
 export { assessAxes, axesReportToText, axisPosition, messageBreadth, pcaTop2, pearson, } from "./marketAxes.js";
 export { buildWorksheet, classifyMarket, } from "./marketClassify.js";
 export { computeDirectives, computeOverlayStats, directivesToPlan, overlayToMarkdown, } from "./marketOverlay.js";
