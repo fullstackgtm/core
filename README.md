@@ -281,9 +281,9 @@ Connectors differ in what the provider's API allows — stated up front so nothi
 | Field writes (`set_field`, `clear_field`, `link_record`) | ✅ | ✅ | — |
 | `create_task` | ✅ | ✅ | — |
 | `archive_record` | ✅ | ✅ | — |
-| `merge_records` (`dedupe`) | ✅ | ❌ **not supported** | — |
+| `merge_records` (`dedupe`) | ✅ | ✅ Account/Contact (SOAP); ❌ Opportunity | — |
 
-**Salesforce merge** has no REST resource — it exists only in the SOAP API / Apex (Lead, Contact, Account, Case; max 3 records). This connector refuses a Salesforce `merge_records` operation honestly rather than half-merging; on Salesforce, deduplicate in the UI (or via SOAP/Apex), or use `bulk-update --archive` for the non-survivors. Native Salesforce merge is tracked future work, not a silent gap.
+**Salesforce merge** uses the SOAP `merge()` call (REST has no merge resource), so `dedupe` works on Salesforce **Accounts and Contacts** — the OAuth token doubles as the SOAP session, and groups larger than three records are merged in batches (master + 2 per call). **Opportunities cannot be merged** (Salesforce exposes no opportunity merge in the API or the UI) — for duplicate opportunities, pick a survivor and close/archive the rest. As always, merges are irreversible and go through the same approval gate + drift guard as every other write. (Validate against a sandbox first if you're wiring it into automation — the SOAP path is exercised by unit tests but a live Salesforce org is the real proof.)
 
 ### HubSpot: create a private app (~2 minutes, needs super-admin)
 

@@ -88,6 +88,36 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
     return text ? JSON.parse(text) : null;
   }
 
+  /**
+   * Map every deal stage id → its actual closed/won semantics, read from the
+   * pipeline definitions. Custom pipelines use opaque stage ids (e.g.
+   * "1234567"), so deriving closed/won by substring-matching the stage value
+   * against "closedwon"/"closedlost" mis-reads every custom-pipeline deal as
+   * open. The pipeline's own stage metadata is authoritative: `isClosed` marks
+   * a closed stage and `probability` 1.0 = won, 0.0 = lost. Best-effort — if
+   * the read is unavailable (e.g. missing scope) callers fall back to the
+   * substring heuristic so a partial-scope token still produces a snapshot.
+   */
+  async function fetchDealStageClose(): Promise<Map<string, { isClosed: boolean; isWon: boolean }>> {
+    const map = new Map<string, { isClosed: boolean; isWon: boolean }>();
+    try {
+      const data = await request("/crm/v3/pipelines/deals");
+      for (const pipeline of data?.results ?? []) {
+        for (const stage of pipeline?.stages ?? []) {
+          if (!stage?.id) continue;
+          const meta = stage.metadata ?? {};
+          const isClosed = String(meta.isClosed).toLowerCase() === "true";
+          const isWon = isClosed && Number(meta.probability) === 1;
+          map.set(String(stage.id), { isClosed, isWon });
+        }
+      }
+    } catch {
+      // Pipeline metadata unavailable — leave the map empty; the caller falls
+      // back to the substring heuristic.
+    }
+    return map;
+  }
+
   async function list(path: string): Promise<any[]> {
     const results: any[] = [];
     let after: string | undefined;
@@ -204,6 +234,7 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
       "deals",
       HUBSPOT_DEFAULT_FIELD_MAPPINGS.deals,
     ).join(",")},${PROVENANCE_PROPERTIES}`;
+    const stageClose = await fetchDealStageClose();
     const hubspotDeals = await fetchObjects("deals", dealProperties, true);
     const deals: CanonicalDeal[] = hubspotDeals
       .filter((deal) => deal.id)
@@ -212,13 +243,15 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
         const companyId = deal.associations?.companies?.results?.[0]?.id;
         const stage = stringOrUndefined(readMapped(props, "deals", "stage", "dealstage"));
         const normalizedStage = (stage ?? "").toLowerCase();
-        const isWon = normalizedStage.includes("closedwon");
-        const isClosed = isWon || normalizedStage.includes("closedlost");
-        const forecastCategory = isWon
-          ? "closed_won"
-          : normalizedStage.includes("closedlost")
-            ? "closed_lost"
-            : "pipeline";
+        // Prefer the pipeline stage's actual closed/won metadata; fall back to
+        // the substring heuristic only when the stage isn't in the pipeline map
+        // (pipelines unreadable, or a deal on a deleted stage).
+        const stageMeta = stage ? stageClose.get(stage) : undefined;
+        const isWon = stageMeta ? stageMeta.isWon : normalizedStage.includes("closedwon");
+        const isClosed = stageMeta
+          ? stageMeta.isClosed
+          : isWon || normalizedStage.includes("closedlost");
+        const forecastCategory = isWon ? "closed_won" : isClosed ? "closed_lost" : "pipeline";
         const lastActivityAt = stringOrUndefined(
           readMapped(props, "deals", "lastActivityAt", "hs_last_sales_activity_timestamp"),
         );

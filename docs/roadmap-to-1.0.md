@@ -148,11 +148,6 @@ against the 0.28 surface: still accurate, still open.
 Found by exercising the published package as a fresh RevOps user with a real
 CRM (2026-06):
 
-- **Pipeline-aware closed-deal detection (HubSpot).** `isClosed`/`isWon` are
-  derived by substring-matching the raw `dealstage` value against
-  `closedwon`/`closedlost`. Custom pipelines use opaque stage ids, so closed
-  deals read as open and flood stale-deal/past-close findings. Fix: resolve
-  stage metadata from `/crm/v3/pipelines` once per snapshot.
 - **Rate-limit resilience.** No 429/retry/backoff handling anywhere; a
   mid-size portal snapshot is ~1,000+ sequential page requests and one
   transient failure aborts the run. Fix: honor `Retry-After`, retry

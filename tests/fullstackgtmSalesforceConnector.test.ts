@@ -302,3 +302,71 @@ test("salesforce connector skips operations it cannot represent", async () => {
   assert.equal(result.status, "skipped");
   assert.equal(calls.length, 0);
 });
+
+function soapStub(opts: { fault?: boolean; reject?: boolean } = {}) {
+  const soapCalls: Array<{ url: string; body: string }> = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/services/Soap/")) {
+      soapCalls.push({ url, body: String(init?.body ?? "") });
+      if (opts.fault) {
+        return new Response("<soapenv:Envelope><soapenv:Body><soapenv:Fault><faultstring>INVALID_SESSION_ID</faultstring></soapenv:Fault></soapenv:Body></soapenv:Envelope>", { status: 500 });
+      }
+      const success = opts.reject ? "false" : "true";
+      const extra = opts.reject ? "<errors><message>entity is locked</message></errors>" : "";
+      return new Response(`<soapenv:Envelope><soapenv:Body><mergeResponse><result><id>001SURV</id><success>${success}</success>${extra}</result></mergeResponse></soapenv:Body></soapenv:Envelope>`, { status: 200, headers: { "Content-Type": "text/xml" } });
+    }
+    return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  return { fetchImpl, soapCalls };
+}
+
+function mergeOp(objectType: "account" | "contact" | "deal", group: string[]) {
+  return {
+    id: "op_m", objectType, objectId: group[0], operation: "merge_records" as const, field: "merge",
+    beforeValue: group, afterValue: group[0], reason: "merge dups", riskLevel: "high" as const, approvalRequired: true,
+  };
+}
+
+test("salesforce SOAP merge: account group merges in batches of 2 (master + 2 per call)", async () => {
+  const { fetchImpl, soapCalls } = soapStub();
+  const connector = createSalesforceConnector({
+    getConnection: () => ({ accessToken: "tok", instanceUrl: "https://x.my.salesforce.com" }),
+    fetchImpl,
+  });
+  const result = await connector.applyOperation!(mergeOp("account", ["001SURV", "001L1", "001L2", "001L3"]) as never);
+  assert.equal(result.status, "applied");
+  assert.deepEqual((result.providerData as { mergedRecordIds: string[] }).mergedRecordIds, ["001L1", "001L2", "001L3"]);
+  assert.equal(soapCalls.length, 2);
+  assert.match(soapCalls[0].body, /<urn1:type>Account<\/urn1:type>/);
+  assert.match(soapCalls[0].body, /<urn1:Id>001SURV<\/urn1:Id>/);
+  assert.match(soapCalls[0].body, /<urn:sessionId>tok<\/urn:sessionId>/);
+  assert.match(soapCalls[0].body, /<urn:recordToMergeIds>001L1<\/urn:recordToMergeIds>/);
+  assert.match(soapCalls[0].url, /\/services\/Soap\/u\/59\.0$/);
+});
+
+test("salesforce merge refuses opportunities honestly (no SF opportunity merge exists)", async () => {
+  const { fetchImpl, soapCalls } = soapStub();
+  const connector = createSalesforceConnector({
+    getConnection: () => ({ accessToken: "t", instanceUrl: "https://x.my.salesforce.com" }),
+    fetchImpl,
+  });
+  const result = await connector.applyOperation!(mergeOp("deal", ["006A", "006B"]) as never);
+  assert.equal(result.status, "skipped");
+  assert.match(result.detail!, /opportunit/i);
+  assert.equal(soapCalls.length, 0);
+});
+
+test("salesforce merge surfaces a SOAP fault / rejection as failed (not a silent half-merge)", async () => {
+  const fault = soapStub({ fault: true });
+  const c1 = createSalesforceConnector({ getConnection: () => ({ accessToken: "t", instanceUrl: "https://x.my.salesforce.com" }), fetchImpl: fault.fetchImpl });
+  const r1 = await c1.applyOperation!(mergeOp("contact", ["003A", "003B"]) as never);
+  assert.equal(r1.status, "failed");
+  assert.match(r1.detail!, /INVALID_SESSION_ID/);
+
+  const reject = soapStub({ reject: true });
+  const c2 = createSalesforceConnector({ getConnection: () => ({ accessToken: "t", instanceUrl: "https://x.my.salesforce.com" }), fetchImpl: reject.fetchImpl });
+  const r2 = await c2.applyOperation!(mergeOp("contact", ["003A", "003B"]) as never);
+  assert.equal(r2.status, "failed");
+  assert.match(r2.detail!, /entity is locked/);
+});

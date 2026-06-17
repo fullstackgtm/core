@@ -458,15 +458,18 @@ test("hubspot merge_records treats 404 losers as already merged (replay-safe)", 
   assert.match(result.detail ?? "", /already merged/);
 });
 
-test("salesforce merge_records is honestly unsupported", async () => {
+test("salesforce merge_records uses the SOAP merge() call for accounts/contacts", async () => {
   const connector = createSalesforceConnector({
     getConnection: () => ({ accessToken: "t", instanceUrl: "https://x.my.salesforce.com" }),
-    fetchImpl: (async () => new Response(null, { status: 204 })) as typeof fetch,
+    fetchImpl: (async (input: string | URL | Request) =>
+      String(input).includes("/services/Soap/")
+        ? new Response("<soapenv:Envelope><soapenv:Body><mergeResponse><result><success>true</success></result></mergeResponse></soapenv:Body></soapenv:Envelope>", { status: 200 })
+        : new Response(null, { status: 204 })) as typeof fetch,
   });
   const result = await connector.applyOperation({
     ...mergeOp("opm", "001A", ["001A", "001B"]),
     afterValue: "001A",
   });
-  assert.equal(result.status, "skipped");
-  assert.match(result.detail ?? "", /SOAP API or Apex/);
+  assert.equal(result.status, "applied");
+  assert.match(result.detail ?? "", /Merged 1 Account/);
 });

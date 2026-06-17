@@ -5,6 +5,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.30.0] — 2026-06-17
+
+Connector fixes — the two concrete defects a real HubSpot/Salesforce shop hits.
+
+### Added
+
+- **Salesforce `dedupe`/`merge_records` now works** (Accounts and Contacts) via
+  the SOAP `merge()` call — REST has no merge resource, but the OAuth token
+  doubles as the SOAP session id, so no extra auth. Groups larger than three are
+  merged in batches (master + 2 per call); failures are reported honestly with
+  what merged before the stop. **Opportunities remain unmergeable** (Salesforce
+  exposes no opportunity merge anywhere) and are refused with that explanation.
+  Merges still flow through the approval gate and the irreversible-op drift guard
+  (the survivor/loser existence check runs before the SOAP call). Exercised by
+  unit tests; validate against a sandbox before wiring into automation.
+
+### Fixed
+
+- **HubSpot closed/won detection is now pipeline-aware.** `isClosed`/`isWon`
+  were derived by substring-matching the stage against `closedwon`/`closedlost`,
+  so custom pipelines (opaque stage ids) read every deal as open and flooded
+  stale-deal / past-close findings with false positives. The connector now reads
+  the pipeline stage metadata (`/crm/v3/pipelines/deals`: `isClosed` +
+  `probability`) once per snapshot and derives closed/won from that, falling back
+  to the substring heuristic only when the pipelines read is unavailable.
+
 ## [0.29.0] — 2026-06-16
 
 ### Added

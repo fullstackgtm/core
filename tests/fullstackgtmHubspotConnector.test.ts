@@ -389,3 +389,45 @@ test("hubspot connector skips operations it genuinely cannot represent", async (
   assert.equal(result.status, "skipped");
   assert.equal(calls.length, 0);
 });
+
+test("hubspot connector derives closed/won from pipeline stage metadata, not substring (custom pipelines)", async () => {
+  // A custom pipeline whose stage ids are opaque numbers — the old substring
+  // heuristic would read every one of these as OPEN.
+  const customRoutes = {
+    "/crm/v3/owners": { results: [] },
+    "/crm/v3/objects/companies": { results: [] },
+    "/crm/v3/objects/contacts": { results: [] },
+    "/crm/v3/pipelines/deals": {
+      results: [
+        {
+          id: "default",
+          stages: [
+            { id: "1098765", metadata: { isClosed: "true", probability: "1.0" } }, // won
+            { id: "1098766", metadata: { isClosed: "true", probability: "0.0" } }, // lost
+            { id: "1098760", metadata: { isClosed: "false", probability: "0.4" } }, // open
+          ],
+        },
+      ],
+    },
+    "/crm/v3/objects/deals": {
+      results: [
+        { id: "w", properties: { dealname: "Won", dealstage: "1098765", amount: "9" } },
+        { id: "l", properties: { dealname: "Lost", dealstage: "1098766", amount: "9" } },
+        { id: "o", properties: { dealname: "Open", dealstage: "1098760", amount: "9" } },
+      ],
+    },
+  };
+  const { fetchImpl } = stubFetch(customRoutes);
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+  const snapshot = await connector.fetchSnapshot();
+  const byId = Object.fromEntries(snapshot.deals.map((d) => [d.id, d]));
+  assert.equal(byId.w.isClosed, true);
+  assert.equal(byId.w.isWon, true);
+  assert.equal(byId.w.forecastCategory, "closed_won");
+  assert.equal(byId.l.isClosed, true);
+  assert.equal(byId.l.isWon, false);
+  assert.equal(byId.l.forecastCategory, "closed_lost");
+  assert.equal(byId.o.isClosed, false); // opaque open stage no longer mis-read
+  assert.equal(byId.o.isWon, false);
+  assert.equal(byId.o.forecastCategory, "pipeline");
+});
