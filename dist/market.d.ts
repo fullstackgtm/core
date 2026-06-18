@@ -81,6 +81,14 @@ export type MarketVendor = {
      * obvious from the vendor's own pricing page (which the map captures).
      */
     acvBand?: string;
+    /**
+     * Optional brand logo for the report (legend + matrix headers). A `data:` URI
+     * keeps the rendered report self-contained — no external requests, survives
+     * being saved or emailed. The hosted service extracts it from the vendor's
+     * homepage; CLI users can set it by hand. Renderers degrade gracefully to the
+     * numbered swatch when absent.
+     */
+    logo?: string;
     notes?: string;
 };
 export type MarketAxis = {
