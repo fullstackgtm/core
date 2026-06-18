@@ -179,6 +179,7 @@ export { sampleSnapshot } from "./sampleData.ts";
 export {
   DEFAULT_MODELS,
   DEFAULT_RUBRIC,
+  classifyCallLlm,
   detectProviderFromKey,
   extractInsightsLlm,
   forcedToolCall,
@@ -187,12 +188,27 @@ export {
   scoreCallLlm,
   validateLlmKey,
   type CallScorecard,
+  type LlmCallClassification,
   type LlmCredential,
   type LlmExtractedInsight,
   type LlmProvider,
   type Rubric,
+  type RubricDimension,
+  type ScoreBand,
   type ScoredDimension,
 } from "./llm.ts";
+export {
+  classifyCall,
+  rubricForCallType,
+  rubricPresets,
+  bandForScore,
+  CALL_TYPES,
+  CALL_TYPE_IDS,
+  BANDS_5,
+  type CallType,
+  type CallTypeDef,
+  type CallClassification,
+} from "./callTypes.ts";
 export { resolveRecord, type ResolveCandidate, type ResolveMatch, type ResolveResult } from "./resolve.ts";
 export {
   captureMarket,

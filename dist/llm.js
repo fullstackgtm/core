@@ -1,4 +1,5 @@
 import { getCredential } from "./credentials.js";
+import { CALL_TYPE_IDS } from "./callTypes.js";
 export const DEFAULT_MODELS = {
     anthropic: "claude-haiku-4-5",
     openai: "gpt-4o-mini",
@@ -131,6 +132,7 @@ function actionGroundedInEvidence(text, evidence) {
 }
 export const DEFAULT_RUBRIC = {
     scale: 5,
+    name: "Generic",
     dimensions: [
         { name: "Depth of Discovery", weight: 1.2, rubric: "Did the rep uncover concrete pain, current process, and cost of inaction with specifics — 5 — or stay at surface level — 1?" },
         { name: "Next Steps & Commitment", weight: 1.2, rubric: "Did the call end with a specific, time-bound, mutually agreed next step (5) or vague intentions (1)?" },
@@ -164,9 +166,19 @@ export async function scoreCallLlm(transcript, rubric, options) {
     const model = options.model ?? DEFAULT_MODELS[options.provider];
     const text = truncateTranscript(transcript);
     const rubricText = rubric.dimensions
-        .map((d) => `- ${d.name} (weight ${d.weight}): ${d.rubric}`)
+        .map((d) => {
+        const lines = [`- ${d.name} (weight ${d.weight}): ${d.rubric}`];
+        if (d.anchorsHigh?.length)
+            lines.push(`    a ${rubric.scale} looks like: ${d.anchorsHigh.join("; ")}`);
+        if (d.anchorsLow?.length)
+            lines.push(`    a 1 looks like: ${d.anchorsLow.join("; ")}`);
+        if (d.evidenceCues?.length)
+            lines.push(`    listen for: ${d.evidenceCues.join(", ")}`);
+        return lines.join("\n");
+    })
         .join("\n");
-    const prompt = `Score this sales call against the rubric. Score every dimension 1-${rubric.scale}. Ground every score in verbatim quotes; if the transcript gives no signal for a dimension, score it low and say why in the coaching note.\n\nRubric:\n${rubricText}\n\n${options.title ? `Call: ${options.title}\n` : ""}Transcript:\n${text}`;
+    const heading = rubric.name ? `${rubric.name} call` : "sales call";
+    const prompt = `Score this ${heading} against the rubric. Score every dimension 1-${rubric.scale}, calibrating to the anchored examples where given. Ground every score in verbatim quotes; if the transcript gives no signal for a dimension, score it low and say why in the coaching note.\n\nRubric:\n${rubricText}\n\n${options.title ? `Call: ${options.title}\n` : ""}Transcript:\n${text}`;
     const result = (await forcedToolCall(prompt, "score_call", SCORE_SCHEMA(rubric.scale, rubric.dimensions), model, options));
     const byName = new Map((result.dimensions ?? []).map((d) => [d.name, d]));
     const dimensions = rubric.dimensions.map((dim) => {
@@ -182,27 +194,73 @@ export async function scoreCallLlm(transcript, rubric, options) {
     });
     const totalWeight = dimensions.reduce((sum, d) => sum + d.weight, 0);
     const overallScore = Math.round((dimensions.reduce((sum, d) => sum + d.score * d.weight, 0) / totalWeight) * 100) / 100;
+    const band = rubric.bands?.length
+        ? [...rubric.bands].sort((a, b) => b.min - a.min).find((b) => overallScore >= b.min)
+        : undefined;
     return {
         dimensions,
         overallScore,
         scale: rubric.scale,
+        band,
+        rubricName: rubric.name,
+        callType: rubric.callType,
         highlights: result.highlights ?? [],
         missedItems: result.missed_items ?? [],
         model,
     };
 }
+const strArray = (value) => Array.isArray(value) && value.length ? value.map((v) => String(v)) : undefined;
 export function parseRubric(json) {
     const parsed = JSON.parse(json);
     if (!Array.isArray(parsed.dimensions) || parsed.dimensions.length === 0) {
         throw new Error("Rubric needs a dimensions array: { scale, dimensions: [{ name, weight, rubric }] }");
     }
+    const bands = Array.isArray(parsed.bands)
+        ? parsed.bands
+            .filter((b) => b && typeof b.min === "number" && b.label)
+            .map((b) => ({ label: String(b.label), min: Number(b.min), meaning: b.meaning ? String(b.meaning) : undefined }))
+        : undefined;
     return {
         scale: parsed.scale ?? 5,
+        name: parsed.name ? String(parsed.name) : undefined,
+        callType: parsed.callType,
+        bands: bands?.length ? bands : undefined,
         dimensions: parsed.dimensions.map((d) => ({
             name: String(d.name),
             weight: typeof d.weight === "number" ? d.weight : 1,
             rubric: String(d.rubric ?? ""),
+            anchorsHigh: strArray(d.anchorsHigh),
+            anchorsLow: strArray(d.anchorsLow),
+            evidenceCues: strArray(d.evidenceCues),
+            coachingPrompts: strArray(d.coachingPrompts),
         })),
+    };
+}
+// ── Call-type classification (LLM tiebreak) ────────────────────────────────
+const CLASSIFY_SCHEMA = {
+    type: "object",
+    required: ["type", "reason"],
+    properties: {
+        type: { type: "string", enum: CALL_TYPE_IDS },
+        reason: { type: "string", description: "One sentence, citing what in the transcript decided it." },
+    },
+};
+/**
+ * Model tiebreak for call-type classification — the opt-in counterpart to the
+ * deterministic `classifyCall`. Same forced-tool-call seam as every other LLM
+ * feature; returns the canonical CallType plus a one-line reason.
+ */
+export async function classifyCallLlm(transcript, defs, options) {
+    const model = options.model ?? DEFAULT_MODELS[options.provider];
+    const text = truncateTranscript(transcript);
+    const taxonomy = defs.map((d) => `- ${d.id} (${d.name}): ${d.definition}`).join("\n");
+    const prompt = `Classify this sales call into exactly one type from the taxonomy. Pick the single best fit; use "other" only if none apply.\n\nTaxonomy:\n${taxonomy}\n\n${options.title ? `Call: ${options.title}\n` : ""}Transcript:\n${text}`;
+    const result = (await forcedToolCall(prompt, "classify_call", CLASSIFY_SCHEMA, model, options));
+    return {
+        type: result.type ?? "other",
+        reason: result.reason ?? "Model did not give a reason.",
+        model,
+        method: "llm",
     };
 }
 // ── Provider plumbing (raw fetch, forced tool calls) ───────────────────────

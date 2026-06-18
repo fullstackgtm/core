@@ -24,7 +24,8 @@ export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mapp
 export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, duplicateOpenDealRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, provenanceSummary, requiresHumanInput, staleDealRule, } from "./rules.js";
 export { extractCallInsights, normalizeTranscript, parseCall, parseTranscript, suggestCallDeal, summarizeInsights, } from "./calls.js";
 export { sampleSnapshot } from "./sampleData.js";
-export { DEFAULT_MODELS, DEFAULT_RUBRIC, detectProviderFromKey, extractInsightsLlm, forcedToolCall, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
+export { DEFAULT_MODELS, DEFAULT_RUBRIC, classifyCallLlm, detectProviderFromKey, extractInsightsLlm, forcedToolCall, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
+export { classifyCall, rubricForCallType, rubricPresets, bandForScore, CALL_TYPES, CALL_TYPE_IDS, BANDS_5, } from "./callTypes.js";
 export { resolveRecord } from "./resolve.js";
 export { captureMarket, computeFrontStates, createFileObservationStore, diffFrontStates, extractReadableText, loadCaptureTexts, loadMarketConfig, marketHome, normalizeForMatch, observationId, parseMarketConfig, starterMarketConfig, validateObservationSet, verifyEvidenceSpans, } from "./market.js";
 export { suggestMarketConfig, } from "./marketTaxonomy.js";

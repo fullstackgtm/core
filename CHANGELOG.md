@@ -5,6 +5,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.32.0] — 2026-06-18
+
+### Added
+
+- **Brand logos plot inside the market-map scatter bubbles.** When a vendor has
+  a `data:image/…` logo and its dot is big enough to read it (r ≥ 12), the logo
+  becomes the in-bubble label: a white disc clipped to the circle carries the
+  logo, a colored rim still ties the dot to its legend color, and the legend
+  number moves just above so the cross-reference holds. Smaller or logo-less
+  dots keep the numbered-bubble treatment. Same `img-src data:` safety as the
+  legend/header logos — only `data:` URIs are honored; anything else is refused
+  and never emitted as an `<image>`. Render stays byte-deterministic.
+
+- **Call-type classification + type-specific coaching rubrics.** New `call
+  classify` verb runs a deterministic, key-free signal classifier over a
+  transcript (12 call types: prospecting, discovery, demo, technical_validation,
+  negotiation, closing, onboarding, check_in, renewal_expansion, qbr, internal,
+  other), returning the type with a confidence and a written reason; `--llm`
+  adds a model tiebreak for the ambiguous middle, `--list` prints the taxonomy.
+  `call score` now **auto-selects the type-specific rubric** from that
+  classification instead of applying one generic discovery rubric to every call
+  — override with `--call-type <type>` or `--rubric`. The `Rubric` type gains
+  optional `name`, `callType`, `bands`, and per-dimension `anchorsHigh` /
+  `anchorsLow` / `evidenceCues` / `coachingPrompts`; anchored examples are
+  threaded into the scoring prompt (cuts variance) and the weighted overall is
+  mapped to a qualitative band, all computed client-side. Ten built-in presets
+  (`call score --list-rubrics`). New exports: `classifyCall`, `classifyCallLlm`,
+  `rubricForCallType`, `rubricPresets`, `bandForScore`, `CALL_TYPES`,
+  `CALL_TYPE_IDS`, `BANDS_5`, and the `CallType` / `CallTypeDef` /
+  `CallClassification` / `RubricDimension` / `ScoreBand` types.
+
 ## [0.31.0] — 2026-06-18
 
 ### Added
