@@ -29,6 +29,17 @@ function escapeHtml(value) {
         .replace(/"/g, "&quot;");
 }
 /**
+ * A small brand logo for legend rows / matrix headers. Accepts only `data:image/`
+ * URIs — self-contained (no external request, survives save/email) and safe under
+ * the report's `img-src data:` CSP (an SVG loaded via <img> can't execute script).
+ * Returns "" when absent so callers fall back to the numbered swatch / plain name.
+ */
+function logoImg(logo, cls) {
+    if (typeof logo !== "string" || !logo.startsWith("data:image/"))
+        return "";
+    return `<img class="${cls}" src="${escapeHtml(logo)}" alt="" loading="lazy">`;
+}
+/**
  * Serialize JSON for embedding inside an inline <script> block. JSON.stringify
  * does not escape `<`, `>`, `&`, or the U+2028/U+2029 line separators, so a
  * vendor name containing `</script>` (these are untrusted, competitor-authored
@@ -291,6 +302,7 @@ function axisSectionsHtml(config, set) {
     // The number inside each bubble resolves dense clusters that name labels
     // never could; color is Okabe–Ito (colorblind-safe) keyed in the legend.
     const points = pointsFor(px, py);
+    const logoByVendor = new Map(config.vendors.map((vendor) => [vendor.id, vendor.logo]));
     const legendOrder = [...points].sort((a, b) => b.size - a.size || a.name.localeCompare(b.name));
     const numberByVendor = new Map(legendOrder.map((point, index) => [point.vendorId, index + 1]));
     const colorByVendor = new Map(legendOrder.map((point, index) => [point.vendorId, VENDOR_COLORS[index % VENDOR_COLORS.length]]));
@@ -305,7 +317,7 @@ function axisSectionsHtml(config, set) {
                 ? `${(share * 100).toFixed(1)}%`
                 : "—"
             : `${loudCounts.get(point.vendorId) ?? 0} loud`;
-        return `<tr data-v="${e(point.vendorId)}"${isAnchor ? ' class="anchor-row"' : ""}><td><span class="swatch" style="background:${color};color:${numeralColor(color)}">${number}</span></td><td>${e(point.name)}${isAnchor ? " ·&nbsp;anchor" : ""}</td><td class="num">${measure}</td></tr>`;
+        return `<tr data-v="${e(point.vendorId)}"${isAnchor ? ' class="anchor-row"' : ""}><td><span class="swatch" style="background:${color};color:${numeralColor(color)}">${number}</span></td><td>${logoImg(logoByVendor.get(point.vendorId), "v-logo")}${e(point.name)}${isAnchor ? " ·&nbsp;anchor" : ""}</td><td class="num">${measure}</td></tr>`;
     })
         .join("");
     const legendMeasureHead = useScale ? "est. share" : "loud";
@@ -426,7 +438,7 @@ export function marketMapToHtml(config, set) {
             `<td class="front"><span class="chip chip-${state}">${state.toUpperCase()}</span></td></tr>`);
     };
     const vendorHeads = config.vendors
-        .map((vendor) => `<th class="vh${vendor.id === anchor ? " anchor-col" : ""}"><span>${e(vendor.name)}</span></th>`)
+        .map((vendor) => `<th class="vh${vendor.id === anchor ? " anchor-col" : ""}">${logoImg(vendor.logo, "vh-logo")}<span>${e(vendor.name)}</span></th>`)
         .join("");
     // Claims grouped by front state, each group a collapsed <details> whose
     // summary carries the stats a skimmer needs; the full matrix is one click
@@ -562,6 +574,8 @@ tr.front-open th .claim-cap { color:var(--accent); font-weight:600; }
 figure.map { margin-top:16px; border:1px solid var(--line); position:relative; }
 g.bubble { cursor:pointer; }
 g.bubble.dim { opacity:0.25; transition:opacity .12s; }
+img.v-logo { width:15px; height:15px; border-radius:3px; object-fit:contain; vertical-align:-3px; margin-right:6px; background:#fff; }
+th.vh img.vh-logo { display:block; width:18px; height:18px; border-radius:3px; object-fit:contain; margin:0 auto 4px; background:#fff; }
 table.legend tbody tr { cursor:default; }
 table.legend tbody tr.hl td { background:var(--faint); }
 .map-tip { position:absolute; z-index:5; background:#1c1c1c; color:#fff; font-size:11.5px; line-height:1.45;

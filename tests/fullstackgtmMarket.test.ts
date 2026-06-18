@@ -246,6 +246,19 @@ test("report renders deterministically with matrix, fronts, and quoted evidence"
   assert.ok(html.match(/<details class="claim-group">[\s\S]*?<th class="vh"><span>Globex<\/span><\/th>/), "expanded claim groups carry the vendor header row");
 });
 
+test("vendor logos render in the report, and only for data: image URIs", () => {
+  const dataUri = "data:image/png;base64,iVBORw0KGgo=";
+  const withLogos = config({
+    vendors: [
+      { id: "acme", name: "Acme", logo: dataUri, urls: { home: "https://acme.test/", pricing: "https://acme.test/pricing", product: [] } },
+      { id: "globex", name: "Globex", logo: "javascript:alert(1)", urls: { home: "https://globex.test/", pricing: null, product: [] } },
+    ],
+  });
+  const html = marketMapToHtml(withLogos, fullSet());
+  assert.ok(html.includes(`<img class="vh-logo" src="${dataUri}"`), "a data: logo renders in the matrix header");
+  assert.ok(!html.includes("javascript:alert(1)"), "a non-data: logo (e.g. javascript:/external URL) is refused, never rendered");
+});
+
 test("cli: market init, observe, fronts, report round-trip", async () => {
   const home = mkdtempSync(join(tmpdir(), "fsgtm-home-"));
   const work = mkdtempSync(join(tmpdir(), "fsgtm-work-"));

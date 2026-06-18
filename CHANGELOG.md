@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.31.0] — 2026-06-18
+
+### Added
+
+- **Vendor logos in the market-map report.** `MarketVendor` gains an optional
+  `logo` field; `marketMapToHtml` renders it beside the name in the legend and
+  above the matrix column headers, degrading to the numbered swatch / plain name
+  when absent. Only `data:image/…` URIs are honored — keeping the report
+  self-contained (no external requests, survives being saved or emailed) and safe
+  under a strict `img-src data:` CSP. The hosted service extracts a canonical logo
+  from each vendor's homepage; CLI users can set `logo` by hand.
+
 ## [0.30.0] — 2026-06-17
 
 Connector fixes — the two concrete defects a real HubSpot/Salesforce shop hits.
