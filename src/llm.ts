@@ -1,5 +1,6 @@
 import { getCredential } from "./credentials.ts";
 import type { CallInsightType, ExtractedCallInsight } from "./calls.ts";
+import { CALL_TYPE_IDS, type CallType } from "./callTypes.ts";
 
 /**
  * LLM-powered call extraction and scoring. Bring-your-own-key, two providers
@@ -170,13 +171,37 @@ function actionGroundedInEvidence(text: string, evidence: string): boolean {
 
 // ── Rubric scoring ─────────────────────────────────────────────────────────
 
+/** A qualitative band over the weighted overall (e.g. "developing" at >=2). */
+export type ScoreBand = { label: string; min: number; meaning?: string };
+
+export type RubricDimension = {
+  name: string;
+  weight: number;
+  rubric: string;
+  /** Anchored behavioral examples of a top score — sharpens the model and cuts variance. */
+  anchorsHigh?: string[];
+  /** Anchored behavioral examples of a bottom score. */
+  anchorsLow?: string[];
+  /** Verbatim phrases to listen for — tightens evidence grounding. */
+  evidenceCues?: string[];
+  /** Reflective questions surfaced to the rep alongside the score. */
+  coachingPrompts?: string[];
+};
+
 export type Rubric = {
   scale: number;
-  dimensions: Array<{ name: string; weight: number; rubric: string }>;
+  /** Display name (e.g. the call type this rubric is built for). */
+  name?: string;
+  /** The call type this rubric scores, when type-specific. */
+  callType?: CallType;
+  dimensions: RubricDimension[];
+  /** Optional qualitative bands over the weighted overall. */
+  bands?: ScoreBand[];
 };
 
 export const DEFAULT_RUBRIC: Rubric = {
   scale: 5,
+  name: "Generic",
   dimensions: [
     { name: "Depth of Discovery", weight: 1.2, rubric: "Did the rep uncover concrete pain, current process, and cost of inaction with specifics — 5 — or stay at surface level — 1?" },
     { name: "Next Steps & Commitment", weight: 1.2, rubric: "Did the call end with a specific, time-bound, mutually agreed next step (5) or vague intentions (1)?" },
@@ -200,6 +225,11 @@ export type CallScorecard = {
   /** Weighted average, computed deterministically client-side. */
   overallScore: number;
   scale: number;
+  /** Qualitative band for the overall, computed client-side from the rubric's bands. */
+  band?: ScoreBand;
+  /** The rubric used, for provenance in reports. */
+  rubricName?: string;
+  callType?: CallType;
   highlights: string[];
   missedItems: string[];
   model: string;
@@ -236,9 +266,16 @@ export async function scoreCallLlm(
   const model = options.model ?? DEFAULT_MODELS[options.provider];
   const text = truncateTranscript(transcript);
   const rubricText = rubric.dimensions
-    .map((d) => `- ${d.name} (weight ${d.weight}): ${d.rubric}`)
+    .map((d) => {
+      const lines = [`- ${d.name} (weight ${d.weight}): ${d.rubric}`];
+      if (d.anchorsHigh?.length) lines.push(`    a ${rubric.scale} looks like: ${d.anchorsHigh.join("; ")}`);
+      if (d.anchorsLow?.length) lines.push(`    a 1 looks like: ${d.anchorsLow.join("; ")}`);
+      if (d.evidenceCues?.length) lines.push(`    listen for: ${d.evidenceCues.join(", ")}`);
+      return lines.join("\n");
+    })
     .join("\n");
-  const prompt = `Score this sales call against the rubric. Score every dimension 1-${rubric.scale}. Ground every score in verbatim quotes; if the transcript gives no signal for a dimension, score it low and say why in the coaching note.\n\nRubric:\n${rubricText}\n\n${options.title ? `Call: ${options.title}\n` : ""}Transcript:\n${text}`;
+  const heading = rubric.name ? `${rubric.name} call` : "sales call";
+  const prompt = `Score this ${heading} against the rubric. Score every dimension 1-${rubric.scale}, calibrating to the anchored examples where given. Ground every score in verbatim quotes; if the transcript gives no signal for a dimension, score it low and say why in the coaching note.\n\nRubric:\n${rubricText}\n\n${options.title ? `Call: ${options.title}\n` : ""}Transcript:\n${text}`;
   const result = (await forcedToolCall(prompt, "score_call", SCORE_SCHEMA(rubric.scale, rubric.dimensions), model, options)) as {
     dimensions?: Array<{ name: string; score: number; evidence?: string[]; coaching_note?: string }>;
     highlights?: string[];
@@ -259,28 +296,88 @@ export async function scoreCallLlm(
   const totalWeight = dimensions.reduce((sum, d) => sum + d.weight, 0);
   const overallScore =
     Math.round((dimensions.reduce((sum, d) => sum + d.score * d.weight, 0) / totalWeight) * 100) / 100;
+  const band = rubric.bands?.length
+    ? [...rubric.bands].sort((a, b) => b.min - a.min).find((b) => overallScore >= b.min)
+    : undefined;
   return {
     dimensions,
     overallScore,
     scale: rubric.scale,
+    band,
+    rubricName: rubric.name,
+    callType: rubric.callType,
     highlights: result.highlights ?? [],
     missedItems: result.missed_items ?? [],
     model,
   };
 }
 
+const strArray = (value: unknown): string[] | undefined =>
+  Array.isArray(value) && value.length ? value.map((v) => String(v)) : undefined;
+
 export function parseRubric(json: string): Rubric {
   const parsed = JSON.parse(json) as Partial<Rubric>;
   if (!Array.isArray(parsed.dimensions) || parsed.dimensions.length === 0) {
     throw new Error("Rubric needs a dimensions array: { scale, dimensions: [{ name, weight, rubric }] }");
   }
+  const bands = Array.isArray(parsed.bands)
+    ? parsed.bands
+        .filter((b) => b && typeof b.min === "number" && b.label)
+        .map((b) => ({ label: String(b.label), min: Number(b.min), meaning: b.meaning ? String(b.meaning) : undefined }))
+    : undefined;
   return {
     scale: parsed.scale ?? 5,
+    name: parsed.name ? String(parsed.name) : undefined,
+    callType: parsed.callType,
+    bands: bands?.length ? bands : undefined,
     dimensions: parsed.dimensions.map((d) => ({
       name: String(d.name),
       weight: typeof d.weight === "number" ? d.weight : 1,
       rubric: String(d.rubric ?? ""),
+      anchorsHigh: strArray(d.anchorsHigh),
+      anchorsLow: strArray(d.anchorsLow),
+      evidenceCues: strArray(d.evidenceCues),
+      coachingPrompts: strArray(d.coachingPrompts),
     })),
+  };
+}
+
+// ── Call-type classification (LLM tiebreak) ────────────────────────────────
+
+const CLASSIFY_SCHEMA = {
+  type: "object",
+  required: ["type", "reason"],
+  properties: {
+    type: { type: "string", enum: CALL_TYPE_IDS },
+    reason: { type: "string", description: "One sentence, citing what in the transcript decided it." },
+  },
+} as const;
+
+export type LlmCallClassification = { type: CallType; reason: string; model: string; method: "llm" };
+
+/**
+ * Model tiebreak for call-type classification — the opt-in counterpart to the
+ * deterministic `classifyCall`. Same forced-tool-call seam as every other LLM
+ * feature; returns the canonical CallType plus a one-line reason.
+ */
+export async function classifyCallLlm(
+  transcript: string,
+  defs: Array<{ id: string; name: string; definition: string }>,
+  options: LlmCallOptions & { title?: string },
+): Promise<LlmCallClassification> {
+  const model = options.model ?? DEFAULT_MODELS[options.provider];
+  const text = truncateTranscript(transcript);
+  const taxonomy = defs.map((d) => `- ${d.id} (${d.name}): ${d.definition}`).join("\n");
+  const prompt = `Classify this sales call into exactly one type from the taxonomy. Pick the single best fit; use "other" only if none apply.\n\nTaxonomy:\n${taxonomy}\n\n${options.title ? `Call: ${options.title}\n` : ""}Transcript:\n${text}`;
+  const result = (await forcedToolCall(prompt, "classify_call", CLASSIFY_SCHEMA, model, options)) as {
+    type?: CallType;
+    reason?: string;
+  };
+  return {
+    type: (result.type as CallType) ?? "other",
+    reason: result.reason ?? "Model did not give a reason.",
+    model,
+    method: "llm",
   };
 }
 

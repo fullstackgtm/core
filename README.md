@@ -59,14 +59,18 @@ Calls are where pipeline truth lives. `call parse` normalizes any transcript dia
 
 **Extraction is LLM-powered by default, with your own key.** The first time you run `call parse` or `call score`, the CLI asks for an Anthropic or OpenAI API key (auto-detected from the prefix), validates it against the provider, and stores it in the 0600 credential store — same treatment as CRM logins. Or skip the prompt: set `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`, or `echo "$KEY" | fullstackgtm login anthropic` (or `openai`). The key talks directly to your provider — raw fetch, no SDK, no middleman. `--model` overrides the defaults (claude-haiku-4-5 / gpt-4o-mini). LLM insights carry verbatim-quote evidence and, for next steps, owner/deadline/commitment. Pass `--deterministic` for the free, instant, byte-stable keyword baseline (no key needed — right for CI and warehouse bulk loads). Every insight is provenance-marked (`extractor: "llm:anthropic:…"` vs `"deterministic"`).
 
-**`call score`** rates the call against a coaching rubric — five built-in dimensions (discovery, next steps, stakeholders, value, objections) or your own via `--rubric rubric.json` (`{ scale, dimensions: [{ name, weight, rubric }] }`); the weighted overall is computed deterministically client-side, every dimension score is evidence-quoted, and the rubric file is where your client-specific coaching framework lives.
+**`call classify`** picks the call type before scoring, because a renewal scored on "Depth of Discovery" is just wrong. It runs a **deterministic, key-free** signal classifier over the transcript — 12 call types (prospecting, discovery, demo, technical_validation, negotiation, closing, onboarding, check_in, renewal_expansion, qbr, internal, other) — returning the type with a confidence and a written reason; pass `--llm` for a model tiebreak on the ambiguous middle. It needs no API key, so it runs free in CI and on warehouse bulk loads (`--list` prints the taxonomy).
+
+**`call score`** rates the call against a coaching rubric. By default it **auto-selects the type-specific rubric** from the classification — each call type ships its own dimensions with anchored high/low examples and evidence cues (cuts scoring variance). Override with `--call-type <type>` to force a preset, or `--rubric rubric.json` for your own (`{ scale, name?, callType?, bands?, dimensions: [{ name, weight, rubric, anchorsHigh?, anchorsLow?, evidenceCues?, coachingPrompts? }] }`). The weighted overall is computed deterministically client-side, mapped to a qualitative band, every dimension score is evidence-quoted, and the rubric file is where your client-specific coaching framework lives (`--list-rubrics` prints the built-in presets).
 
 `call link` answers "which deal was this call about" from attendee domains (account domain or contact emails → open deals, most recent activity first, with confidence + reason). `call plan` turns next-step insights into the same governed plan lifecycle as everything else.
 
 ```bash
-# Coaching pipeline (Slack + CRM): parse → score → link → govern the writeback
+# Coaching pipeline (Slack + CRM): parse → classify → score → link → govern the writeback
 fullstackgtm call parse --transcript call.txt --title "Acme disco" --out parsed.json   # LLM extraction
-fullstackgtm call score --call parsed.json --rubric team-rubric.json                   # evidence-quoted scorecard
+fullstackgtm call classify --call parsed.json                                          # deterministic call type
+fullstackgtm call score --call parsed.json                                            # auto-selects the type's rubric
+fullstackgtm call score --call parsed.json --rubric team-rubric.json                   # …or bring your own framework
 fullstackgtm call link --attendees jane@acme.com --provider hubspot                    # → deal id + reason
 fullstackgtm call plan --call parsed.json --deal 123 --provider hubspot --save
 # review → plans approve → apply: deal.next_step + follow-up tasks, compare-and-set protected

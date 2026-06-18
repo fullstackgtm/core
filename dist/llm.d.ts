@@ -1,4 +1,5 @@
 import type { ExtractedCallInsight } from "./calls.ts";
+import { type CallType } from "./callTypes.ts";
 /**
  * LLM-powered call extraction and scoring. Bring-your-own-key, two providers
  * (Anthropic, OpenAI), raw fetch — no SDK dependency, mirroring how the CRM
@@ -34,13 +35,34 @@ export declare function extractInsightsLlm(transcript: string, options: LlmCallO
     insights: LlmExtractedInsight[];
     model: string;
 }>;
+/** A qualitative band over the weighted overall (e.g. "developing" at >=2). */
+export type ScoreBand = {
+    label: string;
+    min: number;
+    meaning?: string;
+};
+export type RubricDimension = {
+    name: string;
+    weight: number;
+    rubric: string;
+    /** Anchored behavioral examples of a top score — sharpens the model and cuts variance. */
+    anchorsHigh?: string[];
+    /** Anchored behavioral examples of a bottom score. */
+    anchorsLow?: string[];
+    /** Verbatim phrases to listen for — tightens evidence grounding. */
+    evidenceCues?: string[];
+    /** Reflective questions surfaced to the rep alongside the score. */
+    coachingPrompts?: string[];
+};
 export type Rubric = {
     scale: number;
-    dimensions: Array<{
-        name: string;
-        weight: number;
-        rubric: string;
-    }>;
+    /** Display name (e.g. the call type this rubric is built for). */
+    name?: string;
+    /** The call type this rubric scores, when type-specific. */
+    callType?: CallType;
+    dimensions: RubricDimension[];
+    /** Optional qualitative bands over the weighted overall. */
+    bands?: ScoreBand[];
 };
 export declare const DEFAULT_RUBRIC: Rubric;
 export type ScoredDimension = {
@@ -56,6 +78,11 @@ export type CallScorecard = {
     /** Weighted average, computed deterministically client-side. */
     overallScore: number;
     scale: number;
+    /** Qualitative band for the overall, computed client-side from the rubric's bands. */
+    band?: ScoreBand;
+    /** The rubric used, for provenance in reports. */
+    rubricName?: string;
+    callType?: CallType;
     highlights: string[];
     missedItems: string[];
     model: string;
@@ -64,6 +91,24 @@ export declare function scoreCallLlm(transcript: string, rubric: Rubric, options
     title?: string;
 }): Promise<CallScorecard>;
 export declare function parseRubric(json: string): Rubric;
+export type LlmCallClassification = {
+    type: CallType;
+    reason: string;
+    model: string;
+    method: "llm";
+};
+/**
+ * Model tiebreak for call-type classification — the opt-in counterpart to the
+ * deterministic `classifyCall`. Same forced-tool-call seam as every other LLM
+ * feature; returns the canonical CallType plus a one-line reason.
+ */
+export declare function classifyCallLlm(transcript: string, defs: Array<{
+    id: string;
+    name: string;
+    definition: string;
+}>, options: LlmCallOptions & {
+    title?: string;
+}): Promise<LlmCallClassification>;
 /**
  * Shared constrained-tool-call plumbing: force the model to answer through a
  * single tool whose input_schema is the output contract. Exported for other

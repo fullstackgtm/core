@@ -158,7 +158,7 @@ function poleText(lines, x, y, anchorMode, fs) {
         .join("");
     return `<text class="ax-label" style="font-size:${fs}px" x="${x}" y="${y}" text-anchor="${anchorMode}">${spans}</text>`;
 }
-function svgScatter(points, ax, ay, anchor, colorByVendor, numberByVendor) {
+function svgScatter(points, ax, ay, anchor, colorByVendor, numberByVendor, logoByVendor) {
     const W = 640;
     const H = 480;
     const PAD_X = 56;
@@ -180,22 +180,42 @@ function svgScatter(points, ax, ay, anchor, colorByVendor, numberByVendor) {
     // raises a bubble to the front (JS re-appends its <g>), so even a bubble
     // born fully underneath a bigger one is one mouse-over from visible.
     const ordered = [...points].sort((a, b) => b.size - a.size);
+    const clipDefs = [];
     const dots = ordered
-        .map((p) => {
+        .map((p, i) => {
         const r = p.noScale ? 7 : 7 + 24 * Math.sqrt(p.size);
         const color = colorByVendor.get(p.vendorId) ?? "#717171";
         const number = numberByVendor.get(p.vendorId) ?? 0;
-        const cx = sx(p.x).toFixed(1);
-        const cy = sy(p.y);
+        const cxN = sx(p.x);
+        const cyN = sy(p.y);
+        const cx = cxN.toFixed(1);
+        const cy = cyN.toFixed(1);
         const ring = p.vendorId === anchor ? ` stroke="#1c1c1c" stroke-width="2.5"` : ` stroke="#ffffff" stroke-width="1.5"`;
         // No measurable scale: minimal dashed outline — visibly "no data", never a guess.
         const fill = p.noScale ? ` fill="${color}" fill-opacity="0.2" stroke="${color}" stroke-width="1.5" stroke-dasharray="3 2"` : ` fill="${color}" fill-opacity="0.78"${ring}`;
+        const circle = `<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}"${fill}/>`;
+        // When the vendor has a brand logo and the bubble is big enough to read
+        // it, the logo IS the in-bubble label: a white disc clipped to the
+        // circle carries it, a colored rim still ties the dot to its legend
+        // color, and the legend number moves just above so the cross-reference
+        // survives. Small or logo-less dots keep the numbered-bubble treatment.
+        const logo = logoByVendor.get(p.vendorId);
+        const hasLogo = !p.noScale && r >= 12 && typeof logo === "string" && logo.startsWith("data:image/");
+        if (hasLogo) {
+            const ri = r - Math.max(3, r * 0.14);
+            const clipId = `bclip-${i}`;
+            clipDefs.push(`<clipPath id="${clipId}"><circle cx="${cx}" cy="${cy}" r="${ri.toFixed(1)}"/></clipPath>`);
+            const disc = `<circle cx="${cx}" cy="${cy}" r="${ri.toFixed(1)}" fill="#ffffff" style="pointer-events:none"/>`;
+            const img = `<image href="${e(logo)}" x="${(cxN - ri).toFixed(1)}" y="${(cyN - ri).toFixed(1)}" width="${(2 * ri).toFixed(1)}" height="${(2 * ri).toFixed(1)}" preserveAspectRatio="xMidYMid meet" clip-path="url(#${clipId})" style="pointer-events:none"/>`;
+            const numberAbove = `<text x="${cx}" y="${(cyN - r - 3).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${color}" style="pointer-events:none">${number}</text>`;
+            return `<g class="bubble" data-v="${e(p.vendorId)}">${circle}${disc}${img}${numberAbove}</g>`;
+        }
         // Numbers go inside when they fit, above the bubble when they don't.
         const fs = Math.max(10, Math.min(14, r * 0.9));
         const numberSvg = r >= 10 && !p.noScale
-            ? `<text x="${cx}" y="${(cy + fs * 0.36).toFixed(1)}" text-anchor="middle" font-size="${fs.toFixed(1)}" font-weight="700" fill="${numeralColor(color)}" style="pointer-events:none">${number}</text>`
-            : `<text x="${cx}" y="${(cy - r - 3).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${color}" style="pointer-events:none">${number}</text>`;
-        return `<g class="bubble${p.noScale ? " no-scale" : ""}" data-v="${e(p.vendorId)}"><circle cx="${cx}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}"${fill}/>${numberSvg}</g>`;
+            ? `<text x="${cx}" y="${(cyN + fs * 0.36).toFixed(1)}" text-anchor="middle" font-size="${fs.toFixed(1)}" font-weight="700" fill="${numeralColor(color)}" style="pointer-events:none">${number}</text>`
+            : `<text x="${cx}" y="${(cyN - r - 3).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${color}" style="pointer-events:none">${number}</text>`;
+        return `<g class="bubble${p.noScale ? " no-scale" : ""}" data-v="${e(p.vendorId)}">${circle}${numberSvg}</g>`;
     })
         .join("");
     const midX = ax.signed ? `<line class="grid" x1="${sx(0).toFixed(0)}" y1="${PAD_TOP}" x2="${sx(0).toFixed(0)}" y2="${H - PAD_BOTTOM}"/>` : "";
@@ -216,6 +236,7 @@ function svgScatter(points, ax, ay, anchor, colorByVendor, numberByVendor) {
     const yPos = yLabel(wrapPole(ay.positivePole, 26), PAD_TOP, "end");
     const yNeg = ay.signed ? yLabel(wrapPole(ay.negativePole, 26), H - PAD_BOTTOM, "start") : "";
     return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${e(ax.label)} vs ${e(ay.label)}">
+    ${clipDefs.length ? `<defs>${clipDefs.join("")}</defs>` : ""}
     <rect x="${PAD_X}" y="${PAD_TOP}" width="${W - 2 * PAD_X}" height="${H - PAD_TOP - PAD_BOTTOM}" class="plot"/>
     ${midX}${midY}
     ${xNeg}${xPos}
@@ -344,7 +365,7 @@ function axisSectionsHtml(config, set) {
   <h2>Strategic map: ${e(axInfo.label)} &#215; ${e(ayInfo.label)}</h2>
   <figure class="map">
     <div class="map-row">
-      ${svgScatter(points, axInfo, ayInfo, config.anchorVendor, colorByVendor, numberByVendor)}
+      ${svgScatter(points, axInfo, ayInfo, config.anchorVendor, colorByVendor, numberByVendor, logoByVendor)}
       <table class="legend"><thead><tr><th></th><th>vendor</th><th class="num">${legendMeasureHead}</th></tr></thead><tbody>${legendRows}</tbody></table>
     </div>
     <div class="map-tip" id="map-tip" hidden></div>

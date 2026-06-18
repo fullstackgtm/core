@@ -42,6 +42,14 @@ import { builtinAuditRules } from "./rules.ts";
 import { sampleSnapshot } from "./sampleData.ts";
 import { normalizeTranscript, parseCall, suggestCallDeal, type ExtractedCallInsight, type ParsedCall } from "./calls.ts";
 import {
+  classifyCall,
+  rubricForCallType,
+  rubricPresets,
+  CALL_TYPES,
+  CALL_TYPE_IDS,
+  type CallType,
+} from "./callTypes.ts";
+import {
   captureMarket,
   computeFrontStates,
   createFileObservationStore,
@@ -67,6 +75,7 @@ import { buildWorksheet, classifyMarket } from "./marketClassify.ts";
 import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
 import {
   DEFAULT_RUBRIC,
+  classifyCallLlm,
   detectProviderFromKey,
   extractInsightsLlm,
   parseRubric,
@@ -75,6 +84,7 @@ import {
   validateLlmKey,
   type CallScorecard,
   type LlmProvider,
+  type Rubric,
 } from "./llm.ts";
 import {
   buildEnrichPlan,
@@ -159,7 +169,8 @@ Usage:
   fullstackgtm diff --before <a.json> --after <b.json> [--json] [--fail-on-new-findings]
   fullstackgtm merge --input <a.json> --input <b.json> [...] --out <merged.json> [--json]
   fullstackgtm call parse --transcript <file> [--title t] [--source fathom|granola|...] [--model m] [--deterministic] [--json|--ndjson] [--out <path>]
-  fullstackgtm call score --transcript <file>|--call <parsed.json> [--rubric <rubric.json>] [--model m] [--json|--out <path>]
+  fullstackgtm call classify --transcript <file>|--call <parsed.json> [--llm] [--deterministic] [--json]
+  fullstackgtm call score --transcript <file>|--call <parsed.json> [--call-type <t>] [--rubric <rubric.json>] [--model m] [--json|--out <path>]
   fullstackgtm call link --attendees <a@x.com,...> | --domain <x.com>  [source options] [--json]
   fullstackgtm call plan --transcript <file>|--call <parsed.json> --deal <id> [source options] [--save|--json]
                                                calls become evidence: LLM extraction by default (bring your own
@@ -649,14 +660,20 @@ function parseValueOverrides(args: string[]) {
 async function callCommand(args: string[]) {
   const [subcommand, ...rest] = args;
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(`call parse --transcript <file> [--title t] [--source s] [--model m] [--deterministic] [--json|--ndjson] [--out <path>]
-call score --transcript <file>|--call <parsed.json> [--rubric <rubric.json>] [--model m] [--json|--out <path>]
-call link --attendees <a@x.com,...> | --domain <x.com>  [source options] [--json]
-call plan --transcript <file>|--call <parsed.json> --deal <id> [source options] [--save|--json]
+    console.log(`call parse    --transcript <file> [--title t] [--source s] [--model m] [--deterministic] [--json|--ndjson] [--out <path>]
+call classify --transcript <file>|--call <parsed.json> [--llm] [--deterministic] [--json] [--list]
+call score    --transcript <file>|--call <parsed.json> [--call-type <t>] [--rubric <rubric.json>] [--model m] [--json|--out <path>] [--list-rubrics]
+call link     --attendees <a@x.com,...> | --domain <x.com>  [source options] [--json]
+call plan     --transcript <file>|--call <parsed.json> --deal <id> [source options] [--save|--json]
+
+classify picks the call type (deterministic signals; --llm for a model tiebreak).
+score auto-selects the type-specific rubric from that classification unless you
+pass --call-type or --rubric. Call types: ${CALL_TYPE_IDS.join(", ")}.
 
 parse/score default to LLM extraction (Anthropic or OpenAI key via env,
-\`login anthropic|openai\`, or a one-time prompt). parse --deterministic is
-the free keyword baseline; score always needs a key (scoring is LLM work).`);
+\`login anthropic|openai\`, or a one-time prompt). parse --deterministic is the
+free keyword baseline and classify --deterministic needs no key.
+score always needs a key (scoring is LLM work).`);
     return;
   }
 
@@ -691,6 +708,64 @@ the free keyword baseline; score always needs a key (scoring is LLM work).`);
       extractor: `llm:${credential.provider}:${model}`,
     });
   };
+
+  // Reconstruct plain transcript text from either a --transcript file (any
+  // dialect, normalized) or a parsed --call JSON. Shared by classify + score.
+  const loadTranscriptText = (): string => {
+    const transcriptPath = option(rest, "--transcript");
+    if (transcriptPath) {
+      return normalizeTranscript(readFileSync(resolve(process.cwd(), transcriptPath), "utf8"));
+    }
+    const callPath = option(rest, "--call");
+    if (!callPath) throw new Error(`call ${subcommand} requires --transcript <file> or --call <parsed.json>`);
+    const parsed = JSON.parse(readFileSync(resolve(process.cwd(), callPath), "utf8")) as ParsedCall;
+    return parsed.segments.map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text)).join("\n");
+  };
+
+  if (subcommand === "classify") {
+    if (rest.includes("--list")) {
+      const lines = CALL_TYPES.map((d) => `${d.id.padEnd(22)} ${d.name} — ${d.definition}`);
+      console.log(rest.includes("--json") ? JSON.stringify(CALL_TYPES, null, 2) : lines.join("\n"));
+      return;
+    }
+    const transcriptText = loadTranscriptText();
+    const title = option(rest, "--title") ?? undefined;
+    const deterministic = classifyCall(transcriptText);
+    // LLM tiebreak: explicit --llm, or auto when the deterministic pass is unsure
+    // and a key is available (never required — deterministic always answers).
+    const wantLlm = rest.includes("--llm") || (!rest.includes("--deterministic") && deterministic.confidence !== "high" && Boolean(resolveLlmCredential()));
+    let result: {
+      type: CallType;
+      confidence: string;
+      reason: string;
+      method: string;
+      candidates?: typeof deterministic.candidates;
+      model?: string;
+    } = deterministic;
+    if (wantLlm) {
+      const credential = await requireLlmCredential("score");
+      const llm = await classifyCallLlm(transcriptText, CALL_TYPES, {
+        ...credential,
+        model: option(rest, "--model") ?? undefined,
+        title,
+      });
+      result = { type: llm.type, confidence: "high", reason: llm.reason, method: "llm", model: llm.model };
+    }
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const def = CALL_TYPES.find((d) => d.id === result.type);
+    console.log(`Call type: ${def?.name ?? result.type} (${result.type})`);
+    console.log(`Confidence: ${result.confidence} · via ${result.method}${result.model ? ` (${result.model})` : ""}`);
+    console.log(`Why: ${result.reason}`);
+    if (result.method === "deterministic" && deterministic.candidates.length > 1) {
+      const others = deterministic.candidates.slice(1, 4).map((c) => `${c.type} (${c.score})`).join(", ");
+      console.log(`Other matches: ${others}`);
+    }
+    console.log(`\nScore it with this rubric: fullstackgtm call score ${option(rest, "--transcript") ? `--transcript ${option(rest, "--transcript")}` : `--call ${option(rest, "--call")}`} --call-type ${result.type}`);
+    return;
+  }
 
   if (subcommand === "parse") {
     const parsed = await loadParsedCall();
@@ -779,9 +854,13 @@ the free keyword baseline; score always needs a key (scoring is LLM work).`);
   }
 
   if (subcommand === "score") {
-    // Rubric problems surface before any credential or API work.
+    if (rest.includes("--list-rubrics")) {
+      console.log(JSON.stringify(rubricPresets(), null, 2));
+      return;
+    }
+    // Explicit-rubric problems surface before any credential or API work.
     const rubricPath = option(rest, "--rubric");
-    let rubric = DEFAULT_RUBRIC;
+    let rubric: Rubric | undefined;
     if (rubricPath) {
       const rubricRaw = readFileSync(resolve(process.cwd(), rubricPath), "utf8");
       try {
@@ -791,6 +870,10 @@ the free keyword baseline; score always needs a key (scoring is LLM work).`);
           `${rubricPath} is not a valid rubric: ${error instanceof Error ? error.message : String(error)} Expected JSON like { "scale": 5, "dimensions": [{ "name": "...", "weight": 1, "rubric": "..." }] }.`,
         );
       }
+    }
+    const callTypeOpt = option(rest, "--call-type") as CallType | undefined;
+    if (callTypeOpt && !CALL_TYPE_IDS.includes(callTypeOpt)) {
+      throw new Error(`Unknown --call-type "${callTypeOpt}". One of: ${CALL_TYPE_IDS.join(", ")}.`);
     }
     const credential = await requireLlmCredential("score");
     const transcriptPath = option(rest, "--transcript");
@@ -807,6 +890,17 @@ the free keyword baseline; score always needs a key (scoring is LLM work).`);
         .join("\n");
       title = title ?? parsed.title;
     }
+    // Rubric selection: explicit --rubric wins, then --call-type, else the
+    // deterministic classifier picks the type-specific preset. No generic
+    // discovery rubric silently applied to a renewal anymore.
+    if (!rubric) {
+      const type = callTypeOpt ?? classifyCall(transcriptText).type;
+      rubric = rubricForCallType(type, DEFAULT_RUBRIC);
+      if (!rest.includes("--json")) {
+        const how = callTypeOpt ? `--call-type ${callTypeOpt}` : `auto-classified as ${type}`;
+        console.error(`Scoring with the "${rubric.name ?? "Generic"}" rubric (${how}). Override with --rubric <file> or --call-type <type>.`);
+      }
+    }
     const scorecard = await scoreCallLlm(transcriptText, rubric, {
       ...credential,
       model: option(rest, "--model") ?? undefined,
@@ -822,7 +916,7 @@ the free keyword baseline; score always needs a key (scoring is LLM work).`);
     return;
   }
 
-  throw new Error(`call supports: parse, link, plan, score (got ${subcommand ?? "nothing"})`);
+  throw new Error(`call supports: parse, classify, link, plan, score (got ${subcommand ?? "nothing"})`);
 }
 
 /**
@@ -862,10 +956,14 @@ async function requireLlmCredential(
 }
 
 function renderScorecard(scorecard: CallScorecard, title?: string): string {
+  const bandText = scorecard.band ? ` — ${scorecard.band.label}` : "";
+  const rubricLine = scorecard.rubricName ? `Rubric: ${scorecard.rubricName}${scorecard.callType ? ` (${scorecard.callType})` : ""}` : "";
   const lines = [
     `# Coaching Scorecard${title ? ` — ${title}` : ""}`,
     "",
-    `**Overall: ${scorecard.overallScore}/${scorecard.scale}** (model: ${scorecard.model})`,
+    `**Overall: ${scorecard.overallScore}/${scorecard.scale}${bandText}** (model: ${scorecard.model})`,
+    ...(scorecard.band?.meaning ? [`> ${scorecard.band.meaning}`] : []),
+    ...(rubricLine ? ["", `_${rubricLine}_`] : []),
     "",
     "| Dimension | Score | | Coaching note |",
     "| --- | --- | --- | --- |",

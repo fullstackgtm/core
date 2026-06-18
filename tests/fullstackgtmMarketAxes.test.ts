@@ -186,6 +186,26 @@ test("report renders the strategic map (and only that — no axis lab) when axes
   assert.ok(plain.includes("<h2>Evidence appendix</h2>"));
 });
 
+test("brand logos render inside the scatter bubbles, clipped, and only for data: URIs", () => {
+  const dataUri = "data:image/png;base64,iVBORw0KGgo=";
+  const [first, second] = GOLDEN.config.vendors;
+  const withLogos = {
+    ...GOLDEN.config,
+    vendors: GOLDEN.config.vendors.map((v) =>
+      v.id === first.id ? { ...v, logo: dataUri } : v.id === second.id ? { ...v, logo: "javascript:alert(1)" } : v,
+    ),
+  };
+  const html = marketMapToHtml(withLogos, GOLDEN.set);
+  // The logo is the in-bubble label: a clipped <image> on the scatter dot.
+  assert.ok(html.includes(`<image href="${dataUri}"`), "a data: logo plots inside its scatter bubble");
+  assert.match(html, /<clipPath id="bclip-\d+">/, "the in-bubble logo is clipped to the dot circle");
+  assert.match(html, /clip-path="url\(#bclip-\d+\)"/, "the image references its clip path");
+  // Safety: a non-data: logo is never emitted as an <image> (nor anywhere else).
+  assert.ok(!/<image href="javascript:/.test(html), "a non-data: logo is never plotted in-grid");
+  assert.ok(!html.includes("javascript:alert(1)"), "a non-data: logo is refused everywhere");
+  assert.equal(html, marketMapToHtml(withLogos, GOLDEN.set), "deterministic bytes with logos");
+});
+
 test("pearson basics", () => {
   assert.ok(Math.abs(pearson([1, 2, 3, 4], [2, 4, 6, 8]) - 1) < 1e-9);
   assert.ok(Math.abs(pearson([1, 2, 3, 4], [8, 6, 4, 2]) + 1) < 1e-9);
