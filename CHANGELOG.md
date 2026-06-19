@@ -5,6 +5,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.33.0] — 2026-06-18
+
+### Added
+
+- **Market sourcing helpers (`marketSourcing.ts`)** — find the right page to
+  capture per vendor, detect acquired/redirected vendors, and extract brand logos,
+  with zero coupling to any transport:
+  - `pickCategoryPage(html, baseUrl, keywords)` — follow a vendor's own nav to its
+    category page (so multi-product companies like SAP/Salesforce are captured on
+    the product page, not the corporate homepage). Pure.
+  - `findCategoryPageInSitemap(rootUrl, keywords, fetchText?)` — sitemap fallback
+    for JS-mega-menu sites whose product links aren't in the rendered homepage.
+  - `findCategoryPage(...)` — nav-scan then sitemap, combined.
+  - `detectDrift(url, srcHost, resolve?)` / `resolveFinalUrl(url)` — skip vendors
+    whose site redirects to a different company (an acquired/defunct product).
+  - `extractLogoUrl(html, baseUrl)` + `fetchLogoDataUri(homepageUrl, html?, …)` —
+    a vendor logo as a self-contained `data:` URI for `MarketVendor.logo`.
+  - `categoryKeywords()` + `registrableDomain()` utilities.
+
+  Pure functions operate on already-fetched HTML; fetching helpers default to the
+  package's SSRF-guarded `assertPublicUrl` + `fetch` but accept an injectable
+  fetcher (testable offline, browser-render-friendly). 8 tests.
+
 ## [0.32.0] — 2026-06-18
 
 ### Added

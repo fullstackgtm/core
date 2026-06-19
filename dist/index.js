@@ -34,5 +34,6 @@ export { buildWorksheet, classifyMarket, } from "./marketClassify.js";
 export { computeDirectives, computeOverlayStats, directivesToPlan, overlayToMarkdown, } from "./marketOverlay.js";
 export { computeScaleIndex, dimensionForMetric, scaleReportToText, } from "./marketScale.js";
 export { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
+export { registrableDomain, categoryKeywords, pickCategoryPage, extractLogoUrl, resolveFinalUrl, detectDrift, findCategoryPageInSitemap, findCategoryPage, fetchLogoDataUri, } from "./marketSourcing.js";
 export { computeMissedFirings, createFileScheduleRunStore, createFileScheduleStore, cronMatches, crontabSentinels, expectedFirings, nextCronFiring, parseCron, renderManagedBlock, replaceManagedBlock, scheduleId, scheduleRunsDir, schedulesPath, systemCrontabIo, tokenizeCommand, validateSchedulableArgv, } from "./schedule.js";
 export { suggestValues } from "./suggest.js";
