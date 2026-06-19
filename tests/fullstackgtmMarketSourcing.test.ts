@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   categoryKeywords,
   detectDrift,
+  discoverCompetitors,
   extractLogoUrl,
   fetchLogoDataUri,
   findCategoryPage,
@@ -13,6 +14,15 @@ import {
   type FetchText,
   type ResolveUrl,
 } from "../src/marketSourcing.ts";
+
+/** Mock the Anthropic tool-call: returns the given object as the tool input. */
+function mockLlmFetch(input: unknown): typeof fetch {
+  return (async () =>
+    new Response(JSON.stringify({ content: [{ type: "tool_use", input }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+}
 
 test("registrableDomain: eTLD+1, handling multi-label suffixes", () => {
   assert.equal(registrableDomain("www.spiff.com"), "spiff.com");
@@ -121,4 +131,28 @@ test("fetchLogoDataUri: page logo first, favicon fallback, images only, size-bou
 
   const tooBig: FetchBytes = async () => ({ contentType: "image/png", bytes: new Uint8Array(60_000) });
   assert.equal(await fetchLogoDataUri("https://acme.com/", html, tooBig), null);
+});
+
+test("discoverCompetitors: parses, excludes anchor + supplied hosts, de-dupes by domain", async () => {
+  const fetchImpl = mockLlmFetch({
+    competitors: [
+      { name: "Acme", url: "https://acme.com", productUrl: "https://acme.com/products/x" },
+      { name: "Acme Dup", url: "https://www.acme.com/", productUrl: "https://acme.com/x" }, // same registrable domain → dropped
+      { name: "Globex", url: "https://globex.io" }, // no productUrl → falls back to homepage
+      { name: "Self", url: "https://mycompany.com" }, // == anchor → excluded
+      { name: "Excluded", url: "https://manual.com" }, // in exclude → dropped
+      { name: "Bad", url: "ftp://nope.com" }, // non-http → dropped
+    ],
+  });
+  const vendors = await discoverCompetitors("widgets software", {
+    llm: { provider: "anthropic", apiKey: "sk-ant-test", fetchImpl },
+    anchorUrl: "https://mycompany.com",
+    exclude: ["https://manual.com"],
+  });
+  assert.deepEqual(
+    vendors.map((v) => v.name),
+    ["Acme", "Globex"],
+  );
+  assert.equal(vendors[0].productUrl, "https://acme.com/products/x");
+  assert.equal(vendors[1].productUrl, "https://globex.io/", "no productUrl → homepage");
 });
