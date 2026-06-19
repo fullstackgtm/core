@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.34.0] — 2026-06-18
+
+### Added
+
+- **`discoverCompetitors(category, { llm, anchorUrl?, exclude? })`** — propose the
+  real vendor set for a category via the LLM (BYOK through `forcedToolCall`), so a
+  cold-start map needs only a category. Returns canonical homepages + a
+  category-specific `productUrl` per vendor; excludes the anchor and supplied hosts,
+  de-dupes by registrable domain, and instructs the model to skip acquired/defunct
+  brands. Pairs with `findCategoryPage` / `detectDrift` / `fetchLogoDataUri` (0.33).
+
 ## [0.33.0] — 2026-06-18
 
 ### Added

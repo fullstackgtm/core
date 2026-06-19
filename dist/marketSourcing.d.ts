@@ -1,3 +1,4 @@
+import { type LlmCallOptions } from "./llm.ts";
 /** Fetch a text resource (sitemap, robots.txt); null on any failure. */
 export type FetchText = (url: string) => Promise<string | null>;
 /** Fetch raw bytes (a logo image); null on any failure. */
@@ -64,3 +65,27 @@ export declare function findCategoryPage(homepageHtml: string, homepageUrl: stri
  * Bounded to small raster/SVG (≤50KB).
  */
 export declare function fetchLogoDataUri(homepageUrl: string, html?: string, fetchBytes?: FetchBytes): Promise<string | null>;
+/** A vendor proposed by `discoverCompetitors`. */
+export type DiscoveredVendor = {
+    name: string;
+    /** Canonical homepage. */
+    url: string;
+    /** The page most specific to the category — the product page for multi-product
+     *  companies, else the homepage. Use as the capture seed. */
+    productUrl: string;
+};
+export type DiscoverCompetitorsOptions = {
+    llm: LlmCallOptions;
+    /** The user's own company: competitors are listed for it and it's excluded. */
+    anchorUrl?: string;
+    /** Vendor hosts already in the set, to exclude from results. */
+    exclude?: string[];
+};
+/**
+ * Propose the real vendor set for a category via the LLM — so a cold-start map
+ * needs only a category, not a hand-built vendor list. Returns canonical homepages
+ * plus a category-specific `productUrl` per vendor; excludes the anchor + any
+ * supplied hosts, de-dupes by registrable domain, and instructs the model to skip
+ * acquired/defunct brands. BYOK via the package's `forcedToolCall`.
+ */
+export declare function discoverCompetitors(category: string, options: DiscoverCompetitorsOptions): Promise<DiscoveredVendor[]>;

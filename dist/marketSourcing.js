@@ -17,6 +17,7 @@
  *    headless browser, so the default fetch is sufficient even in the hosted layer.
  */
 import { assertPublicUrl } from "./market.js";
+import { DEFAULT_MODELS, forcedToolCall } from "./llm.js";
 const USER_AGENT = "fullstackgtm-market/0 (+https://github.com/fullstackgtm/core)";
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
@@ -402,4 +403,85 @@ export async function fetchLogoDataUri(homepageUrl, html, fetchBytes = defaultFe
         return `data:${got.contentType};base64,${Buffer.from(got.bytes).toString("base64")}`;
     }
     return null;
+}
+const DISCOVERY_SCHEMA = {
+    type: "object",
+    required: ["competitors"],
+    properties: {
+        competitors: {
+            type: "array",
+            description: "Real vendors competing in this category today, each with its canonical https homepage URL.",
+            items: {
+                type: "object",
+                required: ["name", "url"],
+                properties: {
+                    name: { type: "string" },
+                    url: { type: "string", description: "Canonical homepage, https://domain, no tracking path." },
+                    productUrl: {
+                        type: "string",
+                        description: "URL of the page on THIS vendor's site most specific to the category. For a multi-product company (e.g. SAP, Oracle) this is the product/solution page for this category, NOT the corporate homepage. For a focused single-product vendor, repeat the homepage.",
+                    },
+                },
+            },
+        },
+    },
+};
+/**
+ * Propose the real vendor set for a category via the LLM — so a cold-start map
+ * needs only a category, not a hand-built vendor list. Returns canonical homepages
+ * plus a category-specific `productUrl` per vendor; excludes the anchor + any
+ * supplied hosts, de-dupes by registrable domain, and instructs the model to skip
+ * acquired/defunct brands. BYOK via the package's `forcedToolCall`.
+ */
+export async function discoverCompetitors(category, options) {
+    const model = options.llm.model ?? DEFAULT_MODELS[options.llm.provider];
+    const anchorHost = options.anchorUrl ? hostOf(options.anchorUrl) : null;
+    const anchorNote = anchorHost
+        ? `The user's own company is ${anchorHost} — list its direct competitors and do NOT include ${anchorHost} itself.`
+        : "";
+    const prompt = `List the most significant vendors competing in the category "${category}" today.
+${anchorNote}
+Rules:
+- Real companies only, each with its canonical https homepage URL (domain root, no tracking path).
+- 7-9 vendors: a mix of established leaders and notable challengers.
+- EXCLUDE vendors that have been acquired and folded into another brand, or are defunct — i.e. anything whose own site now redirects to a different company. (Name the current independent players instead.)
+- For each, also give productUrl: the page most specific to "${category}". For a big multi-product company, that's its product/solution page for THIS category, not the corporate homepage.
+- No duplicates.`;
+    const result = (await forcedToolCall(prompt, "discover_competitors", DISCOVERY_SCHEMA, model, options.llm));
+    const excluded = new Set((options.exclude ?? []).map(hostOf).filter((h) => Boolean(h)));
+    if (anchorHost)
+        excluded.add(anchorHost);
+    const seenDomain = new Set();
+    const out = [];
+    for (const c of result?.competitors ?? []) {
+        let u;
+        try {
+            u = new URL(String(c.url));
+        }
+        catch {
+            continue;
+        }
+        if (u.protocol !== "http:" && u.protocol !== "https:")
+            continue;
+        const host = u.hostname.replace(/^www\./, "");
+        if (excluded.has(host))
+            continue;
+        const dom = registrableDomain(host);
+        if (seenDomain.has(dom))
+            continue;
+        seenDomain.add(dom);
+        let productUrl = u.toString();
+        if (c.productUrl) {
+            try {
+                const p = new URL(String(c.productUrl));
+                if (p.protocol === "http:" || p.protocol === "https:")
+                    productUrl = p.toString();
+            }
+            catch {
+                /* keep homepage */
+            }
+        }
+        out.push({ name: c.name || host, url: u.toString(), productUrl });
+    }
+    return out;
 }

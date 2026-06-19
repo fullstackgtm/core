@@ -301,9 +301,12 @@ export {
   findCategoryPageInSitemap,
   findCategoryPage,
   fetchLogoDataUri,
+  discoverCompetitors,
   type FetchText,
   type FetchBytes,
   type ResolveUrl,
+  type DiscoveredVendor,
+  type DiscoverCompetitorsOptions,
 } from "./marketSourcing.ts";
 export {
   computeMissedFirings,
