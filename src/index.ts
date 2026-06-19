@@ -292,6 +292,20 @@ export {
 } from "./marketScale.ts";
 export { marketMapToHtml, marketMapToMarkdown } from "./marketReport.ts";
 export {
+  registrableDomain,
+  categoryKeywords,
+  pickCategoryPage,
+  extractLogoUrl,
+  resolveFinalUrl,
+  detectDrift,
+  findCategoryPageInSitemap,
+  findCategoryPage,
+  fetchLogoDataUri,
+  type FetchText,
+  type FetchBytes,
+  type ResolveUrl,
+} from "./marketSourcing.ts";
+export {
   computeMissedFirings,
   createFileScheduleRunStore,
   createFileScheduleStore,
