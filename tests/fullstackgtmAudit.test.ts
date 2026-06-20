@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import test from "node:test";
 import {
   auditFindingId,
@@ -9,6 +11,28 @@ import {
   sampleSnapshot,
   type GtmAuditRule,
 } from "../src/index.ts";
+
+const repoRoot = resolve(import.meta.dirname, "..");
+const runCli = (args: string[]) =>
+  spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "src/bin.ts", ...args],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+
+test("audit refuses to run without an explicit data source (no silent sample fallback)", () => {
+  // Regression: a missing or typo'd source flag must NOT silently audit the
+  // built-in sample fixture as if it were the user's real CRM.
+  for (const args of [["audit"], ["audit", "--snapshot", "typo.json"]]) {
+    const r = runCli(args);
+    assert.equal(r.status, 1, `expected exit 1 for ${args.join(" ")}`);
+    assert.match(`${r.stderr}${r.stdout}`, /No data source/);
+  }
+  // Explicit --sample is still an allowed opt-in.
+  const sample = runCli(["audit", "--sample"]);
+  assert.equal(sample.status, 0, sample.stderr);
+  assert.match(sample.stdout, /findings/);
+});
 
 test("fullstackgtm audit emits dry-run findings and patch operations", () => {
   const plan = auditSnapshot(sampleSnapshot, defaultPolicy("2026-05-03"));

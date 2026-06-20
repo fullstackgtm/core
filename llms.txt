@@ -115,6 +115,22 @@ artifacts: plan ids / enrich run labels, trigger cron|manual) land under
 firings (visibility only — local cron has no catch-up). Providers beyond
 `local` are not yet implemented (future: codegen scaffolds, same contract).
 
+## Key invariants (engagement workspace / health)
+
+`fullstackgtm health` rolls up a per-profile CRM-health timeline that accrues
+from the verb teams already run: every `audit --save` stamps a deterministic
+0–100 hygiene score plus a snapshot onto the active profile. The score is
+`100 / (1 + severity-weighted findings per record)` (info ×1, warning ×3,
+critical ×10) — no LLM, so it is byte-stable in CI and comparable run-over-run;
+0 findings ⇒ 100, and the same findings over fewer clean records score lower.
+State is profile-scoped and owner-only (0600) under the same secured home as
+plans: `health.jsonl` (append-only, one entry per saved audit) and
+`snapshots/<planId>.json`. `health` is READ-ONLY — it only reads the timeline,
+never re-audits or writes; `--json` emits the rollup (current score, delta since
+the last audit, dated trend, per-rule deltas). Scope per client with
+`--profile <name>`; an empty timeline returns a pointer, never an error.
+Library: `computeHealth` / `summarizeHealth` / `healthToMarkdown`.
+
 ## Key invariants
 
 - Reads are safe by default; nothing is written without explicit `--approve`

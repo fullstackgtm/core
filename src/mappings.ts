@@ -22,6 +22,9 @@ export const HUBSPOT_DEFAULT_FIELD_MAPPINGS: Record<
     email: "email",
     phone: "phone",
     title: "jobtitle",
+    // HubSpot-standard "LinkedIn URL"; safe to request everywhere (HubSpot
+    // ignores unknown properties rather than erroring). Powers strong dedup.
+    linkedin: "hs_linkedin_url",
     ownerId: "hubspot_owner_id",
   },
   deals: {

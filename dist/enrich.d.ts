@@ -1,3 +1,4 @@
+import type { AcquireBudget } from "./acquireMeter.ts";
 import type { CanonicalGtmSnapshot, PatchPlan } from "./types.ts";
 /**
  * The enrich layer: governed append/refresh of third-party data into the CRM.
@@ -55,6 +56,39 @@ export type EnrichConfig = {
     match: Partial<Record<EnrichObjectType, EnrichMatchConfig>>;
     fields: Partial<Record<EnrichObjectType, EnrichFieldConfig[]>>;
     policy: EnrichPolicyConfig;
+    /** Net-new lead creation (`enrich acquire`). Optional; absent = acquire off. */
+    acquire?: AcquireConfig;
+};
+/** Maps a sourced record to the CRM properties a net-new record is created with. */
+export type AcquireCreateMap = {
+    /** CRM property name → source payload path (read via sourceValueAt). */
+    properties: Record<string, string>;
+    /** Source path whose value becomes the dedupe key (e.g. "email"). */
+    matchKey: string;
+    /** Optional source path to a company name; the connector resolves-or-creates it. */
+    associateCompanyFrom?: string;
+};
+/**
+ * Net-new discovery for an API acquire source. `provider` selects the adapter
+ * (explorium = prospect search; pipe0 = work-email waterfall). `filters` is the
+ * provider-native query; `resolveEmailsWith` chains a second provider to fill
+ * real emails (e.g. explorium discovers, pipe0 resolves the work email).
+ */
+export type AcquireDiscoveryConfig = {
+    provider: "explorium" | "pipe0";
+    filters?: Record<string, unknown>;
+    size?: number;
+    resolveEmailsWith?: "pipe0";
+};
+export type AcquireConfig = {
+    /** Windowed budget enforced by the acquire meter; absent = unmetered. */
+    budget?: AcquireBudget;
+    /** Estimated provider cost (USD) per created record, by source id. */
+    costPerRecord?: Record<string, number>;
+    /** How to build a net-new record from a sourced row, per object type. */
+    create: Partial<Record<EnrichObjectType, AcquireCreateMap>>;
+    /** Net-new discovery params for API sources, by source id. */
+    discovery?: Record<string, AcquireDiscoveryConfig>;
 };
 export declare const ENRICH_CONFIG_FILE_NAME = "enrich.config.json";
 export declare const DEFAULT_STALE_DAYS = 90;
@@ -68,6 +102,25 @@ export declare function resolveCrmField(objectType: EnrichObjectType, name: stri
  * the accepted values.
  */
 export declare function parseEnrichConfig(raw: string): EnrichConfig;
+/**
+ * Built-in zero-config presets for well-known sources, so the common Mode-A
+ * loop — "feed a Clay export, get the dedup/routing verdict" — needs no
+ * hand-authored config. These are **match-only** (empty `fields`): the value is
+ * the matched / unmatched / ambiguous routing and collision detection, not field
+ * writes. Drop an `enrich.config.json` next to your run to map fields for actual
+ * field enrichment; an explicit config always wins over a preset. Constructed
+ * directly (not via `parseEnrichConfig`) so the match-only shape is allowed.
+ */
+export declare const BUILTIN_ENRICH_PRESETS: Record<string, EnrichConfig>;
+export declare function builtinEnrichPreset(source: string | undefined): EnrichConfig | undefined;
+/**
+ * Zero-config `enrich acquire` preset so every client gets targeted, deduped,
+ * metered lead-fill out of the box — no hand-authored enrich.config.json. The
+ * ICP (icp.json) supplies the targeting; this supplies sensible plumbing. The
+ * create mapping writes the prospect's LinkedIn URL into hs_linkedin_url, so
+ * each created contact strengthens future dedup. An explicit config always wins.
+ */
+export declare function builtinAcquirePreset(source: string | undefined): EnrichConfig | undefined;
 export declare function loadEnrichConfig(path: string): EnrichConfig;
 export declare function parseCsv(text: string): Array<Record<string, string>>;
 export type EnrichSourceRecord = {
@@ -154,6 +207,40 @@ export type EnrichPlanResult = {
  * current CRM value → apply-time compare-and-set rejects drifted records).
  */
 export declare function buildEnrichPlan(options: BuildEnrichPlanOptions): EnrichPlanResult;
+export type AcquireCounts = {
+    fetched: number;
+    matched: number;
+    ambiguous: number;
+    unmatched: number;
+    /** create_record ops emitted. */
+    created: number;
+    /** unmatched rows that would have been created but for the meter ceiling. */
+    withheldByMeter: number;
+};
+export type AcquirePlanResult = {
+    plan: PatchPlan;
+    counts: AcquireCounts;
+    estCostUsd: number;
+};
+export type BuildAcquirePlanOptions = {
+    config: EnrichConfig;
+    source: string;
+    snapshot: CanonicalGtmSnapshot;
+    records: EnrichSourceRecord[];
+    runLabel: string;
+    /** Meter ceiling: max create ops to emit. null/undefined = unlimited. */
+    maxRecords?: number | null;
+    now?: () => Date;
+};
+/**
+ * Match each sourced record against the snapshot and route it: matched =
+ * already in the CRM (skip), ambiguous = a possible duplicate exists (skip —
+ * resolve-first never creates over ambiguity), unmatched = a net-new lead.
+ * Unmatched rows with a dedupe key and at least one mapped property become
+ * `create_record` operations, capped at `maxRecords` (the meter's headroom).
+ * Always a dry-run plan; nothing is written until apply.
+ */
+export declare function buildAcquirePlan(options: BuildAcquirePlanOptions): AcquirePlanResult;
 /** Latest stamp per (objectType, objectId, field) across a source's runs. */
 export declare function latestStamps(runs: EnrichRun[], source: string): Map<string, EnrichStamp>;
 export declare function staleDaysFor(config: EnrichConfig, objectType: EnrichObjectType, field: string): number;

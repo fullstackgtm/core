@@ -1,4 +1,9 @@
-export function patchPlanToMarkdown(plan) {
+// `summary: true` renders only the header + the Findings-by-Rule table + an
+// operation count, for read verbs like `audit` where the full per-operation
+// dump (1,400+ lines on a real portal) buries the signal. Defaults to the full
+// view so write-preview callers (bulk-update, fix, dedupe, plans show, MCP) —
+// where you approve specific operations — keep every operation's detail.
+export function patchPlanToMarkdown(plan, opts = {}) {
     const lines = [
         `# ${plan.title}`,
         "",
@@ -19,6 +24,13 @@ export function patchPlanToMarkdown(plan) {
             lines.push(`| ${ruleId} | ${entry.count} | ${entry.severity} |`);
         });
         lines.push("");
+    }
+    if (opts.summary) {
+        const ops = plan.operations.length;
+        lines.push(ops === 0
+            ? "No patch operations proposed."
+            : `${ops} dry-run patch operation${ops === 1 ? "" : "s"} proposed — nothing written.`, "", "Full plan detail: re-run with `--full`.", "Client-ready report: `fullstackgtm report` (add `--format html` for a printable file).");
+        return `${lines.join("\n")}\n`;
     }
     lines.push("## Findings", "");
     const findings = plan.pipelineFindings ?? [];
@@ -58,7 +70,7 @@ export function patchPlanToMarkdown(plan) {
             lines.push(`- **${operation.operation}** ${operation.objectType}/${operation.objectId}`, `  - ID: ${operation.id}`, `  - Field/action: ${operation.field ?? operation.operation}`, `  - Findings: ${formatRefs(operation.findingIds)}`, `  - Evidence refs: ${formatRefs(operation.evidenceIds)}`, `  - Before: ${formatValue(operation.beforeValue)}`, `  - After: ${formatValue(operation.afterValue)}`, `  - Reason: ${operation.reason}`, `  - Source rule/policy: ${operation.sourceRuleOrPolicy ?? "unspecified"}`, `  - Risk: ${operation.riskLevel}`, `  - Approval required: ${operation.approvalRequired ? "yes" : "no"}`, `  - Rollback: ${operation.rollback ?? "restore prior value if apply is rejected or verification fails"}`, `  - Verification: ${formatVerification(operation.verification)}`);
         }
     }
-    lines.push("", "> This prototype is dry-run only. Real CRM writes must require explicit human approval before connector adapters apply any operation.");
+    lines.push("", "> Dry-run plan — read-only. No provider write happens until you approve specific operations and run `apply`; placeholder values are refused without an explicit override. These safety invariants are not beta.");
     return `${lines.join("\n")}\n`;
 }
 export function formatPatchPlanRun(run) {

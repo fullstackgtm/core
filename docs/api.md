@@ -40,7 +40,7 @@ release.
 - `GtmConnector` — `{ provider, fetchSnapshot(), applyOperation?, readField?, fetchChanges? }`.
   - Connectors never silently drop unresolvable records; audits surface them.
   - `fetchChanges(sinceIso)` returns a partial snapshot; change feeds may omit associations.
-- `createHubspotConnector(options)` — read/write/readField/fetchChanges. `applyOperation` implements every `PatchOperationType`: `set_field`, `clear_field`, `link_record`, `create_task`, `archive_record`, `merge_records` (HubSpot v3 merge — pairwise, irreversible; survivor must belong to the duplicate group). The Salesforce connector skips `merge_records` honestly (SOAP/Apex-only on that platform).
+- `createHubspotConnector(options)` — read/write/readField/fetchChanges. `applyOperation` implements every `PatchOperationType`: `set_field`, `clear_field`, `link_record`, `create_task`, `create_record` (resolve-first net-new contact/company create — re-checks the dedupe key at apply, never double-creates), `archive_record`, `merge_records` (HubSpot v3 merge — pairwise, irreversible; survivor must belong to the duplicate group). The Salesforce connector skips `merge_records` and `create_record` honestly (platform-specific).
 - `createSalesforceConnector(options)` — read/write/readField/fetchChanges; probabilities normalized to 0..1; `applyOperation` implements every operation type.
 - `createStripeConnector(options)` — read-only billing by design (`applyOperation` returns `skipped`); email domains are the cross-system merge keys. Implements `fetchChanges` (incremental via `created[gte]`).
 
@@ -62,7 +62,8 @@ Commands: `login` / `logout`, `snapshot`, `audit`, `report`, `diff`, `merge`, `p
 `bulk-update`, `dedupe`, `reassign`, `fix`,
 `market` (`init` / `capture` / `classify` / `worksheet` / `observe` / `fronts` /
 `axes` / `overlay` / `scale` / `report` / `refresh`),
-`enrich` (`append` / `refresh` / `ingest` / `status`),
+`enrich` (`append` / `refresh` / `ingest` / `acquire` / `status`),
+`icp` (`interview` / `set` / `show`),
 `schedule` (`add` / `list` / `remove` / `enable` / `disable` / `run` /
 `install` / `uninstall` / `status`), `rules`, `profiles`, `doctor`.
 Exit codes: `0` success · `1` error · `2` findings/regressions at the requested gate
@@ -119,6 +120,32 @@ stamps read by `latestStamps` / `selectStaleWork`). `parseCsv` is the
 dependency-free CSV intake; the Apollo client (`createApolloClient`,
 `pullApolloRecords`, 429-aware with `Retry-After`) is the first `api`-kind
 source.
+
+## Acquire (net-new lead generation)
+
+`buildAcquirePlan` turns sourced-but-unmatched prospects into `create_record`
+operations (matched / ambiguous are skipped — resolve-first never creates over
+a possible dup), capped by the meter's headroom. `builtinAcquirePreset` is the
+zero-config `EnrichConfig.acquire` (budget, provider, create-mapping) so
+`enrich acquire` runs with just an `icp.json`.
+
+- **ICP** (`icp.ts`): `Icp` type, `parseIcp`, `icpToExploriumFilters` /
+  `icpToCrustdataFilters` (per-provider discovery filters), `scoreProspectAgainstIcp`
+  (persona fit 0..1), `fitThreshold`, `INTERVIEW_SPEC` + `icpFromAnswers` (the
+  agent-driven interview).
+- **Prospect sources** (`connectors/prospectSources.ts`, `Prospect`):
+  `fetchExploriumProspects` (discovery), `pipe0ResolveWorkEmails` (work-email
+  waterfall, chunked, surfaces upstream errors), `fetchPipe0CrustdataProspects`
+  (people search). `prospectIdentityKeys` / `crmContactKeys` /
+  `partitionFreshProspects` power the pre-email dedup.
+- **Meter** (`acquireMeter.ts`): `AcquireBudget`, `loadMeter` / `remaining` /
+  `recordConsumption` — per-profile windowed record+spend budget, charged only
+  for landed creates.
+- **Seen cache** (`acquireSeen.ts`): `loadSeen` / `recordSeen` — cross-run
+  memory so a re-run never re-pays to enrich a known prospect.
+
+`CanonicalContact.linkedin` (mapped from HubSpot `hs_linkedin_url`) is the
+strong dedup key across all of the above.
 
 ## Schedule
 

@@ -19,6 +19,7 @@ export { createFilePlanStore } from "./planStore.js";
 export { computeApprovalDigests, loadOrCreateSigningKey, loadSigningKey, signApproval, verifyApprovalDigests, } from "./integrity.js";
 export { buildAuditLog, verifyAuditLog, } from "./auditLog.js";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
+export { computeHealth, summarizeHealth, healthToMarkdown, } from "./health.js";
 export { auditReportToHtml, auditReportToMarkdown } from "./report.js";
 export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, normalizeFieldMappings, readMappedValue, } from "./mappings.js";
 export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, duplicateOpenDealRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, provenanceSummary, requiresHumanInput, staleDealRule, } from "./rules.js";
