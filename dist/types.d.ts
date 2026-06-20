@@ -10,7 +10,21 @@ export type RiskLevel = "low" | "medium" | "high";
 export type ApprovalStatus = "draft" | "needs_approval" | "approved" | "rejected" | "applied";
 export type GtmObjectType = "account" | "contact" | "deal" | "user" | "activity";
 export type GtmEvidenceSourceSystem = "salesforce" | "hubspot" | "gong" | "chorus" | "fathom" | "manual" | "csv" | "mock" | "web" | "unknown";
-export type PatchOperationType = "set_field" | "clear_field" | "link_record" | "archive_record" | "create_task" | "merge_records";
+export type PatchOperationType = "set_field" | "clear_field" | "link_record" | "archive_record" | "create_task" | "create_record" | "merge_records";
+/**
+ * The afterValue of a `create_record` operation. The connector re-resolves on
+ * `matchKey`/`matchValue` at apply time and creates only on a confirmed miss.
+ * `estCostUsd` is the acquire meter's per-record charge, recorded against the
+ * budget on a successful create.
+ */
+export type CreateRecordPayload = {
+    properties: Record<string, string>;
+    matchKey: string;
+    matchValue: string;
+    source: string;
+    estCostUsd?: number;
+    associateCompanyName?: string;
+};
 export type AuditFindingSeverity = "info" | "warning" | "critical";
 /**
  * One claim that a canonical record exists in an external system. A record
@@ -125,6 +139,8 @@ export type CanonicalContact = {
     email?: string;
     phone?: string;
     title?: string;
+    /** LinkedIn profile URL — the strongest cross-system identity key for dedup. */
+    linkedin?: string;
     ownerId?: string;
     lastActivityAt?: string;
     lastSyncAt?: string;

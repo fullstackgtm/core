@@ -131,6 +131,14 @@ export {
   type AuditLogVerification,
 } from "./auditLog.ts";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
+export {
+  computeHealth,
+  summarizeHealth,
+  healthToMarkdown,
+  type HealthEntry,
+  type HealthRollup,
+  type HealthRuleDelta,
+} from "./health.ts";
 export { auditReportToHtml, auditReportToMarkdown, type ReportOptions } from "./report.ts";
 export {
   HUBSPOT_DEFAULT_FIELD_MAPPINGS,

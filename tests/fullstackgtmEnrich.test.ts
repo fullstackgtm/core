@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import {
   buildEnrichPlan,
+  builtinEnrichPreset,
   createFileEnrichRunStore,
   inferIngestObjectType,
   latestStamps,
@@ -518,4 +520,92 @@ test("ingest rows: object type inference from match-key columns, staged records 
   assert.equal(records[0].objectType, "contact");
   assert.equal(records[0].keys.email, "jane@acme.com"); // case-insensitive header lookup
   assert.equal(sourceValueAt(records[0].payload, "Job Title"), "VP Operations");
+});
+
+test("built-in clay preset is match-only and still reports the routing verdict (Mode A)", () => {
+  // Regression: a match-only config (empty fields, e.g. the built-in Clay preset)
+  // must still run the matcher and report matched / ambiguous / unmatched +
+  // collisions — it just proposes zero field writes. Previously a record with no
+  // field mappings was short-circuited to "unmatched" before matching ran.
+  const preset = builtinEnrichPreset("clay");
+  assert.ok(preset, "clay preset should exist");
+  assert.deepEqual(preset!.fields, {}); // match-only by design
+  assert.equal(builtinEnrichPreset("no-such-source"), undefined);
+
+  const snap = snapshot({
+    accounts: [
+      { id: "1001", name: "Acme Inc", domain: "acme.com" },
+      { id: "1002", name: "Dup One", domain: "dup.com" },
+      { id: "1003", name: "Dup Two", domain: "dup.com" }, // same domain → ambiguous group
+    ],
+  });
+  const records: EnrichSourceRecord[] = [
+    { id: "clay:1", objectType: "company", keys: { domain: "acme.com" }, payload: {} },
+    { id: "clay:2", objectType: "company", keys: { domain: "dup.com" }, payload: {} },
+    { id: "clay:3", objectType: "company", keys: { domain: "newco.io" }, payload: {} },
+  ];
+  const result = buildEnrichPlan({
+    config: preset!,
+    source: "clay",
+    mode: "append",
+    snapshot: snap,
+    records,
+    runLabel: "clay-preset-test",
+  });
+
+  assert.equal(result.counts.matched, 1); // acme.com
+  assert.equal(result.counts.ambiguous, 1); // dup.com collision
+  assert.equal(result.counts.unmatched, 1); // newco.io
+  assert.equal(result.counts.opsEmitted, 0); // match-only: no writes proposed
+});
+
+test("CLI: enrich ingest --source clay runs zero-config and collapses to a verdict (one-shot)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fsgtm-clay-cli-"));
+  try {
+    const snap = join(dir, "snap.json");
+    writeFileSync(
+      snap,
+      JSON.stringify({
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        provider: "mock",
+        users: [],
+        accounts: [
+          { id: "1001", name: "Acme Inc", domain: "acme.com" },
+          { id: "1002", name: "Dup A", domain: "dup.com" },
+          { id: "1003", name: "Dup B", domain: "dup.com" },
+        ],
+        contacts: [],
+        deals: [],
+        activities: [],
+      }),
+    );
+    const csv = join(dir, "clay.csv");
+    writeFileSync(csv, "Company Name,Domain\nAcme,https://www.acme.com/\nDup,dup.com\nNewCo,newco.io\n");
+    const repoRoot = resolve(import.meta.dirname, "..");
+    const r = spawnSync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        join(repoRoot, "src/bin.ts"),
+        "enrich",
+        "ingest",
+        csv,
+        "--source",
+        "clay",
+        "--objects",
+        "companies",
+        "--input",
+        snap,
+        "--run-label",
+        "cli-oneshot",
+      ],
+      { cwd: dir, encoding: "utf8", env: { ...process.env, FSGTM_HOME: dir } },
+    );
+    assert.equal(r.status, 0, r.stderr);
+    // Zero config (preset) + collapse: normalized match (acme), ambiguity (dup.com), unmatched (newco).
+    assert.match(r.stdout, /1 matched/);
+    assert.match(r.stdout, /1 ambiguous/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

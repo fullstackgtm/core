@@ -72,7 +72,14 @@ provider  ──fetchSnapshot()──►  CanonicalGtmSnapshot
 - `market*.ts` (`market.ts`, `marketClassify.ts`, `marketAxes.ts`,
   `marketOverlay.ts`, `marketScale.ts`, `marketReport.ts`) — the competitive
   market-map layer; classifications are verbatim-verified against captures.
-- `enrich.ts` + `enrichApollo.ts` — third-party data enrichment (fill-blanks).
+- `enrich.ts` + `enrichApollo.ts` — third-party data enrichment (fill-blanks),
+  plus `buildAcquirePlan` / `builtinAcquirePreset` for net-new lead generation.
+- `icp.ts` — the Ideal Customer Profile artifact: per-provider discovery-filter
+  translation, prospect fit scoring, and the agent-driven interview spec.
+- `acquireMeter.ts` — per-profile windowed budget (records + spend) for acquire.
+- `acquireSeen.ts` — cross-run "seen" cache so re-runs don't re-pay for dupes.
+- `connectors/prospectSources.ts` — API prospect sources (Explorium discovery,
+  pipe0 work-email waterfall, pipe0/Crustdata search) + the pre-email dedup keys.
 
 **Surfaces & infra**
 - `cli.ts` — one async function per command, flat dispatch in `runCli`;

@@ -26,6 +26,10 @@ export function createHubspotConnector(options) {
     // search API is eventually consistent, so a just-created company is
     // invisible to search — this map is the authoritative same-run record.
     const createdCompaniesByName = new Map();
+    // Same-run dedup for `create_record` contact creates, keyed by lowercased
+    // match value (email): HubSpot search is eventually consistent, so a contact
+    // created earlier in this apply run is invisible to a later search.
+    const createdContactsByMatch = new Map();
     async function request(path, init = {}) {
         const token = await options.getAccessToken();
         let response;
@@ -161,6 +165,7 @@ export function createHubspotConnector(options) {
                 email: stringOrUndefined(readMapped(props, "contacts", "email", "email")),
                 phone: stringOrUndefined(readMapped(props, "contacts", "phone", "phone")),
                 title: stringOrUndefined(readMapped(props, "contacts", "title", "jobtitle")),
+                linkedin: stringOrUndefined(readMapped(props, "contacts", "linkedin", "hs_linkedin_url")),
                 ownerId: stringOrUndefined(readMapped(props, "contacts", "ownerId", "hubspot_owner_id")),
                 provenance: provenanceFrom(props),
                 lastSyncAt: stringOrUndefined(contact.updatedAt),
@@ -413,6 +418,134 @@ export function createHubspotConnector(options) {
         });
         return (data?.results ?? []).map((row) => String(row.id));
     }
+    /** Exact-value contact lookup (by any searchable property) for resolve-first creates. */
+    async function searchContactsBy(property, value) {
+        const data = await request(`/crm/v3/objects/contacts/search`, {
+            method: "POST",
+            body: JSON.stringify({
+                filterGroups: [{ filters: [{ propertyName: property, operator: "EQ", value }] }],
+                properties: [property],
+                limit: 3,
+            }),
+        });
+        return (data?.results ?? []).map((row) => String(row.id));
+    }
+    /**
+     * Resolve a company by exact name, creating it on a confirmed miss. Returns
+     * the company id, or null on ambiguity (≥2 existing) so the caller skips the
+     * association rather than guessing. Same-run safe via createdCompaniesByName.
+     */
+    async function resolveOrCreateCompanyByName(name, opId) {
+        const nameKey = name.toLowerCase();
+        const already = createdCompaniesByName.get(nameKey);
+        if (already)
+            return already;
+        const matches = await searchCompaniesByName(name);
+        if (matches.length > 1)
+            return null;
+        if (matches.length === 1) {
+            createdCompaniesByName.set(nameKey, matches[0]);
+            return matches[0];
+        }
+        let created;
+        try {
+            created = await request(`/crm/v3/objects/companies`, {
+                method: "POST",
+                body: JSON.stringify({
+                    properties: { name, hs_object_source_detail_2: `fullstackgtm acquire (${opId})` },
+                }),
+            });
+        }
+        catch {
+            created = await request(`/crm/v3/objects/companies`, {
+                method: "POST",
+                body: JSON.stringify({ properties: { name } }),
+            });
+        }
+        const id = String(created.id);
+        createdCompaniesByName.set(nameKey, id);
+        return id;
+    }
+    /**
+     * Create a NET-NEW record (a sourced lead). Resolve-first: re-checks the
+     * dedupe key against the live CRM (the plan-time snapshot can be stale) and
+     * creates ONLY on a confirmed miss — a record a concurrent writer already
+     * added is returned as `skipped`, never duplicated. Contacts can be linked
+     * to a resolved-or-created company in the same step.
+     */
+    async function createRecord(operation) {
+        const payload = operation.afterValue;
+        if (!payload || typeof payload !== "object" || !payload.properties) {
+            return { operationId: operation.id, status: "skipped", detail: "create_record needs a CreateRecordPayload afterValue." };
+        }
+        const objectPath = OBJECT_PATHS[operation.objectType];
+        if (operation.objectType !== "contact" && operation.objectType !== "account") {
+            return { operationId: operation.id, status: "skipped", detail: "create_record supports contacts and accounts." };
+        }
+        const matchValue = String(payload.matchValue ?? "").trim();
+        if (!matchValue) {
+            return { operationId: operation.id, status: "skipped", detail: "create_record needs a non-empty matchValue to resolve-first." };
+        }
+        if (operation.objectType === "account") {
+            const id = await resolveOrCreateCompanyByName(matchValue, operation.id);
+            if (id === null) {
+                return { operationId: operation.id, status: "skipped", detail: `create_record: ambiguous — multiple companies named "${matchValue}". Not creating.` };
+            }
+            return { operationId: operation.id, status: "applied", detail: `Resolved/created company "${matchValue}" (${id}).`, providerData: { id } };
+        }
+        // contact — resolve-first on the dedupe key (email by default)
+        const matchKey = payload.matchKey || "email";
+        const matchKeyLower = `${matchKey}:${matchValue.toLowerCase()}`;
+        if (createdContactsByMatch.has(matchKeyLower)) {
+            return { operationId: operation.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already created earlier in this run; not duplicating.`, providerData: { id: createdContactsByMatch.get(matchKeyLower), existing: true } };
+        }
+        const existing = await searchContactsBy(matchKey, matchValue);
+        if (existing.length > 0) {
+            createdContactsByMatch.set(matchKeyLower, existing[0]);
+            return { operationId: operation.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already exists (${existing.join(", ")}); resolve-first declined to create.`, providerData: { id: existing[0], existing: true } };
+        }
+        const properties = { ...payload.properties };
+        let created;
+        try {
+            created = await request(`/crm/v3/objects/${objectPath}`, {
+                method: "POST",
+                body: JSON.stringify({ properties: { ...properties, hs_object_source_detail_2: `fullstackgtm acquire (${operation.id})` } }),
+            });
+        }
+        catch {
+            // Some portals reject writes to source-detail properties — the provenance
+            // stamp is best-effort, the create is not.
+            created = await request(`/crm/v3/objects/${objectPath}`, {
+                method: "POST",
+                body: JSON.stringify({ properties }),
+            });
+        }
+        const contactId = String(created.id);
+        createdContactsByMatch.set(matchKeyLower, contactId);
+        let companyNote = "";
+        if (payload.associateCompanyName) {
+            try {
+                const companyId = await resolveOrCreateCompanyByName(payload.associateCompanyName, operation.id);
+                if (companyId) {
+                    await request(`/crm/v4/objects/contacts/${encodeURIComponent(contactId)}/associations/default/companies/${encodeURIComponent(companyId)}`, { method: "PUT" });
+                    companyNote = ` Linked to company "${payload.associateCompanyName}" (${companyId}).`;
+                }
+                else {
+                    companyNote = ` Company "${payload.associateCompanyName}" was ambiguous; left unlinked.`;
+                }
+            }
+            catch (error) {
+                // Association is best-effort — the contact create already succeeded.
+                companyNote = ` (company link failed: ${error instanceof Error ? error.message : String(error)})`;
+            }
+        }
+        return {
+            operationId: operation.id,
+            status: "applied",
+            detail: `Created contact ${matchKey}=${matchValue} (${contactId}).${companyNote}`,
+            providerData: { id: contactId, created: true },
+        };
+    }
     async function createTask(operation) {
         const associationTypeId = TASK_ASSOCIATION_TYPE_IDS[operation.objectType];
         if (associationTypeId === undefined) {
@@ -602,6 +735,8 @@ export function createHubspotConnector(options) {
                     return await linkRecord(operation);
                 case "create_task":
                     return await createTask(operation);
+                case "create_record":
+                    return await createRecord(operation);
                 case "merge_records":
                     return await mergeRecords(operation);
                 case "archive_record":

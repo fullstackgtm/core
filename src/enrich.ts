@@ -2,8 +2,10 @@ import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { credentialsDir, ensureSecureHomeDir, writeSecureFile } from "./credentials.ts";
 import { HUBSPOT_DEFAULT_FIELD_MAPPINGS } from "./mappings.ts";
+import type { AcquireBudget } from "./acquireMeter.ts";
 import type {
   CanonicalGtmSnapshot,
+  CreateRecordPayload,
   GtmEvidence,
   PatchOperation,
   PatchPlan,
@@ -76,6 +78,42 @@ export type EnrichConfig = {
   match: Partial<Record<EnrichObjectType, EnrichMatchConfig>>;
   fields: Partial<Record<EnrichObjectType, EnrichFieldConfig[]>>;
   policy: EnrichPolicyConfig;
+  /** Net-new lead creation (`enrich acquire`). Optional; absent = acquire off. */
+  acquire?: AcquireConfig;
+};
+
+/** Maps a sourced record to the CRM properties a net-new record is created with. */
+export type AcquireCreateMap = {
+  /** CRM property name → source payload path (read via sourceValueAt). */
+  properties: Record<string, string>;
+  /** Source path whose value becomes the dedupe key (e.g. "email"). */
+  matchKey: string;
+  /** Optional source path to a company name; the connector resolves-or-creates it. */
+  associateCompanyFrom?: string;
+};
+
+/**
+ * Net-new discovery for an API acquire source. `provider` selects the adapter
+ * (explorium = prospect search; pipe0 = work-email waterfall). `filters` is the
+ * provider-native query; `resolveEmailsWith` chains a second provider to fill
+ * real emails (e.g. explorium discovers, pipe0 resolves the work email).
+ */
+export type AcquireDiscoveryConfig = {
+  provider: "explorium" | "pipe0";
+  filters?: Record<string, unknown>;
+  size?: number;
+  resolveEmailsWith?: "pipe0";
+};
+
+export type AcquireConfig = {
+  /** Windowed budget enforced by the acquire meter; absent = unmetered. */
+  budget?: AcquireBudget;
+  /** Estimated provider cost (USD) per created record, by source id. */
+  costPerRecord?: Record<string, number>;
+  /** How to build a net-new record from a sourced row, per object type. */
+  create: Partial<Record<EnrichObjectType, AcquireCreateMap>>;
+  /** Net-new discovery params for API sources, by source id. */
+  discovery?: Record<string, AcquireDiscoveryConfig>;
 };
 
 export const ENRICH_CONFIG_FILE_NAME = "enrich.config.json";
@@ -91,7 +129,7 @@ const MATCH_KEYS: Record<EnrichObjectType, string[]> = {
 };
 
 /** API source ids the MVP can pull from. */
-export const SUPPORTED_API_SOURCES = ["apollo"];
+export const SUPPORTED_API_SOURCES = ["apollo", "explorium", "pipe0"];
 
 /**
  * Canonical fields enrich may target, plus the HubSpot property spellings the
@@ -263,9 +301,78 @@ export function parseEnrichConfig(raw: string): EnrichConfig {
       }
     }
   }
-  if (!anyField) fail('"fields" maps nothing — add at least one field entry');
+  // `fields` drives append/refresh. An acquire-only config (net-new lead
+  // creation, no blank-filling) legitimately maps no fields — accept it when
+  // an acquire.create mapping is present.
+  const hasAcquireCreate = Boolean(
+    config.acquire?.create && Object.keys(config.acquire.create).length > 0,
+  );
+  if (!anyField && !hasAcquireCreate) {
+    fail('"fields" maps nothing — add at least one field entry (or an "acquire.create" mapping)');
+  }
 
   return config as EnrichConfig;
+}
+
+/**
+ * Built-in zero-config presets for well-known sources, so the common Mode-A
+ * loop — "feed a Clay export, get the dedup/routing verdict" — needs no
+ * hand-authored config. These are **match-only** (empty `fields`): the value is
+ * the matched / unmatched / ambiguous routing and collision detection, not field
+ * writes. Drop an `enrich.config.json` next to your run to map fields for actual
+ * field enrichment; an explicit config always wins over a preset. Constructed
+ * directly (not via `parseEnrichConfig`) so the match-only shape is allowed.
+ */
+export const BUILTIN_ENRICH_PRESETS: Record<string, EnrichConfig> = {
+  clay: {
+    sources: { clay: { kind: "ingest", format: "csv" } },
+    policy: { overwrite: "never", defaultStaleDays: 90 },
+    match: {
+      company: { keys: ["domain"], onAmbiguous: "skip" },
+      contact: { keys: ["email"], onAmbiguous: "skip" },
+    },
+    fields: {},
+  },
+};
+
+export function builtinEnrichPreset(source: string | undefined): EnrichConfig | undefined {
+  return source ? BUILTIN_ENRICH_PRESETS[source] : undefined;
+}
+
+/**
+ * Zero-config `enrich acquire` preset so every client gets targeted, deduped,
+ * metered lead-fill out of the box — no hand-authored enrich.config.json. The
+ * ICP (icp.json) supplies the targeting; this supplies sensible plumbing. The
+ * create mapping writes the prospect's LinkedIn URL into hs_linkedin_url, so
+ * each created contact strengthens future dedup. An explicit config always wins.
+ */
+export function builtinAcquirePreset(source: string | undefined): EnrichConfig | undefined {
+  const provider = source ?? "pipe0";
+  if (provider !== "pipe0" && provider !== "explorium") return undefined;
+  return {
+    sources: { [provider]: { kind: "api" } },
+    match: { contact: { keys: ["email"], onAmbiguous: "skip" } },
+    fields: {},
+    policy: { overwrite: "never" },
+    acquire: {
+      budget: { records: { perDay: 50, perMonth: 500 }, spend: { perDay: 25, perMonth: 250 } },
+      costPerRecord: { pipe0: 0.1, explorium: 0.4 },
+      discovery: { [provider]: { provider, size: 25 } },
+      create: {
+        contact: {
+          matchKey: "email",
+          properties: {
+            email: "email",
+            firstname: "firstName",
+            lastname: "lastName",
+            jobtitle: "jobTitle",
+            company: "companyName",
+            hs_linkedin_url: "linkedin",
+          },
+        },
+      },
+    },
+  };
 }
 
 export function loadEnrichConfig(path: string): EnrichConfig {
@@ -634,7 +741,12 @@ export function buildEnrichPlan(options: BuildEnrichPlanOptions): EnrichPlanResu
     const fields = (config.fields[record.objectType] ?? []).filter(
       (field) => field.from[source] !== undefined,
     );
-    if (!match || fields.length === 0) {
+    // Run the matcher whenever the object type has match keys; field mappings
+    // only gate whether we EMIT field ops. With no fields (a match-only config,
+    // e.g. the built-in Clay preset) this still reports the matched / ambiguous
+    // / unmatched routing verdict and records collisions — the Mode-A hygiene
+    // gate — it just proposes zero field writes.
+    if (!match) {
       counts.unmatched += 1;
       unmatchedSourceIds.push(record.id);
       continue;
@@ -796,6 +908,166 @@ export function buildEnrichPlan(options: BuildEnrichPlanOptions): EnrichPlanResu
   };
 
   return { plan, counts, stamps, ambiguities, unmatchedSourceIds };
+}
+
+// ---------------------------------------------------------------------------
+// Acquire: turn sourced-but-unmatched prospects into net-new lead creates.
+
+export type AcquireCounts = {
+  fetched: number;
+  matched: number;
+  ambiguous: number;
+  unmatched: number;
+  /** create_record ops emitted. */
+  created: number;
+  /** unmatched rows that would have been created but for the meter ceiling. */
+  withheldByMeter: number;
+};
+
+export type AcquirePlanResult = {
+  plan: PatchPlan;
+  counts: AcquireCounts;
+  estCostUsd: number;
+};
+
+export type BuildAcquirePlanOptions = {
+  config: EnrichConfig;
+  source: string;
+  snapshot: CanonicalGtmSnapshot;
+  records: EnrichSourceRecord[];
+  runLabel: string;
+  /** Meter ceiling: max create ops to emit. null/undefined = unlimited. */
+  maxRecords?: number | null;
+  now?: () => Date;
+};
+
+/**
+ * Match each sourced record against the snapshot and route it: matched =
+ * already in the CRM (skip), ambiguous = a possible duplicate exists (skip —
+ * resolve-first never creates over ambiguity), unmatched = a net-new lead.
+ * Unmatched rows with a dedupe key and at least one mapped property become
+ * `create_record` operations, capped at `maxRecords` (the meter's headroom).
+ * Always a dry-run plan; nothing is written until apply.
+ */
+export function buildAcquirePlan(options: BuildAcquirePlanOptions): AcquirePlanResult {
+  const { config, source, snapshot, records, runLabel } = options;
+  const nowIso = (options.now ?? (() => new Date()))().toISOString();
+  const sourceConfig = config.sources[source];
+  if (!sourceConfig) throw new Error(`enrich: source "${source}" is not declared in the config`);
+  const acquire = config.acquire;
+  if (!acquire) throw new Error('enrich acquire: config has no "acquire" section');
+
+  const cap = options.maxRecords ?? null;
+  const costPerRecord = acquire.costPerRecord?.[source] ?? 0;
+
+  const operations: PatchOperation[] = [];
+  const evidence: GtmEvidence[] = [];
+  const counts: AcquireCounts = {
+    fetched: records.length,
+    matched: 0,
+    ambiguous: 0,
+    unmatched: 0,
+    created: 0,
+    withheldByMeter: 0,
+  };
+  let estCostUsd = 0;
+
+  for (const record of records) {
+    const createMap = acquire.create[record.objectType];
+    const match = config.match[record.objectType];
+    // No create mapping or no match config for this type — can neither create
+    // nor dedupe it safely; count as unmatched and skip.
+    if (!createMap || !match) {
+      counts.unmatched += 1;
+      continue;
+    }
+    const outcome = matchSourceRecord(snapshot, record.objectType, match.keys, record.keys);
+    if (outcome.status === "matched") {
+      counts.matched += 1;
+      continue;
+    }
+    if (outcome.status === "ambiguous") {
+      // Resolve-first: a possible duplicate exists — never create over it.
+      counts.ambiguous += 1;
+      continue;
+    }
+
+    counts.unmatched += 1;
+    const matchValue = String(record.keys[createMap.matchKey] ?? "").trim();
+    if (!matchValue) continue; // no dedupe key → refuse to create (can't resolve-first)
+
+    if (cap !== null && counts.created >= cap) {
+      counts.withheldByMeter += 1;
+      continue;
+    }
+
+    const properties: Record<string, string> = {};
+    for (const [crmProp, path] of Object.entries(createMap.properties)) {
+      const value = sourceValueAt(record.payload, path);
+      if (!isEmptyValue(value)) properties[crmProp] = String(value);
+    }
+    if (Object.keys(properties).length === 0) continue; // nothing to write
+
+    let associateCompanyName: string | undefined;
+    if (createMap.associateCompanyFrom) {
+      const companyValue = sourceValueAt(record.payload, createMap.associateCompanyFrom);
+      if (!isEmptyValue(companyValue)) associateCompanyName = String(companyValue);
+    }
+
+    const recordEvidence = evidenceFor(
+      source,
+      sourceConfig.kind,
+      sourceConfig.format,
+      record,
+      undefined,
+      nowIso,
+    );
+    evidence.push(recordEvidence);
+
+    const payload: CreateRecordPayload = {
+      properties,
+      matchKey: createMap.matchKey,
+      matchValue,
+      source,
+      estCostUsd: costPerRecord,
+      associateCompanyName,
+    };
+    operations.push({
+      id: `op_acq_${fnv1a(`${source}:${record.objectType}:${matchValue}`)}`,
+      objectType: canonicalObjectType(record.objectType),
+      objectId: `create:${matchValue}`,
+      operation: "create_record",
+      beforeValue: null,
+      afterValue: payload,
+      reason:
+        `${source} sourced net-new ${record.objectType} "${describeSourceRecord(record)}" ` +
+        `(${createMap.matchKey}=${matchValue}); no CRM match — create as a lead.`,
+      sourceRuleOrPolicy: `acquire:${source}`,
+      riskLevel: "medium",
+      approvalRequired: true,
+      rollback: "Archive the created record (it was net-new).",
+      evidenceIds: [recordEvidence.id],
+    });
+    counts.created += 1;
+    estCostUsd += costPerRecord;
+  }
+
+  const plan: PatchPlan = {
+    id: `patch_plan_acq_${fnv1a(`${source}:${runLabel}:${nowIso}`)}`,
+    title: `Acquire leads — ${source}`,
+    createdAt: nowIso,
+    status: operations.length > 0 ? "needs_approval" : "draft",
+    dryRun: true,
+    summary:
+      `${counts.created} net-new lead(s) proposed from ${source} (${counts.fetched} sourced: ` +
+      `${counts.matched} already in CRM, ${counts.ambiguous} ambiguous skipped, ${counts.unmatched} unmatched` +
+      `${counts.withheldByMeter > 0 ? `, ${counts.withheldByMeter} withheld by meter` : ""}). ` +
+      `Est. cost $${estCostUsd.toFixed(2)}.`,
+    findings: [],
+    evidence,
+    operations,
+  };
+  return { plan, counts, estCostUsd };
 }
 
 // ---------------------------------------------------------------------------

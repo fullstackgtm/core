@@ -169,6 +169,31 @@ fullstackgtm enrich status --runs                           # last run per sourc
 
 Matching is deterministic: ordered keys, unique hit wins, zero hits falls through to the next key, and multiple hits are never guessed away — they skip (recorded with candidate ids) or flow into the existing `suggest` → `plans approve` chain as `requires_human_record_selection` placeholders. The MVP conflict policy is `never`: enrich only fills blank fields, and `refresh` only re-touches fields its own run-store ledger proves it stamped (per-record/per-field `enrichedAt`, profile-scoped, never written into your portal as custom properties). The `system-only` and `always` rungs of the ladder are phase 2 and are refused explicitly, not silently accepted. Recurring execution belongs to the scheduler — enrich owns no cron logic.
 
+## Acquire: net-new leads, ICP-targeted and dupe-safe by default
+
+`enrich append/refresh` fill blanks on records you already have. **`enrich acquire`** creates *net-new* ones — and routes them through the same dry-run → approve → apply gate, so prospecting can never silently write to your CRM. It discovers people, resolves their work email, scores them against your ICP, dedupes against your CRM, and proposes governed `create_record` operations.
+
+```bash
+fullstackgtm icp interview                                  # emit the ICP question spec; an agent asks it (AskUserQuestion)
+fullstackgtm icp set answers.json --name "RevOps ICP"       # write icp.json (firmographics + persona + fit threshold)
+echo "$PIPE0_API_KEY" | fullstackgtm login pipe0            # discovery + work-email provider, stored 0600
+
+fullstackgtm enrich acquire --provider hubspot              # zero-config: ICP → discover → score → dedup → dry-run diff
+fullstackgtm enrich acquire --provider hubspot --max 25 --save   # cap the batch, persist the needs_approval plan
+fullstackgtm plans approve <id> --operations all
+fullstackgtm apply --plan-id <id> --provider hubspot        # the only step that creates contacts
+```
+
+The **ICP** (`icp.json`) is the single targeting artifact: it generates each provider's discovery filters (Explorium, pipe0/Crustdata) *and* fit-scores every discovered prospect — only above-threshold leads are proposed. Develop one by interview; the CLI can't run `AskUserQuestion` itself, so `icp interview` emits the spec and an agent (Claude Code / Codex) drives it.
+
+**You don't pay to re-discover dupes.** Before the (credit-spending) email step, acquire drops prospects already in your CRM and any seen in a prior run:
+
+- **Pre-email CRM dedup** matches the live snapshot. The LinkedIn URL (`hs_linkedin_url`, read into the snapshot by default — safe everywhere, HubSpot ignores unknown properties) is the strong key; name+domain is the fallback. Created contacts get their LinkedIn URL written back, so coverage — and dedup precision — grows over time. If your CRM has no LinkedIn URLs, acquire says so and recommends populating it.
+- **A cross-run seen cache** remembers everyone already resolved, so re-running the same ICP costs nothing for known people.
+- Two more checkpoints stay precise: the email-level match at plan build, and **resolve-first at apply** (re-checks the live CRM, never double-creates, never charges the meter).
+
+Every run is **metered**: a per-profile budget caps both record count and provider spend (per-day + per-month, whichever binds first), charged only for creates that actually land. `enrich acquire` runs with just an `icp.json` and a `login` — sensible defaults for budget, provider, and create-mapping ship in the box.
+
 ## Schedules: declare a cadence once, keep the governance contract under automation
 
 Everything the CLI produces is accurate the moment it runs and silently stale afterward. The **schedule layer** is the horizontal fix — any read/plan-side command on a cron cadence, one component, every verb (no feature owns its own cron logic):

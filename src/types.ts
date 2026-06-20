@@ -43,10 +43,32 @@ export type PatchOperationType =
   | "link_record"
   | "archive_record"
   | "create_task"
+  // Create a NET-NEW record (a sourced lead). beforeValue is null (nothing
+  // existed); afterValue is a CreateRecordPayload. The connector re-resolves
+  // on matchKey at apply time (search is the source of truth; the plan-time
+  // snapshot can be stale) and creates only on a confirmed miss, so apply is
+  // resolve-first and never double-creates a record a concurrent writer added.
+  // Emitted only by `enrich acquire`, and metered against the acquire budget.
+  | "create_record"
   // Merge a duplicate group into a survivor. beforeValue is the group's
   // record ids; afterValue is the survivor id (requires_human_survivor_selection
   // until a human picks). IRREVERSIBLE on every provider that supports it.
   | "merge_records";
+
+/**
+ * The afterValue of a `create_record` operation. The connector re-resolves on
+ * `matchKey`/`matchValue` at apply time and creates only on a confirmed miss.
+ * `estCostUsd` is the acquire meter's per-record charge, recorded against the
+ * budget on a successful create.
+ */
+export type CreateRecordPayload = {
+  properties: Record<string, string>;
+  matchKey: string;
+  matchValue: string;
+  source: string;
+  estCostUsd?: number;
+  associateCompanyName?: string;
+};
 
 export type AuditFindingSeverity = "info" | "warning" | "critical";
 
@@ -186,6 +208,8 @@ export type CanonicalContact = {
   email?: string;
   phone?: string;
   title?: string;
+  /** LinkedIn profile URL — the strongest cross-system identity key for dedup. */
+  linkedin?: string;
   ownerId?: string;
   lastActivityAt?: string;
   lastSyncAt?: string;

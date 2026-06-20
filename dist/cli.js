@@ -12,6 +12,7 @@ import { pollSalesforceDeviceLogin, startSalesforceDeviceLogin, validateSalesfor
 import { activeProfile, credentialsPath, DEFAULT_PROFILE, deleteCredential, getCredential, listProfiles, resolveHubspotConnection, resolveSalesforceConnection, setActiveProfile, storeCredential, } from "./credentials.js";
 import { generateDemoSnapshot } from "./demo.js";
 import { formatPatchPlanRun, patchPlanToMarkdown } from "./format.js";
+import { appendHealthEntry, computeHealth, healthToMarkdown, readHealthTimeline, saveWorkspaceSnapshot, summarizeHealth, activeWorkspaceProfile, } from "./health.js";
 import { mergeSnapshots } from "./merge.js";
 import { verifyApprovalDigests } from "./integrity.js";
 import { buildAuditLog, verifyAuditLog } from "./auditLog.js";
@@ -29,7 +30,11 @@ import { suggestMarketConfig } from "./marketTaxonomy.js";
 import { buildWorksheet, classifyMarket } from "./marketClassify.js";
 import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
 import { DEFAULT_RUBRIC, classifyCallLlm, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
-import { buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, enrichRunId, inferIngestObjectType, latestStamps, loadEnrichConfig, parseCsv, resolveCrmField, selectStaleWork, stagedSourceRecords, staleDaysFor, } from "./enrich.js";
+import { buildAcquirePlan, buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, builtinAcquirePreset, builtinEnrichPreset, enrichRunId, inferIngestObjectType, latestStamps, loadEnrichConfig, parseCsv, resolveCrmField, selectStaleWork, stagedSourceRecords, staleDaysFor, } from "./enrich.js";
+import { loadMeter, recordConsumption, remaining, } from "./acquireMeter.js";
+import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspects, partitionFreshProspects, pipe0ResolveWorkEmails, prospectIdentityKeys, } from "./connectors/prospectSources.js";
+import { loadSeen, recordSeen } from "./acquireSeen.js";
+import { fitThreshold, icpFromAnswers, icpToCrustdataFilters, icpToExploriumFilters, parseIcp, scoreProspectAgainstIcp, INTERVIEW_SPEC, } from "./icp.js";
 import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, } from "./enrichApollo.js";
 import { computeMissedFirings, createFileScheduleRunStore, createFileScheduleStore, nextCronFiring, parseCron, renderManagedBlock, replaceManagedBlock, assertSingleLineLabel, hasControlChar, scheduleId, systemCrontabIo, tokenizeCommand, validateSchedulableArgv, } from "./schedule.js";
 import { resolveRecord } from "./resolve.js";
@@ -49,7 +54,7 @@ Usage:
   fullstackgtm login salesforce --instance-url <url> [--no-validate]
   fullstackgtm login stripe [--no-validate]
   fullstackgtm login anthropic | openai        store an LLM API key for call parse/score
-  fullstackgtm login apollo                    store an Apollo API key for enrich pulls\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|broker>
+  fullstackgtm login apollo                    store an Apollo API key for enrich pulls\n  fullstackgtm login pipe0 | explorium         store a discovery-provider key for enrich acquire\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|pipe0|explorium|broker>
 
   Secrets (tokens, client secrets) are NEVER passed as flags — they leak via
   the process list and shell history. Pipe them on stdin or enter them at the
@@ -232,6 +237,267 @@ Safety:
   Audits are read-only. Apply writes only operations you explicitly approve,
   and never writes requires_human_* placeholders without a --value override.`;
 }
+const HELP = {
+    // Setup & health
+    login: {
+        summary: "connect a provider or LLM key (secrets via stdin/env, never argv)",
+        phase: "Setup",
+        synopsis: [
+            "fullstackgtm login --via <hosted url>            pair with a team deployment",
+            "fullstackgtm login hubspot | salesforce | stripe",
+            "fullstackgtm login anthropic | openai | apollo",
+        ],
+        detail: "Secrets are NEVER passed as flags (they leak via the process list and shell history) — pipe on stdin or enter at the prompt: `echo \"$TOKEN\" | fullstackgtm login hubspot`.",
+        seeAlso: ["doctor", "logout", "profiles"],
+    },
+    logout: {
+        summary: "remove stored credentials for a provider",
+        phase: "Setup",
+        synopsis: ["fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|pipe0|explorium|broker>"],
+        seeAlso: ["login", "doctor"],
+    },
+    doctor: {
+        summary: "check install, credentials, and the next step",
+        phase: "Setup",
+        synopsis: ["fullstackgtm doctor [--json]"],
+        detail: "Verifies Node version, the credential store, MCP peers, and prints what to run next.",
+        seeAlso: ["login", "audit"],
+    },
+    profiles: {
+        summary: "list credential profiles (one per client org)",
+        phase: "Setup",
+        synopsis: ["fullstackgtm profiles [--json]"],
+        detail: "`--profile <name>` (or FULLSTACKGTM_PROFILE) scopes credentials AND stored plans per org, so a plan proposed against one CRM can't be applied through another's credentials.",
+        seeAlso: ["login", "plans", "health"],
+    },
+    health: {
+        summary: "CRM health score + trend for the active profile (read-only)",
+        phase: "Detect",
+        synopsis: ["fullstackgtm health [--json]"],
+        detail: "The engagement-workspace rollup. Each `audit --save` stamps a deterministic 0–100 hygiene score (100 / (1 + severity-weighted findings per record)) onto the profile's timeline; `health` reports the current score, the change since the last audit, and per-rule deltas — turning episodic audits into a continuous record. Scope per client with `--profile <name>`.",
+        seeAlso: ["audit", "profiles", "report"],
+    },
+    // Detect — read-only
+    snapshot: {
+        summary: "pull a canonical GTM snapshot (read-only)",
+        phase: "Detect",
+        synopsis: ["fullstackgtm snapshot [source options] [--since <iso>] [--out <path> | --archive <dir>]"],
+        detail: "Materializes the provider's records as canonical JSON — the input every audit and write verb reads.",
+        options: [
+            ["--provider <name>", "hubspot | salesforce | stripe (read-only)"],
+            ["--demo", "realistic generated CRM with injected hygiene issues"],
+            ["--out <path>", "write the snapshot JSON to a file"],
+        ],
+        seeAlso: ["audit", "diff"],
+    },
+    audit: {
+        summary: "read-only hygiene audit → reviewable dry-run patch plan",
+        phase: "Detect",
+        synopsis: ["fullstackgtm audit [source options] [audit options] [--save]"],
+        detail: "The Detect layer of the loop. Runs deterministic rules over a snapshot and proposes a typed patch plan — nothing is written. Prints a summary (rule table + counts) by default; `--full` shows every operation. `--save` persists the plan for the suggest → approve → apply spine. For a client-ready writeup use `report`; for machine output add `--json`.",
+        options: [
+            ["--provider <name>", "live snapshot: hubspot | salesforce | stripe"],
+            ["--demo", "try it with zero credentials on a messy generated CRM"],
+            ["--full", "show every operation, not just the rule summary"],
+            ["--rules <ids>", "comma-separated rule ids (default: all; see `rules`)"],
+            ["--fail-on <sev>", "exit 2 if any finding ≥ info|warning|critical"],
+            ["--save", "persist the dry-run plan for approve → apply"],
+            ["--json / --out <p>", "machine-readable plan to stdout / file"],
+        ],
+        seeAlso: ["report", "suggest", "plans", "apply", "diff"],
+    },
+    report: {
+        summary: "render an audit as a client-ready deliverable (md/html)",
+        phase: "Detect",
+        synopsis: ["fullstackgtm report [source options] [audit options] [report options]"],
+        detail: "The human-readable counterpart to `audit` — a clean summary instead of the full per-operation dump.",
+        options: [
+            ["--plan <path>", "render an existing plan JSON instead of re-auditing"],
+            ["--client <name>", "organization name in the heading/summary"],
+            ["--format <fmt>", "markdown (default) or self-contained html"],
+            ["--out <path>", "write to a file (html inferred from .html)"],
+        ],
+        seeAlso: ["audit"],
+    },
+    diff: {
+        summary: "compare two snapshots/plans; gate on new findings",
+        phase: "Detect",
+        synopsis: ["fullstackgtm diff --before <a.json> --after <b.json> [--json] [--fail-on-new-findings]"],
+        detail: "The regression primitive. Exit 2 when a (rule, record) pair fires that didn't before — wire it into CI to catch CRM rot.",
+        seeAlso: ["audit", "snapshot", "merge"],
+    },
+    rules: {
+        summary: "list the audit rule registry",
+        phase: "Detect",
+        synopsis: ["fullstackgtm rules [--json]"],
+        seeAlso: ["audit"],
+    },
+    // Prevent — gate writes before they happen
+    resolve: {
+        summary: "the create gate: exit 0 = safe to create, 2 = match exists",
+        phase: "Prevent",
+        synopsis: ["fullstackgtm resolve <account|contact|deal> [--name N] [--domain D] [--email E] [source options] [--json]"],
+        detail: "Prevention, not cleanup. Call before ANY record creation — a sync job, webhook, agent, or script. Returns exists/ambiguous/safe_to_create with matches and reasons; exit 2 = do not create.",
+        seeAlso: ["dedupe", "audit"],
+    },
+    // Remediate — governed writes (all produce plans; nothing writes outside approve → apply)
+    fix: {
+        summary: "one-shot composite: audit one rule → suggest → approve → apply",
+        phase: "Remediate",
+        synopsis: ["fullstackgtm fix --rule <ruleId> --provider <name> [--min-confidence high|low] [--include-creates] [--yes]"],
+        detail: "The whole governed loop for a single rule in one command. Without `--yes` it stops after approval and prints the apply command; with `--yes` it applies suggestion-backed operations meeting the confidence bar and prints a stage-by-stage summary.",
+        seeAlso: ["audit", "suggest", "plans", "apply"],
+    },
+    dedupe: {
+        summary: "merge duplicate groups by identity key (irreversible on apply)",
+        phase: "Remediate",
+        synopsis: ["fullstackgtm dedupe <account|contact|deal> --key <domain|email|name> [--keep richest|oldest] [--save] [--json]"],
+        detail: "Builds a dry-run plan of one merge_records op per duplicate group with a deterministic survivor (richest = most populated fields; oldest = lowest id). Approve and apply like any plan; merges are IRREVERSIBLE on apply.",
+        seeAlso: ["resolve", "plans", "apply"],
+    },
+    reassign: {
+        summary: "ownership handoff: one plan per object type",
+        phase: "Remediate",
+        synopsis: ["fullstackgtm reassign --from <ownerId> --to <ownerId> [--objects account,contact,deal] [--where <expr> …] [--save] [--json]"],
+        detail: "Extra `--where` scoping is account-lifted for deals/contacts. `--except-deal-stage <stage>` excludes that stage and any record whose account has an open deal in it, re-verified per record at apply.",
+        seeAlso: ["bulk-update", "plans", "apply"],
+    },
+    enrich: {
+        summary: "governed third-party enrichment (Apollo/Clay), fill-blanks-only",
+        phase: "Remediate",
+        synopsis: ["fullstackgtm enrich append|refresh|ingest|status …  (run `enrich --help` for full options)"],
+        detail: "Pull (Apollo) or stage (Clay) data, match it to CRM records deterministically, and emit a fill-blanks-only patch plan through the normal dry-run → approve → apply gate. `refresh` re-checks stale stamped fields.",
+        seeAlso: ["plans", "apply", "schedule"],
+    },
+    // Calls → evidence
+    call: {
+        summary: "transcripts → evidence, rubric scores, deal links, governed writes",
+        phase: "Remediate",
+        synopsis: ["fullstackgtm call parse|classify|score|link|plan …  (run `call --help` for full options)"],
+        detail: "`parse` normalizes any transcript into canonical segments + evidence (LLM by default, bring your own key; `--deterministic` for the free baseline). `classify` picks the call type, `score` rates it against the type's rubric, `link` finds the deal, `plan` proposes governed next-step writes.",
+        seeAlso: ["plans", "apply"],
+    },
+    // Govern — the plan/apply spine
+    suggest: {
+        summary: "derive values for requires_human_* placeholders (evidence-backed)",
+        phase: "Govern",
+        synopsis: ["fullstackgtm suggest --plan-id <id> | --plan <path> [source options] [--json] [--out <path>]"],
+        detail: "Read-only. Proposes concrete values with confidence + reasons from snapshot evidence; feed the output to `plans approve --values-from`. Never guesses — low/create/none-confidence entries are left to the human.",
+        seeAlso: ["audit", "plans", "apply"],
+    },
+    plans: {
+        summary: "plan lifecycle: list / show / approve / reject saved plans",
+        phase: "Govern",
+        synopsis: [
+            "fullstackgtm plans list [--status <s>] | show <id> | reject <id>",
+            "fullstackgtm plans approve <id> --operations <ids|all> [--value <opId>=<v>]",
+            "fullstackgtm plans approve <id> --values-from <suggestions.json> [--min-confidence high|low]",
+        ],
+        detail: "Approval is explicit and per-operation; placeholders need a concrete --value or a suggestion to be approvable.",
+        seeAlso: ["audit", "suggest", "apply"],
+    },
+    apply: {
+        summary: "write ONLY explicitly approved operations to a provider",
+        phase: "Govern / Verify",
+        synopsis: [
+            "fullstackgtm apply --plan-id <id> --provider <name>",
+            "fullstackgtm apply --plan <path> --provider <name> --approve <ids|all> [--value <opId>=<v>]",
+        ],
+        detail: "The only verb that mutates a CRM. Writes only operations approved via `plans approve` or `--approve`, with compare-and-set and readback. Never writes requires_human_* placeholders without a --value override.",
+        seeAlso: ["plans", "suggest", "audit-log"],
+    },
+    "audit-log": {
+        summary: "tamper-evident record of apply runs (export / verify)",
+        phase: "Verify",
+        synopsis: ["fullstackgtm audit-log export [--out <path>] | verify --in <path>"],
+        detail: "The Verify/Attribute layer — a signed, append-only record of every applied write.",
+        seeAlso: ["apply"],
+    },
+    merge: {
+        summary: "merge multiple plan/snapshot JSONs into one",
+        phase: "Govern",
+        synopsis: ["fullstackgtm merge --input <a.json> --input <b.json> [...] --out <merged.json> [--json]"],
+        seeAlso: ["diff", "audit"],
+    },
+    // Continuous
+    schedule: {
+        summary: "declare a cadence for read/plan-side commands (never auto-approves)",
+        phase: "Continuous",
+        synopsis: ["fullstackgtm schedule add|list|remove|enable|disable|run|install|status …  (run `schedule --help` for full options)"],
+        detail: "Makes the loop continuous instead of episodic. Read/plan-side allowlist only (audit, snapshot, enrich, market, suggest, report, doctor). Scheduling NEVER auto-approves: apply is schedulable only as `apply --plan-id <id>`, re-checked approved at run time.",
+        seeAlso: ["audit", "enrich", "apply"],
+    },
+    // Market intelligence
+    market: {
+        summary: "live competitive category map (capture → classify → drift → report)",
+        phase: "Intelligence",
+        synopsis: ["fullstackgtm market init|capture|classify|worksheet|observe|fronts|axes|overlay|scale|report|refresh …  (run `market --help` for full options)"],
+        detail: "Capture vendor pages (content-addressed), classify intensity per claim (LLM bring-your-own-key, or fill the worksheet with any agent), then compute deterministic front states and drift. Every quoted span is verified verbatim against the stored capture before it's accepted.",
+        seeAlso: [],
+    },
+};
+// Verbs that print their own richer multi-subcommand help; runCli routes their
+// `--help` to themselves, so commandHelp() only renders these via `help <verb>`.
+const BESPOKE_HELP = ["call", "market", "enrich", "bulk-update", "schedule"];
+// Lifecycle-grouped front door. One line per verb, organized by the
+// Prevent→Detect→Remediate→Verify loop so a new user sees ~6 jobs, not 22 verbs.
+function shortUsage() {
+    const groups = [
+        ["Setup & health", ["login", "logout", "doctor", "profiles", "health"]],
+        ["Detect — read-only", ["audit", "report", "snapshot", "diff", "rules"]],
+        ["Prevent — gate writes", ["resolve"]],
+        ["Remediate — governed writes", ["fix", "bulk-update", "dedupe", "reassign", "enrich"]],
+        ["Calls → evidence", ["call"]],
+        ["Govern — the plan/apply spine", ["suggest", "plans", "apply", "audit-log", "merge"]],
+        ["Market intelligence", ["market"]],
+        ["Schedule — make it continuous", ["schedule"]],
+    ];
+    const pad = Math.max(...Object.keys(HELP).map((k) => k.length)) + 2;
+    const lines = [
+        "FullStackGTM — plan/apply for your GTM stack.",
+        "Audit CRM data, propose reviewable patch plans, apply only what you approve.",
+        "",
+        "Usage: fullstackgtm <command> [options]",
+        "",
+    ];
+    for (const [title, cmds] of groups) {
+        lines.push(`${title}:`);
+        for (const cmd of cmds) {
+            const entry = HELP[cmd];
+            if (!entry)
+                continue;
+            lines.push(`  ${cmd.padEnd(pad)}${entry.summary}`);
+        }
+        lines.push("");
+    }
+    lines.push("Zoom in:  fullstackgtm <command> --help        focused help for one command", "Full ref: fullstackgtm help --full             every flag and option", "Try it:   fullstackgtm audit --demo            zero-credential demo CRM", "", "Safety: audits are read-only; apply writes only operations you approve.");
+    return lines.join("\n");
+}
+// Focused help for a single command. Falls back to shortUsage() for anything
+// unknown so `--help` never dead-ends on the full wall.
+function commandHelp(command) {
+    const entry = HELP[command];
+    if (!entry)
+        return shortUsage();
+    const lines = [`fullstackgtm ${command} — ${entry.summary}`, "", "Usage:"];
+    for (const s of entry.synopsis)
+        lines.push(`  ${s}`);
+    if (entry.detail)
+        lines.push("", entry.detail);
+    if (entry.options?.length) {
+        lines.push("", "Options:");
+        const pad = Math.max(...entry.options.map(([f]) => f.length)) + 2;
+        for (const [flag, desc] of entry.options)
+            lines.push(`  ${flag.padEnd(pad)}${desc}`);
+    }
+    lines.push("", `Lifecycle phase: ${entry.phase}`);
+    if (entry.seeAlso?.length)
+        lines.push(`See also: ${entry.seeAlso.join(", ")}`);
+    if (BESPOKE_HELP.includes(command))
+        lines.push("", `Run \`fullstackgtm ${command} --help\` for the full subcommand reference.`);
+    lines.push("", "Full reference: fullstackgtm help --full");
+    return lines.join("\n");
+}
 function option(args, name) {
     const index = args.indexOf(name);
     if (index === -1)
@@ -322,9 +588,14 @@ async function readSnapshot(args) {
             today: option(args, "--today") ?? undefined,
         });
     }
-    const input = option(args, "--input");
-    if (!input || args.includes("--sample"))
+    if (args.includes("--sample"))
         return sampleSnapshot;
+    const input = option(args, "--input");
+    if (!input) {
+        throw new Error("No data source. Pass one of: --provider <hubspot|salesforce|stripe> (live, read-only), " +
+            "--input <snapshot.json> (a saved snapshot), --demo (a generated messy CRM), or " +
+            "--sample (the tiny built-in fixture). Refusing to silently audit sample data.");
+    }
     const path = resolve(process.cwd(), input);
     return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -396,6 +667,49 @@ async function snapshotCommand(args) {
         console.log(serialized.trimEnd());
     }
 }
+// #2 (dx-punch-list): every read verb points forward. `audit` is the keystone —
+// `audit --demo` is the most-run first command and used to dead-end on a blank
+// line. Context-aware guidance mirrors doctor's "Next step" and fix's chaining,
+// stepping the user along Detect → Govern → apply. Printed to stderr so stdout
+// stays clean for pipes/--out; suppressed under --json (machine/agent context).
+function auditNextStep(args, plan) {
+    const provider = option(args, "--provider");
+    const usingLiveData = Boolean(provider) || Boolean(option(args, "--input"));
+    const saved = args.includes("--save");
+    const count = plan.findings.length;
+    if (count === 0) {
+        return [
+            "✓ No findings — this snapshot is clean. Nothing to apply.",
+            "  Keep it clean: gate new records with `fullstackgtm resolve`,",
+            "  and schedule a recurring check with `fullstackgtm schedule add ...`.",
+        ].join("\n");
+    }
+    const head = `${count} finding${count === 1 ? "" : "s"} — a dry-run plan. Nothing was written.`;
+    if (!usingLiveData) {
+        return [
+            head,
+            "Next:",
+            "  • Client-ready writeup:  fullstackgtm report --demo",
+            "  • Run on your CRM:       fullstackgtm login hubspot  →  fullstackgtm audit --provider hubspot --save",
+        ].join("\n");
+    }
+    if (!saved) {
+        return [
+            head,
+            "Next: persist it with --save, then suggest → approve → apply:",
+            `  fullstackgtm audit --provider ${provider ?? "<name>"} --save`,
+        ].join("\n");
+    }
+    // --save already confirmed the plan id above; chain the governed spine.
+    const providerFlag = provider ? ` --provider ${provider}` : "";
+    return [
+        head,
+        "Next: derive values, approve the safe ones, apply:",
+        `  fullstackgtm suggest --plan-id ${plan.id}${providerFlag} --out suggestions.json`,
+        `  fullstackgtm plans approve ${plan.id} --values-from suggestions.json`,
+        `  fullstackgtm apply --plan-id ${plan.id}${providerFlag}`,
+    ].join("\n");
+}
 async function audit(args) {
     const threshold = failOnThreshold(args);
     const loaded = loadConfig(option(args, "--config") ?? undefined);
@@ -415,18 +729,50 @@ async function audit(args) {
     }
     if (args.includes("--save")) {
         await createFilePlanStore().save(plan);
-        console.error(`Saved plan ${plan.id}. Review with \`fullstackgtm plans show ${plan.id}\`, approve with \`fullstackgtm plans approve ${plan.id} --operations <ids|all>\`.`);
+        // Engagement workspace: stamp the per-profile health timeline + snapshot so
+        // the org accrues a continuous record from the verb people already run.
+        // Honor --today (audit is deterministic under it); fall back to wall-clock.
+        const health = computeHealth(plan, snapshot, today ?? new Date().toISOString());
+        appendHealthEntry(health);
+        saveWorkspaceSnapshot(plan.id, snapshot);
+        console.error(`Saved plan ${plan.id}. Health ${health.score}/100 recorded (\`fullstackgtm health\`). ` +
+            `Review with \`fullstackgtm plans show ${plan.id}\`, approve with \`fullstackgtm plans approve ${plan.id} --operations <ids|all>\`.`);
     }
     if (args.includes("--json")) {
         console.log(JSON.stringify(plan, null, 2));
     }
     else {
-        console.log(patchPlanToMarkdown(plan));
+        // Default to the summary view (rule table + counts); the full per-operation
+        // dump is opt-in via --full or, for a deliverable, `report`. (dx-punch-list #3)
+        console.log(patchPlanToMarkdown(plan, { summary: !args.includes("--full") }));
+        console.error(`\n${auditNextStep(args, plan)}`);
     }
     if (threshold &&
         plan.findings.some((finding) => SEVERITY_RANK[finding.severity] >= SEVERITY_RANK[threshold])) {
         process.exitCode = 2;
     }
+}
+/**
+ * Roll up the active profile's health timeline (accrued by `audit --save`):
+ * current deterministic score, change since the last audit, and per-rule
+ * deltas. Read-only — it only reads `health.jsonl`, never re-audits.
+ */
+function healthCommand(args) {
+    const profile = activeWorkspaceProfile();
+    const rollup = summarizeHealth(readHealthTimeline(), profile);
+    if (!rollup) {
+        if (args.includes("--json")) {
+            console.log(JSON.stringify({ profile, auditCount: 0 }, null, 2));
+        }
+        else {
+            console.log(`No audits recorded yet for profile "${profile}".\n` +
+                "Start the timeline: `fullstackgtm audit --provider <name> --save`" +
+                (profile === "default" ? "" : ` --profile ${profile}`) +
+                ".");
+        }
+        return;
+    }
+    console.log(args.includes("--json") ? JSON.stringify(rollup, null, 2) : healthToMarkdown(rollup));
 }
 /**
  * Render an audit as a client-facing deliverable. Same sources and audit
@@ -1253,7 +1599,16 @@ enrich append  [--source apollo] [--objects companies,contacts] [--save] [--conf
 enrich refresh [--source apollo] [--stale-days <n>] [--save] [--config <path>]
                [source options] [--run-label <label>] [--json]
 enrich ingest  <file.csv|payload.json> --source clay [--run-label <label>] [--objects companies|contacts] [--config <path>]
+enrich acquire [--source <id>] [--max <n>] [--save] [--config <path>] [--json]
 enrich status  [--runs] [--source <id>] [--config <path>] [--json]
+
+acquire creates NET-NEW leads from a staged prospect list (ingest first):
+it dedupes each sourced row against the CRM, skips matches and ambiguities
+(resolve-first never creates over a possible duplicate), and proposes a
+\`create_record\` op per confirmed net-new row — capped by the acquire meter's
+remaining budget (records + spend, per day and per month; whichever is hit
+first). Approval-gated like every write: \`--save\` → plans approve → apply.
+The meter is charged only when a create actually lands at apply.
 
 append pulls from an api source (Apollo — BYO key via \`login apollo\` or
 APOLLO_API_KEY) or reads data staged by \`enrich ingest\` (Clay CSV exports,
@@ -1278,8 +1633,8 @@ re-touches fields its own ledger proves it stamped. system-only and always
 are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
         return;
     }
-    if (!["append", "refresh", "ingest", "status"].includes(subcommand)) {
-        throw new Error(`Unknown enrich subcommand: ${subcommand} (try: append, refresh, ingest, status)`);
+    if (!["append", "refresh", "ingest", "status", "acquire"].includes(subcommand)) {
+        throw new Error(`Unknown enrich subcommand: ${subcommand} (try: append, refresh, ingest, status, acquire)`);
     }
     const configPath = () => resolve(process.cwd(), option(rest, "--config") ?? ENRICH_CONFIG_FILE_NAME);
     const store = createFileEnrichRunStore();
@@ -1287,12 +1642,137 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
         await enrichStatus(store, rest, configPath());
         return;
     }
-    const config = loadEnrichConfig(configPath());
+    // Config resolution: an explicit --config or an on-disk default always wins
+    // (and validates). Only when neither exists do we fall back to a built-in
+    // preset for the source (e.g. `--source clay`), so the common Mode-A loop
+    // needs no hand-authored config. A present-but-invalid config still errors.
+    const explicitConfig = option(rest, "--config");
+    const configFile = configPath();
+    // No config file + no --config → fall back to a built-in preset so the common
+    // paths need zero hand-authored config: `acquire` gets the zero-config acquire
+    // preset (targeted/deduped/metered out the gate); other verbs get the source
+    // preset (e.g. clay ingest). An explicit/on-disk config always wins.
+    const presetFor = (src) => subcommand === "acquire" ? builtinAcquirePreset(src) : builtinEnrichPreset(src);
+    const config = !explicitConfig && !existsSync(configFile)
+        ? (presetFor(option(rest, "--source") ?? undefined) ?? loadEnrichConfig(configFile))
+        : loadEnrichConfig(configFile);
+    // `enrich ingest` stages rows. If the same command also names a CRM source
+    // (--input/--provider), collapse the two-step into one: stage, then run the
+    // append against the just-staged data so `enrich ingest clay.csv --source clay
+    // --input snap.json` returns the hygiene verdict end-to-end. Without a CRM
+    // source it stays stage-only (the existing two-step is preserved).
     if (subcommand === "ingest") {
-        await enrichIngest(store, config, rest);
+        const autoAppend = Boolean(option(rest, "--provider") || option(rest, "--input"));
+        await enrichIngest(store, config, rest, autoAppend);
+        if (!autoAppend)
+            return;
+    }
+    if (subcommand === "acquire") {
+        if (!config.acquire) {
+            throw new Error('enrich acquire: config has no "acquire" section. Add e.g. { "acquire": { "create": { "contact": { "matchKey": "email", "properties": { "email": "email", "firstname": "first_name", "lastname": "last_name" } } }, "budget": { "records": { "perDay": 50, "perMonth": 500 } }, "costPerRecord": { "clay": 0.10 } } } to enrich.config.json.');
+        }
+        const source = resolveEnrichSource(config, rest);
+        const sourceConfig = config.sources[source];
+        const save = rest.includes("--save");
+        const today = new Date().toISOString().slice(0, 10);
+        // Prospects come from an API source (net-new discovery, e.g. Explorium +
+        // pipe0 work-email) or a staged ingest list (Clay/CSV/webhook).
+        const snapshot = await readSnapshot(rest);
+        const icp = loadIcp(rest);
+        if (sourceConfig.kind === "api" && !icp) {
+            console.error("⚠ No ICP loaded — discovery will use the raw discovery.filters and skip fit scoring. " +
+                "Develop one with `fullstackgtm icp interview` (or pass --icp <path>) so leads map to your ICP.");
+        }
+        // Recommend the strong dedup key when the CRM carries no LinkedIn URLs:
+        // without them, pre-email dedup falls back to the weaker name+domain match.
+        if (sourceConfig.kind === "api" && !(snapshot.contacts ?? []).some((c) => c.linkedin)) {
+            console.error("⚠ No LinkedIn URLs found on your contacts — pre-email dedup falls back to name+domain (weaker). " +
+                "Populate the HubSpot \"LinkedIn URL\" (hs_linkedin_url) property for exact dedup; " +
+                "acquire writes it on every new contact it creates, so coverage grows automatically.");
+        }
+        const seen = loadSeen();
+        let records;
+        let apiSkippedCrm = 0;
+        let apiSkippedSeen = 0;
+        let apiProcessedKeys = [];
+        if (sourceConfig.kind === "api") {
+            const api = await acquireFromApi(config, source, rest, icp, snapshot, seen);
+            records = api.records;
+            apiSkippedCrm = api.skippedCrm;
+            apiSkippedSeen = api.skippedSeen;
+            apiProcessedKeys = api.processedKeys;
+        }
+        else {
+            const stagedLabel = option(rest, "--staged-run");
+            const stagedRun = stagedLabel
+                ? await store.get(stagedLabel)
+                : await store.latest({ source, mode: "ingest" });
+            if (!stagedRun || stagedRun.mode !== "ingest") {
+                throw new Error(`No staged data for source "${source}". Stage prospects first: fullstackgtm enrich ingest <prospects.csv|payload.json> --source ${source}`);
+            }
+            records = stagedSourceRecords(config, source, stagedRun);
+        }
+        // Meter: how many MORE leads may we create right now? --max is an
+        // additional per-run ceiling, never a way to exceed the budget.
+        const now = new Date();
+        const costPerRecord = config.acquire.costPerRecord?.[source] ?? 0;
+        if (apiSkippedCrm || apiSkippedSeen) {
+            console.error(`Pre-email dedup: skipped ${apiSkippedCrm} already-in-CRM + ${apiSkippedSeen} seen before paying for emails ` +
+                `(≈$${((apiSkippedCrm + apiSkippedSeen) * costPerRecord).toFixed(2)} enrichment saved).`);
+        }
+        const headroom = remaining(loadMeter(now), config.acquire.budget, costPerRecord, now);
+        const explicitMax = numericOption(rest, "--max");
+        let cap = headroom.maxRecords;
+        if (explicitMax !== undefined)
+            cap = cap === null ? explicitMax : Math.min(cap, explicitMax);
+        const result = buildAcquirePlan({
+            config,
+            source,
+            snapshot,
+            records,
+            runLabel: option(rest, "--run-label") ?? `acquire-${source}-${today}`,
+            maxRecords: cap,
+        });
+        const meterLine = formatAcquireMeter(headroom, costPerRecord);
+        if (!save) {
+            if (rest.includes("--json")) {
+                console.log(JSON.stringify({ plan: result.plan, counts: result.counts, estCostUsd: result.estCostUsd, meter: headroom }, null, 2));
+            }
+            else {
+                console.log(patchPlanToMarkdown(result.plan));
+                console.log(meterLine);
+                console.log("\nDry run — nothing written. Re-run with --save to persist the plan, then approve + apply.");
+            }
+            return;
+        }
+        const run = await openEnrichRun(store, source, "append", option(rest, "--run-label"), today);
+        const planIds = [];
+        if (result.plan.operations.length > 0) {
+            await createFilePlanStore().save(result.plan);
+            planIds.push(result.plan.id);
+        }
+        await store.update({
+            ...run,
+            completedAt: new Date().toISOString(),
+            cursor: null,
+            planIds: [...(run.planIds ?? []), ...planIds],
+        });
+        // Remember everyone we email-resolved this run so the next run skips them
+        // pre-email (cross-run credit saver). Committed (--save) runs only.
+        if (apiProcessedKeys.length > 0)
+            recordSeen(apiProcessedKeys, now);
+        console.log(meterLine);
+        if (planIds.length > 0) {
+            console.log(`Saved plan ${result.plan.id} — ${result.counts.created} net-new lead(s), est. $${result.estCostUsd.toFixed(2)}. ` +
+                `Review \`fullstackgtm plans show ${result.plan.id}\`, approve \`fullstackgtm plans approve ${result.plan.id} --operations all\`, ` +
+                `then \`fullstackgtm apply --plan-id ${result.plan.id} --provider hubspot\`. The meter is charged only when a create lands at apply.`);
+        }
+        else {
+            console.log("No net-new leads to create (everything sourced already matched, or was withheld by the meter).");
+        }
         return;
     }
-    const mode = subcommand;
+    const mode = subcommand === "refresh" ? "refresh" : "append";
     const source = resolveEnrichSource(config, rest);
     const sourceConfig = config.sources[source];
     const save = rest.includes("--save");
@@ -1423,6 +1903,165 @@ function formatEnrichCounts(counts, ambiguities) {
         `${counts.unmatched} unmatched · ${counts.ambiguous} ambiguous (${ambiguities} collision(s) recorded) · ` +
         `${counts.opsEmitted} operation(s) proposed`);
 }
+/** Best-effort enrich-config load for apply-time acquire-budget enforcement. */
+/** Provider API key: env override first, then the credential store (`login`). */
+function providerKey(provider) {
+    const envName = provider === "explorium" ? "EXPLORIUM_API_KEY" : "PIPE0_API_KEY";
+    if (process.env[envName])
+        return process.env[envName];
+    const stored = getCredential(provider);
+    if (stored)
+        return stored.accessToken;
+    throw new Error(`No ${provider} credentials. Run \`echo "$KEY" | fullstackgtm login ${provider}\`, or set ${envName}.`);
+}
+/** Load the active ICP: --icp <path>, else ./icp.json. Undefined if none. */
+function loadIcp(args) {
+    const explicit = option(args, "--icp");
+    const path = resolve(process.cwd(), explicit ?? "icp.json");
+    if (!existsSync(path)) {
+        if (explicit)
+            throw new Error(`--icp ${explicit}: file not found`);
+        return undefined;
+    }
+    return parseIcp(readFileSync(path, "utf8"));
+}
+/**
+ * `icp` — develop and inspect the Ideal Customer Profile that targets acquire.
+ * The CLI can't run AskUserQuestion itself; `icp interview` emits the question
+ * spec an agent (Claude Code / Codex) drives with its AskUserQuestion tool, then
+ * `icp set` writes icp.json from the collected answers.
+ */
+async function icpCommand(args) {
+    const [sub, ...rest] = args;
+    if (!sub || sub === "--help" || sub === "-h") {
+        console.log(`Usage:
+  fullstackgtm icp interview                      emit the interview spec (an agent drives it with AskUserQuestion)
+  fullstackgtm icp set <answers.json> [--name <n>] [--out <path>]   write icp.json from interview answers
+  fullstackgtm icp show [--icp <path>]            render the ICP + the discovery filters it produces
+
+The ICP makes \`enrich acquire\` targeted, not random: it generates each
+provider's discovery filters (Explorium, pipe0/Crustdata) AND scores every
+discovered prospect for fit — only above-threshold leads become create_record
+ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.`);
+        return;
+    }
+    if (sub === "interview") {
+        console.log(JSON.stringify({
+            questions: INTERVIEW_SPEC,
+            instructions: "Ask each question with AskUserQuestion (multiSelect per .multiSelect). For each answer, collect the chosen options' .value arrays and concat them under the question's .id. Then run `fullstackgtm icp set <answers.json>` with that flattened object.",
+        }, null, 2));
+        return;
+    }
+    if (sub === "set") {
+        const file = rest.find((a) => !a.startsWith("--"));
+        if (!file)
+            throw new Error("Usage: fullstackgtm icp set <answers.json> [--name <n>] [--out <path>]");
+        const answers = JSON.parse(readFileSync(resolve(process.cwd(), file), "utf8"));
+        const icp = icpFromAnswers(option(rest, "--name") ?? "ICP", answers);
+        const out = resolve(process.cwd(), option(rest, "--out") ?? "icp.json");
+        writeFileSync(out, `${JSON.stringify(icp, null, 2)}\n`);
+        console.log(`Wrote ${out} — ${icp.persona.titleKeywords?.length ?? 0} title keyword(s), ` +
+            `${icp.firmographics.employeeBands?.length ?? 0} size band(s), fit threshold ${fitThreshold(icp)}.`);
+        return;
+    }
+    if (sub === "show") {
+        const icp = loadIcp(rest);
+        if (!icp)
+            throw new Error("No ICP found (icp.json in cwd, or pass --icp <path>). Build one: fullstackgtm icp interview.");
+        console.log(JSON.stringify({
+            icp,
+            exploriumFilters: icpToExploriumFilters(icp),
+            crustdataFilters: icpToCrustdataFilters(icp),
+            fitThreshold: fitThreshold(icp),
+        }, null, 2));
+        return;
+    }
+    throw new Error(`Unknown icp subcommand: ${sub} (try: interview, set, show)`);
+}
+/**
+ * Pull net-new prospects from an API acquire source into source records the
+ * acquire builder dedupes + turns into create_record ops. Explorium discovers;
+ * pipe0 (when resolveEmailsWith=pipe0) fills real work emails. Only rows that
+ * carry the dedupe key (email) survive — you cannot resolve-first without it.
+ */
+async function acquireFromApi(config, source, rest, icp, snapshot, seen) {
+    const acquire = config.acquire;
+    const disc = acquire.discovery?.[source];
+    if (!disc) {
+        throw new Error(`enrich acquire: api source "${source}" needs an "acquire.discovery.${source}" config (provider + size).`);
+    }
+    const matchKey = acquire.create.contact?.matchKey ?? "email";
+    const maxOverride = numericOption(rest, "--max");
+    const size = maxOverride !== undefined ? Math.min(maxOverride, disc.size ?? 25) : disc.size ?? 25;
+    // 1. Discover. Filters come from the ICP when one is loaded (the whole point —
+    //    targeted, not random); otherwise from the hand-written disc.filters.
+    let prospects;
+    if (disc.provider === "explorium") {
+        const filters = icp
+            ? icpToExploriumFilters(icp)
+            : (disc.filters ?? {});
+        prospects = await fetchExploriumProspects({ apiKey: providerKey("explorium"), filters, size });
+    }
+    else if (disc.provider === "pipe0") {
+        const filters = icp ? icpToCrustdataFilters(icp) : (disc.filters ?? {});
+        prospects = await fetchPipe0CrustdataProspects({ apiKey: providerKey("pipe0"), filters, limit: size });
+    }
+    else {
+        throw new Error(`enrich acquire: unknown discovery provider "${disc.provider}" (explorium | pipe0).`);
+    }
+    // 2. ICP fit scoring BEFORE paying for emails — only above-threshold prospects
+    //    proceed to (credit-spending) email resolution.
+    if (icp) {
+        const threshold = fitThreshold(icp);
+        prospects = prospects
+            .map((p) => ({ ...p, fitScore: scoreProspectAgainstIcp(p, icp).score }))
+            .filter((p) => (p.fitScore ?? 0) >= threshold);
+    }
+    // 2.5 Pre-email dedup — drop prospects already in the CRM (name+domain match
+    //     vs the snapshot) or already processed in a prior run (the seen cache),
+    //     BEFORE paying pipe0 for emails. The email-level dedup (buildAcquirePlan)
+    //     and apply-time resolve-first remain the precise backstop.
+    const { fresh, skippedCrm, skippedSeen } = partitionFreshProspects(prospects, crmContactKeys(snapshot), seen);
+    prospects = fresh;
+    // 3. Resolve real work emails (both providers need it: Explorium's email is
+    //    hashed, Crustdata search returns none). pipe0 waterfall, chunked.
+    if (matchKey === "email") {
+        prospects = await pipe0ResolveWorkEmails({ apiKey: providerKey("pipe0"), prospects });
+    }
+    const processedKeys = prospects.flatMap(prospectIdentityKeys);
+    const records = prospects
+        .map((p) => {
+        const keyValue = p[matchKey];
+        return {
+            id: p.sourceId ?? `${source}:${keyValue ?? p.fullName ?? ""}`,
+            objectType: "contact",
+            keys: { [matchKey]: keyValue },
+            payload: p,
+        };
+    })
+        .filter((record) => Boolean(record.keys[matchKey]));
+    return { records, skippedCrm, skippedSeen, processedKeys };
+}
+function tryLoadAcquireConfig(args) {
+    try {
+        const path = resolve(process.cwd(), option(args, "--config") ?? ENRICH_CONFIG_FILE_NAME);
+        if (!existsSync(path))
+            return undefined;
+        return loadEnrichConfig(path);
+    }
+    catch {
+        return undefined;
+    }
+}
+function formatAcquireMeter(headroom, costPerRecord) {
+    const n = (v) => (v === null ? "∞" : String(v));
+    const money = (v) => (v === null ? "∞" : `$${v.toFixed(2)}`);
+    const max = headroom.maxRecords === null ? "unlimited" : `${headroom.maxRecords}`;
+    return (`Acquire meter — creatable now: ${max} lead(s). ` +
+        `Records left: ${n(headroom.records.day)}/day, ${n(headroom.records.month)}/month · ` +
+        `Spend left: ${money(headroom.spendUsd.day)}/day, ${money(headroom.spendUsd.month)}/month ` +
+        `(≈$${costPerRecord.toFixed(2)}/lead).`);
+}
 function resolveEnrichSource(config, rest) {
     const requested = option(rest, "--source");
     const declared = Object.keys(config.sources);
@@ -1496,7 +2135,7 @@ async function openEnrichRun(store, source, mode, requestedLabel, today) {
         stamps: [],
     });
 }
-async function enrichIngest(store, config, rest) {
+async function enrichIngest(store, config, rest, autoAppend = false) {
     const file = rest.find((arg) => !arg.startsWith("--") && !isOptionValue(rest, arg));
     if (!file)
         throw new Error("Usage: fullstackgtm enrich ingest <file.csv|payload.json> --source <id> [--run-label <label>]");
@@ -1560,8 +2199,10 @@ async function enrichIngest(store, config, rest) {
         staged: rows,
         stagedObjectType: objectType,
     });
-    console.log(`Staged ${rows.length} ${objectType} row(s) from ${file} as run ${label}. ` +
-        `Next: fullstackgtm enrich append --source ${source} [source options] [--save]`);
+    console.log(autoAppend
+        ? `Staged ${rows.length} ${objectType} row(s) from ${file} as run ${label}; matching against the CRM…`
+        : `Staged ${rows.length} ${objectType} row(s) from ${file} as run ${label}. ` +
+            `Next: fullstackgtm enrich append --source ${source} [source options] [--save]`);
 }
 function parseSingleObjectType(value) {
     const normalized = value.trim().toLowerCase();
@@ -2473,6 +3114,34 @@ async function apply(args) {
                 : approve.split(",").map((id) => id.trim()).filter(Boolean);
         valueOverrides = parseValueOverrides(args);
     }
+    // Acquire meter: create_record ops are budgeted. Refuse up-front if the
+    // approved creates would exceed the current budget window (the plan was
+    // capped when `enrich acquire` ran, but the budget may have been spent down
+    // since), then charge the meter for what actually lands.
+    const approvedSet = new Set(approvedOperationIds);
+    const createOps = plan.operations.filter((op) => op.operation === "create_record" && approvedSet.has(op.id));
+    const createSpend = (op) => (op.afterValue?.estCostUsd) ?? 0;
+    if (createOps.length > 0) {
+        const acquireConfig = tryLoadAcquireConfig(args)?.acquire;
+        if (acquireConfig?.budget) {
+            const now = new Date();
+            const head = remaining(loadMeter(now), acquireConfig.budget, 0, now);
+            const approvedSpend = createOps.reduce((sum, op) => sum + createSpend(op), 0);
+            const refusals = [];
+            if (head.records.day !== null && createOps.length > head.records.day)
+                refusals.push(`${createOps.length} creates > ${head.records.day} record(s) left today`);
+            if (head.records.month !== null && createOps.length > head.records.month)
+                refusals.push(`${createOps.length} creates > ${head.records.month} record(s) left this month`);
+            if (head.spendUsd.day !== null && approvedSpend > head.spendUsd.day)
+                refusals.push(`$${approvedSpend.toFixed(2)} > $${head.spendUsd.day.toFixed(2)} spend left today`);
+            if (head.spendUsd.month !== null && approvedSpend > head.spendUsd.month)
+                refusals.push(`$${approvedSpend.toFixed(2)} > $${head.spendUsd.month.toFixed(2)} spend left this month`);
+            if (refusals.length > 0) {
+                throw new Error(`Refusing to apply: acquire budget exceeded (${refusals.join("; ")}). ` +
+                    "Re-run `fullstackgtm enrich acquire` to re-cap to the remaining budget, or wait for the window to reset.");
+            }
+        }
+    }
     const connector = await connectorFor(provider, args);
     const run = await applyPatchPlan(connector, plan, {
         approvedOperationIds,
@@ -2480,6 +3149,15 @@ async function apply(args) {
     });
     if (planId && store) {
         await store.recordRun(planId, run);
+    }
+    // Charge the acquire meter for the creates that actually landed.
+    if (createOps.length > 0) {
+        const appliedIds = new Set(run.results.filter((result) => result.status === "applied").map((result) => result.operationId));
+        const landed = createOps.filter((op) => appliedIds.has(op.id));
+        if (landed.length > 0) {
+            const spend = landed.reduce((sum, op) => sum + createSpend(op), 0);
+            recordConsumption(new Date(), landed.length, spend);
+        }
     }
     if (args.includes("--json")) {
         console.log(JSON.stringify(run, null, 2));
@@ -2925,8 +3603,20 @@ async function login(args) {
         console.log(`Stored Apollo API key in ${credentialsPath()}. \`fullstackgtm enrich append|refresh\` use it automatically.`);
         return;
     }
+    if (provider === "pipe0" || provider === "explorium") {
+        rejectArgvSecret(args, "--token", "--key", "--api-key");
+        const key = await readSecret(`${provider} API key`);
+        if (!key)
+            throw new Error(`No ${provider} key provided.`);
+        // No free auth-health endpoint; validating would spend credits, so the key
+        // is stored as-is and validated on the first `enrich acquire` pull.
+        const stamp = new Date().toISOString();
+        storeCredential(provider, { kind: "api_key", accessToken: key, createdAt: stamp, updatedAt: stamp });
+        console.log(`Stored ${provider} API key in ${credentialsPath()}. \`fullstackgtm enrich acquire\` uses it automatically (validated on first pull).`);
+        return;
+    }
     if (provider !== "hubspot") {
-        throw new Error("login supports: hubspot, salesforce, stripe, anthropic, openai, apollo, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com");
+        throw new Error("login supports: hubspot, salesforce, stripe, anthropic, openai, apollo, pipe0, explorium, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com");
     }
     const now = new Date().toISOString();
     if (args.includes("--oauth")) {
@@ -3123,19 +3813,32 @@ function profilesCommand(args) {
 }
 export async function runCli(argv) {
     const [command, ...args] = extractProfile(argv);
+    // Front door: the lifecycle-grouped map by default, the full reference on
+    // --full. `help <command>` zooms into one verb. (docs/dx-punch-list.md #1)
     if (!command || command === "--help" || command === "-h") {
-        console.log(usage());
+        console.log(args.includes("--full") ? usage() : shortUsage());
+        return;
+    }
+    if (command === "help") {
+        const [topic, ...rest] = args;
+        if (topic && topic !== "--full" && !topic.startsWith("-")) {
+            console.log(commandHelp(topic));
+        }
+        else {
+            console.log(args.includes("--full") || topic === "--full" ? usage() : shortUsage());
+        }
         return;
     }
     if (command === "--version" || command === "-v" || command === "version") {
         console.log(readPackageInfo().version);
         return;
     }
-    // Commands without bespoke help fall back to the top-level usage on --help
-    // instead of executing (audit used to silently run the sample audit).
-    // call/market/enrich/bulk-update/schedule print their own richer help.
-    if (!["call", "market", "enrich", "bulk-update", "schedule"].includes(command) && (args.includes("--help") || args.includes("-h"))) {
-        console.log(usage());
+    // Commands without bespoke help get focused per-command help on --help
+    // instead of executing (audit used to silently run the sample audit) or
+    // dumping the whole surface. call/market/enrich/bulk-update/schedule print
+    // their own richer help. `--full` always escapes to the complete reference.
+    if (!BESPOKE_HELP.includes(command) && (args.includes("--help") || args.includes("-h"))) {
+        console.log(args.includes("--full") ? usage() : commandHelp(command));
         return;
     }
     if (command === "login") {
@@ -3164,6 +3867,10 @@ export async function runCli(argv) {
     }
     if (command === "doctor") {
         doctorCommand(args);
+        return;
+    }
+    if (command === "health") {
+        healthCommand(args);
         return;
     }
     if (command === "suggest") {
@@ -3200,6 +3907,10 @@ export async function runCli(argv) {
     }
     if (command === "enrich") {
         await enrichCommand(args);
+        return;
+    }
+    if (command === "icp") {
+        await icpCommand(args);
         return;
     }
     if (command === "schedule") {

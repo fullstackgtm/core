@@ -19,6 +19,7 @@ export { createFilePlanStore, type PlanStore, type StoredPlan } from "./planStor
 export { computeApprovalDigests, loadOrCreateSigningKey, loadSigningKey, signApproval, verifyApprovalDigests, type ApprovalVerification, } from "./integrity.ts";
 export { buildAuditLog, verifyAuditLog, type AuditLogEntry, type AuditLogExport, type AuditLogVerification, } from "./auditLog.ts";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
+export { computeHealth, summarizeHealth, healthToMarkdown, type HealthEntry, type HealthRollup, type HealthRuleDelta, } from "./health.ts";
 export { auditReportToHtml, auditReportToMarkdown, type ReportOptions } from "./report.ts";
 export { HUBSPOT_DEFAULT_FIELD_MAPPINGS, SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, normalizeFieldMappings, readMappedValue, type CrmObjectType, type FieldMappings, } from "./mappings.ts";
 export { accountSingleSourceRule, activeDealAccountWithoutContactsRule, auditFindingId, buildSnapshotIndex, builtinAuditRules, closingSoonInactiveRule, duplicateAccountDomainRule, duplicateContactEmailRule, duplicateOpenDealRule, missingDealAccountRule, missingDealAmountRule, missingDealOwnerRule, orphanAccountRule, pastCloseDateRule, patchOperationId, provenanceSummary, requiresHumanInput, staleDealRule, } from "./rules.ts";

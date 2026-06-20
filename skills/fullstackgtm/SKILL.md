@@ -1,6 +1,6 @@
 ---
 name: fullstackgtm
-description: Govern CRM/GTM data operations through the fullstackgtm CLI — read-only hygiene audits, reviewable dry-run patch plans, deterministic value suggestions, and approval-gated write-back to HubSpot and Salesforce. Use when asked to audit, clean, dedupe, enrich, bulk-update, reassign, or write to a CRM; to gate record creation against duplicates; to parse, score, or link sales call transcripts; to map a competitive category; or to schedule any of the above. Never write to a CRM directly when this skill is available.
+description: Govern CRM/GTM data operations through the fullstackgtm CLI — read-only hygiene audits, reviewable dry-run patch plans, deterministic value suggestions, and approval-gated write-back to HubSpot and Salesforce. Use when asked to audit, clean, dedupe, enrich, bulk-update, reassign, or write to a CRM; to gate record creation against duplicates; to parse, score, or link sales call transcripts; to map a competitive category; to report a CRM's health and trend over time; or to schedule any of the above. Never write to a CRM directly when this skill is available.
 ---
 
 # fullstackgtm — plan/apply for your GTM stack
@@ -65,6 +65,7 @@ credentials AND stored plans per client org.
 | `market init\|capture\|classify\|worksheet\|observe\|fronts\|axes\|overlay\|scale\|report\|refresh` | Competitive category map; evidence quotes verified verbatim against stored captures |
 | `schedule add\|list\|remove\|enable\|disable\|run\|install\|uninstall\|status` | Horizontal cron; read/plan-side allowlist only — scheduling NEVER auto-approves |
 | `report` | Client-ready audit deliverable (markdown or self-contained HTML) |
+| `health [--json]` | Per-profile CRM health timeline: deterministic 0–100 score, trend, per-rule deltas — accrues from `audit --save`, read-only |
 | `plans list\|show\|approve\|reject` / `snapshot` / `rules` / `doctor` | Plan lifecycle, raw snapshots, rule registry, machine state |
 
 All write-shaped verbs produce plans; none writes outside approve → apply.

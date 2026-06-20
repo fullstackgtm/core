@@ -5,6 +5,97 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [0.37.0] — 2026-06-19
+
+### Added
+
+- **`enrich acquire` — net-new, ICP-targeted, deduped, metered lead generation
+  into the CRM.** Where `enrich append/refresh` fill blanks on records that
+  already exist, `acquire` discovers net-new people, resolves their work email,
+  and proposes governed `create_record` operations through the existing
+  dry-run → approve → apply gate. Never auto-writes.
+  - **`create_record` operation** + resolve-first contact creation in the
+    HubSpot connector (re-checks the dedupe key at apply, never double-creates).
+  - **Acquire meter** (`acquireMeter.ts`): per-profile windowed budget capping
+    both record count and provider spend (per-day + per-month, whichever binds
+    first); charged only for creates that land at apply.
+  - **ICP artifact** (`icp.ts`) + **`icp interview` / `icp set` / `icp show`**:
+    one profile drives per-provider discovery filters (Explorium + pipe0/Crustdata)
+    AND fit-scores every prospect — only above-threshold leads are proposed.
+    `icp interview` emits a question spec an agent drives with AskUserQuestion.
+  - **API prospect sources** (`connectors/prospectSources.ts`): Explorium
+    discovery, pipe0 work-email waterfall (chunked, surfaces upstream errors),
+    and pipe0/Crustdata people search.
+  - **No paying for dupes**: pre-email dedup against the live CRM snapshot +
+    a cross-run **seen cache** (`acquireSeen.ts`) drop already-known prospects
+    *before* the paid email step. **LinkedIn URL (`hs_linkedin_url`) is now read
+    into the snapshot** as the strong dedup key (safe everywhere — HubSpot
+    ignores unknown properties); created contacts write it back, so dedup
+    strengthens over time. A recommendation fires when the CRM has none.
+  - **Zero-config preset**: `enrich acquire` works with only an `icp.json` and
+    `login` — sensible defaults for budget, provider, and create-mapping.
+  - **`login pipe0` / `login explorium`** credential flow.
+
+### Also
+
+- Built-in **clay enrich preset** + `enrich ingest <csv> --source clay --input`
+  one-shot (stage → match in one command).
+
+## [0.36.0] — 2026-06-19
+
+### Added
+
+- **Engagement workspace — a per-client CRM health timeline.** The profile dir
+  (`$FSGTM_HOME[/profiles/<name>]`) becomes a continuous record, not just a place
+  for credentials and plans: every `audit --save` now stamps a deterministic
+  hygiene score and a snapshot onto the profile, so a consultant working
+  `--profile <client>` accrues that org's health over time from the verb they
+  already run.
+  - **`fullstackgtm health [--json]`** (new, read-only) rolls up the timeline:
+    current score, the change since the last audit, a dated trend, and per-rule
+    finding deltas. Empty timeline prints a pointer, never an error.
+  - **Deterministic score** = `100 / (1 + severity-weighted findings per record)`
+    (info ×1, warning ×3, critical ×10): 0 findings ⇒ 100; the same findings over
+    fewer clean records score lower. No LLM — stable in CI, comparable run-over-run.
+  - New library exports `computeHealth`, `summarizeHealth`, `healthToMarkdown`
+    and the `HealthEntry` / `HealthRollup` / `HealthRuleDelta` types.
+  - State is profile-scoped and owner-only (0600): `health.jsonl` (append-only)
+    and `snapshots/<planId>.json`, alongside `plans/` under the same secured dir.
+
+## [0.35.0] — 2026-06-19
+
+### Added
+
+- **Progressive-disclosure help.** The front door is now a lifecycle-grouped map
+  (Setup · Detect · Prevent · Remediate · Calls · Govern · Market · Schedule) of
+  ~one line per verb instead of a 194-line wall — bare invoke and `--help` print
+  it. `<verb> --help` gives focused per-command help (summary, synopsis, key
+  options, the verb's lifecycle phase, see-also) rather than the whole surface.
+  New `help [command] [--full]` command; `--full` always escapes to the complete
+  reference. `call`/`market`/`enrich`/`bulk-update`/`schedule` keep their own
+  richer help.
+- **`audit` next-step guidance.** After a human-readable audit, the CLI prints a
+  context-aware next step on stderr (so stdout stays clean for pipes/`--out`):
+  the demo points to `report --demo` and `login`; a saved live audit chains
+  `suggest → plans approve → apply` with the real plan id; a clean snapshot
+  points to `resolve`/`schedule`. Suppressed under `--json`.
+- **`audit --full`** and **`patchPlanToMarkdown(plan, { summary })`** — a summary
+  view (header + Findings-by-Rule table + operation count) for read-side audits.
+
+### Changed
+
+- **`audit` defaults to the summary view** (≈24 lines on the demo vs ≈1,470
+  before); `--full` opts into the per-operation dump. The default stays full for
+  write-preview renders (`bulk-update`, `fix`, `dedupe`, `plans show`, MCP), where
+  you approve specific operations and want every operation's detail. The `--json`
+  machine output is unchanged.
+- **Plan footer reframed** from "This prototype is dry-run only…" to the actual
+  safety invariants ("Dry-run plan — read-only. No provider write happens until
+  you approve specific operations and run `apply`… These safety invariants are
+  not beta."), matching the README and agent skill.
+
+See [docs/dx-punch-list.md](./docs/dx-punch-list.md) for the audit that drove this.
+
 ## [0.34.0] — 2026-06-18
 
 ### Added
