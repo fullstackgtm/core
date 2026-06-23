@@ -352,6 +352,18 @@ Device-flow login requires a Connected App in your org — if you're not an admi
 
 Writeback needs no extra OAuth scope — applies are gated by the logged-in user's normal object/field permissions.
 
+**Quickest token for a one-off or sandbox test (the `sf` CLI).** If you already have the [Salesforce CLI](https://developer.salesforce.com/tools/salesforcecli) authenticated to an org, you can skip the Connected App entirely and feed a session token straight in:
+
+```bash
+# --verbose is required to include the access token. Note: the command prints a
+# sensitive-info warning *before* the JSON, so slice from the first '{' when parsing.
+sf org display --target-org <alias> --verbose --json
+# then hand the accessToken + instanceUrl to the CLI (token on stdin, never a flag):
+echo "$ACCESS_TOKEN" | fullstackgtm login salesforce --instance-url "$INSTANCE_URL"
+```
+
+This is a **short-lived session token with no refresh** — ideal for a one-off audit or a sandbox parity test, but it expires within hours and `doctor` will show it as a static login. For durable, unattended use, set up the Connected App device flow above instead (it refreshes silently).
+
 ### Stripe: a restricted key is enough (read-only connector)
 
 The Stripe connector only reads customers and subscriptions, and `apply` is read-only by construction. Create a **restricted key** with just **Customers: Read** and **Subscriptions: Read** (Developers → API keys → Create restricted key) instead of pasting a full-access secret key: `echo "$KEY" | fullstackgtm login stripe`.

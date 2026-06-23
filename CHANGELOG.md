@@ -7,6 +7,40 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
 
 ## [Unreleased]
 
+## [0.40.0] — 2026-06-23
+
+### Added
+
+- **Salesforce reaches full parity with HubSpot.** `create_record` — the
+  `enrich acquire` net-new-lead path — is now implemented for Salesforce: it
+  resolve-firsts (SOQL search on the mapped match key, create only on a confirmed
+  miss), stamps the canonical `ownerId` onto `OwnerId` so a lead is never born
+  ownerless, and optionally resolve-or-creates and links the associated account.
+  With this, **every write operation works across both providers** — `set_field`,
+  `clear_field`, `link_record`, `create_task`, `archive_record`, `merge_records`
+  (Salesforce: Account/Contact), and `create_record` (Salesforce: contact/account).
+  HubSpot and Salesforce are now equally first-class; the audit → plan → apply
+  contract is identical across them. Verified end-to-end against a live Salesforce
+  org (create-on-miss, company auto-link, in-run dedup, cross-run resolve-first).
+
+### Fixed
+
+- **HubSpot date-field writes no longer false-conflict.** `readField` now
+  normalizes `closeDate` the same way `fetchSnapshot` does (`split("T")[0]`), so
+  compare-and-set stops seeing spurious drift between the date-only value baked
+  into the plan and HubSpot's raw `…T00:00:00Z` read-back. Previously, every
+  date-field `set_field` on HubSpot dead-ended in a false `conflict`. (Salesforce
+  was already correct here.)
+
+### Documentation
+
+- Corrected `docs/api.md`: the Salesforce connector implements the full operation
+  set, with its two platform constraints (Account/Contact-only merge, resolve-first
+  contact/account create) — replacing a stale "Salesforce skips merge/create" note.
+- Documented the quickest Salesforce token path for one-off / sandbox use via the
+  `sf` CLI (`sf org display --verbose --json`), including the short-lived-token
+  caveat; durable use still wants the Connected App device flow.
+
 ## [0.39.0] — 2026-06-23
 
 ### Added
