@@ -1,4 +1,5 @@
 export { auditSnapshot, defaultPolicy } from "./audit.js";
+export { matchesTerritory, parseAssignmentPolicy, resolveAssignment, } from "./assign.js";
 export { buildBulkUpdatePlan, isFilterableField, parseWhere } from "./bulkUpdate.js";
 export { buildDedupePlan, dedupeKey } from "./dedupe.js";
 export { buildReassignPlans } from "./reassign.js";

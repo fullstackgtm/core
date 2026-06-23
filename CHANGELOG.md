@@ -5,6 +5,56 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
+## [Unreleased]
+
+## [0.38.0] — 2026-06-23
+
+### Added
+
+- **CLI run observability — paired CLIs report each run to the hosted dashboard.**
+  When the CLI is paired (`login --via <hosted url>`), a best-effort run record —
+  command, status (`success`/`partial`/`error`), duration, headline counts, and
+  structured events (plan saved, meter charged) — is POSTed to the deployment's
+  run timeline after each command (`runReport.ts`: `reportCounts` / `reportEvent`
+  / `flushRunReport`). Opt-in by pairing (an unpaired CLI sends nothing), 4s-capped,
+  swallows every error, and never affects the command's exit code; setup/inspection
+  verbs (`login`, `doctor`, `help`, `--version`) are skipped. The hosted dashboard
+  re-maps onto these runs (`/dashboard/runs`).
+
+- **Lead assignment — acquired leads are never born ownerless.** A shared
+  `AssignmentPolicy` (`assign.ts`: `fixed` / `round-robin` / `territory` /
+  `account-owner`) routes an owner onto every record, consumed in two places:
+  - **`enrich acquire`** stamps the resolved owner into each `create_record`
+    payload (`EnrichConfig.acquire.assign`); the HubSpot connector maps it to
+    `hubspot_owner_id` at create time. Round-robin distributes by the within-run
+    index (deterministic, no persisted cursor); every result is gated by the
+    snapshot's active owners, so an unknown/inactive owner collapses to
+    unassigned rather than writing a bad owner. The CLI defaults to the portal's
+    sole active owner when no policy is set (or `--assign-owner <id>`), and warns
+    + leaves leads unassigned when several owners exist and no policy says how to
+    route. `AcquireCounts` now reports `assigned` / `unassigned`.
+  - **`reassign --assign-unowned --to <ownerId>`** claims every existing
+    ownerless record (`ownerId:empty`) for an owner — the backfill twin of
+    acquire's create-time assignment.
+
+- **`enrich acquire --source linkedin` — governed LinkedIn lead acquisition
+  (Phase 1, discovery + dry-run).** LinkedIn is a new discovery source on the
+  existing acquire spine: it reads a pre-built **HeyReach** lead list
+  (`--list <id>` or `acquire.discovery.linkedin.listId`), normalizes leads to
+  the canonical `Prospect` type, then reuses ICP scoring, pre-email dedup, the
+  acquire meter, and the dry-run → approve → apply gate unchanged. The LinkedIn
+  profile URL is the match key; cost is `$0`/record (the list is already built).
+  - **`LinkedInProvider`** interface (`connectors/linkedin.ts`) with a default
+    **HeyReach** adapter (`HEYREACH_BASE`, `X-API-KEY`) and a
+    `FakeLinkedInProvider` so the whole pipeline runs with no key and no network.
+    `createLinkedInProvider` rejects unknown providers (`heyreach` only for now;
+    `unipile` is the planned alternative behind the same interface).
+  - Auth: `login heyreach` or `HEYREACH_API_KEY`.
+  - **Read-only / no sending.** Phase 1 is discovery only — no
+    `linkedin_connect` / `linkedin_message` operations, no webhook ingestion
+    (Phase 2). Without `--save` nothing is written and there is zero send/ToS
+    exposure.
+
 ## [0.37.0] — 2026-06-19
 
 ### Added

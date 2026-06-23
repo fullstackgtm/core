@@ -103,7 +103,7 @@ test("reassign validates owners and objects loudly", () => {
   );
   assert.throws(
     () => buildReassignPlans(snapshot, { fromOwnerId: "", toOwnerId: "103" }),
-    /--from <ownerId> and --to <ownerId>/,
+    /requires --from <ownerId>/,
   );
   assert.throws(
     () =>

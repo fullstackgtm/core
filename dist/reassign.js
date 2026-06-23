@@ -40,11 +40,16 @@ function scopeWhere(objectType, raw) {
     return raw;
 }
 export function buildReassignPlans(snapshot, options) {
-    if (!options.fromOwnerId || !options.toOwnerId) {
-        throw new Error("reassign requires both --from <ownerId> and --to <ownerId>.");
+    if (!options.toOwnerId) {
+        throw new Error("reassign requires --to <ownerId>.");
     }
-    if (options.fromOwnerId === options.toOwnerId) {
-        throw new Error("reassign --from and --to are the same owner — nothing to hand off.");
+    if (!options.assignUnowned) {
+        if (!options.fromOwnerId) {
+            throw new Error("reassign requires --from <ownerId> (or --assign-unowned to claim ownerless records).");
+        }
+        if (options.fromOwnerId === options.toOwnerId) {
+            throw new Error("reassign --from and --to are the same owner — nothing to hand off.");
+        }
     }
     // The receiving owner must exist: a typo'd --to would otherwise write an
     // invalid owner onto every matched record.
@@ -60,7 +65,7 @@ export function buildReassignPlans(snapshot, options) {
         }
     }
     return objects.map((objectType) => {
-        const where = [`ownerId=${options.fromOwnerId}`];
+        const where = [options.assignUnowned ? "ownerId:empty" : `ownerId=${options.fromOwnerId}`];
         if (objectType === "deal" && !options.includeClosedDeals) {
             where.push("isClosed=false"); // closed deals keep their historical owner
         }
@@ -80,7 +85,9 @@ export function buildReassignPlans(snapshot, options) {
             where,
             set: { ownerId: options.toOwnerId },
             reason: options.reason ??
-                `reassign: hand off ${objectType}s from owner ${options.fromOwnerId} to ${options.toOwnerId}`,
+                (options.assignUnowned
+                    ? `reassign: claim ownerless ${objectType}s for owner ${options.toOwnerId}`
+                    : `reassign: hand off ${objectType}s from owner ${options.fromOwnerId} to ${options.toOwnerId}`),
             maxOperations: options.maxOperations,
         });
     });

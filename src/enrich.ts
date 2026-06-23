@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { credentialsDir, ensureSecureHomeDir, writeSecureFile } from "./credentials.ts";
 import { HUBSPOT_DEFAULT_FIELD_MAPPINGS } from "./mappings.ts";
 import type { AcquireBudget } from "./acquireMeter.ts";
+import { parseAssignmentPolicy, resolveAssignment } from "./assign.ts";
+import type { AssignmentContext, AssignmentPolicy } from "./assign.ts";
 import type {
   CanonicalGtmSnapshot,
   CreateRecordPayload,
@@ -99,10 +101,12 @@ export type AcquireCreateMap = {
  * real emails (e.g. explorium discovers, pipe0 resolves the work email).
  */
 export type AcquireDiscoveryConfig = {
-  provider: "explorium" | "pipe0";
+  provider: "explorium" | "pipe0" | "linkedin" | "heyreach";
   filters?: Record<string, unknown>;
   size?: number;
   resolveEmailsWith?: "pipe0";
+  /** LinkedIn sources only: the provider-native list id to read (HeyReach lead-list id). */
+  listId?: string;
 };
 
 export type AcquireConfig = {
@@ -114,6 +118,12 @@ export type AcquireConfig = {
   create: Partial<Record<EnrichObjectType, AcquireCreateMap>>;
   /** Net-new discovery params for API sources, by source id. */
   discovery?: Record<string, AcquireDiscoveryConfig>;
+  /**
+   * Ownership rule stamped onto every created lead so it is never born
+   * ownerless. Absent = no auto-assignment (the CLI may still default to the
+   * portal's sole active owner). Shared with `reassign --assign-unowned`.
+   */
+  assign?: AssignmentPolicy;
 };
 
 export const ENRICH_CONFIG_FILE_NAME = "enrich.config.json";
@@ -125,7 +135,7 @@ const OBJECT_TYPES: EnrichObjectType[] = ["company", "contact"];
 /** Match keys the matcher knows how to read off canonical snapshot records. */
 const MATCH_KEYS: Record<EnrichObjectType, string[]> = {
   company: ["domain", "name"],
-  contact: ["email", "name"],
+  contact: ["email", "name", "linkedin"],
 };
 
 /** API source ids the MVP can pull from. */
@@ -311,6 +321,16 @@ export function parseEnrichConfig(raw: string): EnrichConfig {
     fail('"fields" maps nothing — add at least one field entry (or an "acquire.create" mapping)');
   }
 
+  // Normalize + validate the assignment policy (fails loud on shape errors so a
+  // misconfigured rule never silently mis-routes a created lead).
+  if (config.acquire?.assign !== undefined) {
+    try {
+      config.acquire.assign = parseAssignmentPolicy(config.acquire.assign);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return config as EnrichConfig;
 }
 
@@ -348,6 +368,35 @@ export function builtinEnrichPreset(source: string | undefined): EnrichConfig | 
  */
 export function builtinAcquirePreset(source: string | undefined): EnrichConfig | undefined {
   const provider = source ?? "pipe0";
+  if (provider === "linkedin" || provider === "heyreach") {
+    // LinkedIn discovery reads our OWN HeyReach lead list, so it costs $0/record
+    // (no spend budget) and keys on the LinkedIn URL — leads are sparse on email,
+    // so email-keying would drop most of them. listId is supplied via --list.
+    return {
+      sources: { linkedin: { kind: "api" } },
+      match: { contact: { keys: ["linkedin", "email"], onAmbiguous: "skip" } },
+      fields: {},
+      policy: { overwrite: "never" },
+      acquire: {
+        budget: { records: { perDay: 50, perMonth: 500 } },
+        costPerRecord: { linkedin: 0 },
+        discovery: { linkedin: { provider: "linkedin", size: 25 } },
+        create: {
+          contact: {
+            matchKey: "linkedin",
+            properties: {
+              hs_linkedin_url: "linkedin",
+              firstname: "firstName",
+              lastname: "lastName",
+              jobtitle: "jobTitle",
+              company: "companyName",
+              email: "email",
+            },
+          },
+        },
+      },
+    };
+  }
   if (provider !== "pipe0" && provider !== "explorium") return undefined;
   return {
     sources: { [provider]: { kind: "api" } },
@@ -542,12 +591,16 @@ function normalizeKeyValue(key: string, value: unknown): string {
       .replace(/^www\./, "")
       .replace(/\/.*$/, "");
   }
+  if (key === "linkedin") {
+    // Match crmContactKeys' `li:` normalization (lowercased, trailing slash stripped).
+    return text.trim().replace(/\/+$/, "");
+  }
   return text.replace(/\s+/g, " ");
 }
 
 function crmKeyValue(
   objectType: EnrichObjectType,
-  record: { name?: string; domain?: string; email?: string; firstName?: string; lastName?: string },
+  record: { name?: string; domain?: string; email?: string; firstName?: string; lastName?: string; linkedin?: string },
   key: string,
 ): string {
   if (objectType === "company") {
@@ -556,6 +609,7 @@ function crmKeyValue(
     return "";
   }
   if (key === "email") return normalizeKeyValue("email", record.email);
+  if (key === "linkedin") return normalizeKeyValue("linkedin", record.linkedin);
   if (key === "name") {
     return normalizeKeyValue("name", `${record.firstName ?? ""} ${record.lastName ?? ""}`.trim());
   }
@@ -922,6 +976,10 @@ export type AcquireCounts = {
   created: number;
   /** unmatched rows that would have been created but for the meter ceiling. */
   withheldByMeter: number;
+  /** created ops that got an owner stamped (a subset of `created`). */
+  assigned: number;
+  /** created ops left ownerless (no policy, or policy could not place them). */
+  unassigned: number;
 };
 
 export type AcquirePlanResult = {
@@ -940,6 +998,44 @@ export type BuildAcquirePlanOptions = {
   maxRecords?: number | null;
   now?: () => Date;
 };
+
+/** First non-empty value among several candidate paths in a source payload. */
+function firstSourceValue(payload: Record<string, unknown>, paths: string[]): string | undefined {
+  for (const path of paths) {
+    const value = sourceValueAt(payload, path);
+    if (!isEmptyValue(value)) return String(value).trim();
+  }
+  return undefined;
+}
+
+/**
+ * Lift a prospect/source payload into the routing attributes a territory rule
+ * reads. Tolerant of provider spellings (explorium vs pipe0); absent attributes
+ * stay undefined, so a rule that routes on them simply won't match (falling to
+ * the policy fallback) instead of mis-routing.
+ */
+export function acquireAssignmentContext(
+  payload: Record<string, unknown>,
+  companyName: string | undefined,
+  accountOwnerByName: ReadonlyMap<string, string>,
+): AssignmentContext {
+  const ctx: AssignmentContext = {};
+  const title = firstSourceValue(payload, ["jobTitle", "job_title", "title"]);
+  if (title) ctx.title = title.toLowerCase();
+  const geo = firstSourceValue(payload, ["geo", "country", "company_country_code", "companyCountry"]);
+  if (geo) ctx.geo = geo.toLowerCase();
+  const industry = firstSourceValue(payload, ["industry", "company_industry", "companyIndustry"]);
+  if (industry) ctx.industry = industry.toLowerCase();
+  const employeeBand = firstSourceValue(payload, ["employeeBand", "company_size", "companySize"]);
+  if (employeeBand) ctx.employeeBand = employeeBand;
+  const department = firstSourceValue(payload, ["department", "job_department", "jobDepartment"]);
+  if (department) ctx.department = department.toLowerCase();
+  if (companyName) {
+    const owner = accountOwnerByName.get(companyName.trim().toLowerCase());
+    if (owner) ctx.accountOwnerId = owner;
+  }
+  return ctx;
+}
 
 /**
  * Match each sourced record against the snapshot and route it: matched =
@@ -969,8 +1065,29 @@ export function buildAcquirePlan(options: BuildAcquirePlanOptions): AcquirePlanR
     unmatched: 0,
     created: 0,
     withheldByMeter: 0,
+    assigned: 0,
+    unassigned: 0,
   };
   let estCostUsd = 0;
+
+  // Assignment context (built once): the set of owner ids the CRM will accept
+  // (active users), and a company-name → account-owner lookup for the
+  // "account-owner" inherit strategy. Empty when no assign policy is set.
+  const assignPolicy = acquire.assign;
+  const knownOwnerIds = new Set<string>();
+  const accountOwnerByName = new Map<string, string>();
+  if (assignPolicy) {
+    for (const user of snapshot.users ?? []) {
+      if (user.active === false) continue;
+      if (user.crmId) knownOwnerIds.add(user.crmId);
+      if (user.id) knownOwnerIds.add(user.id);
+    }
+    for (const account of snapshot.accounts ?? []) {
+      if (account.name && account.ownerId) {
+        accountOwnerByName.set(account.name.trim().toLowerCase(), account.ownerId);
+      }
+    }
+  }
 
   for (const record of records) {
     const createMap = acquire.create[record.objectType];
@@ -1024,6 +1141,20 @@ export function buildAcquirePlan(options: BuildAcquirePlanOptions): AcquirePlanR
     );
     evidence.push(recordEvidence);
 
+    // Resolve ownership BEFORE the meter-charged create lands, so the lead is
+    // never born ownerless. `counts.created` is the within-run index, giving
+    // round-robin deterministic, even distribution with no persisted cursor.
+    let ownerId: string | undefined;
+    let assignedBy: string | undefined;
+    if (assignPolicy) {
+      const ctx = acquireAssignmentContext(record.payload, associateCompanyName, accountOwnerByName);
+      const resolved = resolveAssignment(assignPolicy, ctx, counts.created, knownOwnerIds);
+      if (resolved.ownerId) {
+        ownerId = resolved.ownerId;
+        assignedBy = resolved.rule;
+      }
+    }
+
     const payload: CreateRecordPayload = {
       properties,
       matchKey: createMap.matchKey,
@@ -1031,6 +1162,7 @@ export function buildAcquirePlan(options: BuildAcquirePlanOptions): AcquirePlanR
       source,
       estCostUsd: costPerRecord,
       associateCompanyName,
+      ...(ownerId ? { ownerId, assignedBy } : {}),
     };
     operations.push({
       id: `op_acq_${fnv1a(`${source}:${record.objectType}:${matchValue}`)}`,
@@ -1048,6 +1180,8 @@ export function buildAcquirePlan(options: BuildAcquirePlanOptions): AcquirePlanR
       rollback: "Archive the created record (it was net-new).",
       evidenceIds: [recordEvidence.id],
     });
+    if (ownerId) counts.assigned += 1;
+    else counts.unassigned += 1;
     counts.created += 1;
     estCostUsd += costPerRecord;
   }

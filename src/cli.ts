@@ -135,6 +135,8 @@ import {
   type Prospect,
 } from "./connectors/prospectSources.ts";
 import { loadSeen, recordSeen } from "./acquireSeen.ts";
+import { reportCounts, reportEvent } from "./runReport.ts";
+import { createLinkedInProvider, discoverLinkedInProspects } from "./acquireLinkedIn.ts";
 import {
   fitThreshold,
   icpFromAnswers,
@@ -197,7 +199,7 @@ Usage:
   fullstackgtm login salesforce --instance-url <url> [--no-validate]
   fullstackgtm login stripe [--no-validate]
   fullstackgtm login anthropic | openai        store an LLM API key for call parse/score
-  fullstackgtm login apollo                    store an Apollo API key for enrich pulls\n  fullstackgtm login pipe0 | explorium         store a discovery-provider key for enrich acquire\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|pipe0|explorium|broker>
+  fullstackgtm login apollo                    store an Apollo API key for enrich pulls\n  fullstackgtm login pipe0 | explorium         store a discovery-provider key for enrich acquire\n  fullstackgtm login heyreach                  store a HeyReach key for enrich acquire --source linkedin\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|pipe0|explorium|heyreach|broker>
 
   Secrets (tokens, client secrets) are NEVER passed as flags — they leak via
   the process list and shell history. Pipe them on stdin or enter them at the
@@ -272,9 +274,10 @@ Usage:
                                                deterministic survivor (richest = most populated data
                                                fields, ties to lowest id; oldest = lowest id). Approve and
                                                apply like any plan; merges are IRREVERSIBLE on apply.
-  fullstackgtm reassign --from <ownerId> --to <ownerId> [--objects account,contact,deal] [--where <expr> …] [--except-deal-stage <stage>] [--include-closed-deals] [source options] [--save] [--json] [--out <path>]
+  fullstackgtm reassign (--from <ownerId> | --assign-unowned) --to <ownerId> [--objects account,contact,deal] [--where <expr> …] [--except-deal-stage <stage>] [--include-closed-deals] [source options] [--save] [--json] [--out <path>]
                                                ownership handoff playbook: one bulk-update-style plan per
-                                               object type (ownerId=<from> → <to>). Extra --where scoping
+                                               object type (ownerId=<from> → <to>). --assign-unowned instead
+                                               claims every ownerless record (ownerId:empty) for --to. Extra --where scoping
                                                is account-lifted for deals/contacts (domain~.de becomes
                                                account.domain~.de); --except-deal-stage <stage> excludes
                                                deals in that stage AND every record whose account has an
@@ -530,7 +533,7 @@ const HELP: Record<string, HelpEntry> = {
   reassign: {
     summary: "ownership handoff: one plan per object type",
     phase: "Remediate",
-    synopsis: ["fullstackgtm reassign --from <ownerId> --to <ownerId> [--objects account,contact,deal] [--where <expr> …] [--save] [--json]"],
+    synopsis: ["fullstackgtm reassign (--from <ownerId> | --assign-unowned) --to <ownerId> [--objects account,contact,deal] [--where <expr> …] [--save] [--json]"],
     detail:
       "Extra `--where` scoping is account-lifted for deals/contacts. `--except-deal-stage <stage>` excludes that stage and any record whose account has an open deal in it, re-verified per record at apply.",
     seeAlso: ["bulk-update", "plans", "apply"],
@@ -929,6 +932,11 @@ async function audit(args: string[]) {
   if (staleDealDays !== undefined) policy.staleDealDays = staleDealDays;
 
   const plan = auditSnapshot(snapshot, policy, rules);
+  reportCounts({
+    findings: plan.findings.length,
+    critical: plan.findings.filter((f) => f.severity === "critical").length,
+    warning: plan.findings.filter((f) => f.severity === "warning").length,
+  });
   const out = option(args, "--out");
   if (out) {
     writeFileSync(resolve(process.cwd(), out), `${JSON.stringify(plan, null, 2)}\n`);
@@ -1877,7 +1885,7 @@ enrich append  [--source apollo] [--objects companies,contacts] [--save] [--conf
 enrich refresh [--source apollo] [--stale-days <n>] [--save] [--config <path>]
                [source options] [--run-label <label>] [--json]
 enrich ingest  <file.csv|payload.json> --source clay [--run-label <label>] [--objects companies|contacts] [--config <path>]
-enrich acquire [--source <id>] [--max <n>] [--save] [--config <path>] [--json]
+enrich acquire [--source <id>] [--max <n>] [--list <id>] [--assign-owner <id>] [--save] [--config <path>] [--json]
 enrich status  [--runs] [--source <id>] [--config <path>] [--json]
 
 acquire creates NET-NEW leads from a staged prospect list (ingest first):
@@ -1887,6 +1895,16 @@ it dedupes each sourced row against the CRM, skips matches and ambiguities
 remaining budget (records + spend, per day and per month; whichever is hit
 first). Approval-gated like every write: \`--save\` → plans approve → apply.
 The meter is charged only when a create actually lands at apply.
+Discovery sources (zero-config presets): explorium | pipe0 (ICP-driven search),
+and linkedin (reads a HeyReach lead list — pass --list <id>, key on the LinkedIn
+URL, $0/record; \`login heyreach\` or HEYREACH_API_KEY).
+
+Leads are never born ownerless: set an \`acquire.assign\` policy (fixed /
+round-robin / territory / account-owner) to stamp an owner at create time, or
+pass \`--assign-owner <id>\`. With a single-owner portal and no policy, acquire
+defaults every lead to that owner; with several owners and no policy it warns
+and leaves them unassigned. Backfill existing ownerless records with
+\`reassign --assign-unowned --to <ownerId>\`.
 
 append pulls from an api source (Apollo — BYO key via \`login apollo\` or
 APOLLO_API_KEY) or reads data staged by \`enrich ingest\` (Clay CSV exports,
@@ -2021,6 +2039,34 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
     let cap = headroom.maxRecords;
     if (explicitMax !== undefined) cap = cap === null ? explicitMax : Math.min(cap, explicitMax);
 
+    // Assignment: never create an ownerless lead. An explicit `acquire.assign`
+    // policy wins; a `--assign-owner <id>` flag is a quick fixed override;
+    // otherwise, when the portal has exactly one active owner, default every
+    // lead to them. With multiple owners and no policy we refuse to guess —
+    // leads are left unassigned and the operator is told to configure a rule.
+    const assignOwnerFlag = option(rest, "--assign-owner");
+    if (!config.acquire.assign) {
+      if (assignOwnerFlag) {
+        config.acquire.assign = { strategy: "fixed", ownerId: assignOwnerFlag };
+      } else {
+        const activeOwners = (snapshot.users ?? []).filter((u) => u.active !== false);
+        if (activeOwners.length === 1) {
+          const sole = activeOwners[0].crmId ?? activeOwners[0].id;
+          config.acquire.assign = { strategy: "fixed", ownerId: sole };
+          console.error(
+            `Assignment: no policy set — defaulting every lead to the portal's sole owner ` +
+              `${activeOwners[0].name} (${sole}). Configure "acquire.assign" to route across reps.`,
+          );
+        } else if (activeOwners.length > 1) {
+          console.error(
+            `⚠ Assignment: ${activeOwners.length} active owners and no "acquire.assign" policy — ` +
+              `leads will be created OWNERLESS. Add an acquire.assign rule (fixed / round-robin / territory) ` +
+              `or pass --assign-owner <id> so every lead lands with an owner.`,
+          );
+        }
+      }
+    }
+
     const result = buildAcquirePlan({
       config,
       source,
@@ -2028,6 +2074,23 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
       records,
       runLabel: option(rest, "--run-label") ?? `acquire-${source}-${today}`,
       maxRecords: cap,
+    });
+
+    if (result.counts.unassigned > 0 && result.counts.created > 0) {
+      console.error(
+        `⚠ ${result.counts.unassigned}/${result.counts.created} proposed lead(s) have no owner ` +
+          `(policy could not place them). They will be created ownerless.`,
+      );
+    }
+
+    // Observability: headline metrics for the web run timeline (paired users).
+    reportCounts({
+      sourced: result.counts.fetched,
+      created: result.counts.created,
+      withheldByMeter: result.counts.withheldByMeter,
+      skippedInCrm: apiSkippedCrm,
+      skippedSeen: apiSkippedSeen,
+      estCostUsd: result.estCostUsd,
     });
 
     const meterLine = formatAcquireMeter(headroom, costPerRecord);
@@ -2053,6 +2116,7 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
     if (result.plan.operations.length > 0) {
       await createFilePlanStore().save(result.plan);
       planIds.push(result.plan.id);
+      reportEvent("plan_saved", result.plan.id);
     }
     await store.update({
       ...run,
@@ -2178,6 +2242,13 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
   result.counts.fetched += missCount;
   result.counts.unmatched += missCount;
 
+  reportCounts({
+    fetched: result.counts.fetched,
+    matched: result.counts.matched,
+    unmatched: result.counts.unmatched,
+    opsEmitted: result.counts.opsEmitted,
+  });
+
   if (!save) {
     if (rest.includes("--json")) {
       console.log(JSON.stringify(result.plan, null, 2));
@@ -2227,8 +2298,9 @@ function formatEnrichCounts(counts: EnrichCounts, ambiguities: number) {
 
 /** Best-effort enrich-config load for apply-time acquire-budget enforcement. */
 /** Provider API key: env override first, then the credential store (`login`). */
-function providerKey(provider: "explorium" | "pipe0"): string {
-  const envName = provider === "explorium" ? "EXPLORIUM_API_KEY" : "PIPE0_API_KEY";
+function providerKey(provider: "explorium" | "pipe0" | "heyreach"): string {
+  const envName =
+    provider === "explorium" ? "EXPLORIUM_API_KEY" : provider === "pipe0" ? "PIPE0_API_KEY" : "HEYREACH_API_KEY";
   if (process.env[envName]) return process.env[envName] as string;
   const stored = getCredential(provider);
   if (stored) return stored.accessToken;
@@ -2347,8 +2419,19 @@ async function acquireFromApi(
   } else if (disc.provider === "pipe0") {
     const filters = icp ? icpToCrustdataFilters(icp) : (disc.filters ?? {});
     prospects = await fetchPipe0CrustdataProspects({ apiKey: providerKey("pipe0"), filters, limit: size });
+  } else if (disc.provider === "linkedin" || disc.provider === "heyreach") {
+    // LinkedIn reads a pre-populated lead list (not an ICP-driven query); the ICP
+    // scores the pulled list below. List id: disc.listId or --list <id>.
+    const listId = disc.listId ?? option(rest, "--list") ?? undefined;
+    if (!listId) {
+      throw new Error(
+        "enrich acquire --source linkedin needs a HeyReach lead-list id: pass --list <id> or set acquire.discovery.linkedin.listId.",
+      );
+    }
+    const provider = createLinkedInProvider(disc.provider, providerKey("heyreach"));
+    prospects = await discoverLinkedInProspects(provider, { sourceId: listId, max: size });
   } else {
-    throw new Error(`enrich acquire: unknown discovery provider "${disc.provider}" (explorium | pipe0).`);
+    throw new Error(`enrich acquire: unknown discovery provider "${disc.provider}" (explorium | pipe0 | linkedin).`);
   }
 
   // 2. ICP fit scoring BEFORE paying for emails — only above-threshold prospects
@@ -3213,9 +3296,10 @@ async function dedupeCommand(args: string[]) {
 async function reassignCommand(args: string[]) {
   const from = option(args, "--from");
   const to = option(args, "--to");
-  if (!from || !to) {
+  const assignUnowned = args.includes("--assign-unowned");
+  if (!to || (!from && !assignUnowned)) {
     throw new Error(
-      "Usage: fullstackgtm reassign --from <ownerId> --to <ownerId> [--objects account,contact,deal] [--where <expr> …] [--except-deal-stage <stage>] [--include-closed-deals] [source options] [--reason <text>] [--max-operations <n>] [--save] [--out <path>] [--json]",
+      "Usage: fullstackgtm reassign (--from <ownerId> | --assign-unowned) --to <ownerId> [--objects account,contact,deal] [--where <expr> …] [--except-deal-stage <stage>] [--include-closed-deals] [source options] [--reason <text>] [--max-operations <n>] [--save] [--out <path>] [--json]\n\n--assign-unowned claims every OWNERLESS record (ownerId:empty) for --to — the backfill twin of `enrich acquire`'s create-time assignment.",
     );
   }
   const objects = option(args, "--objects")
@@ -3224,8 +3308,9 @@ async function reassignCommand(args: string[]) {
     .filter(Boolean) as ReassignObjectType[] | undefined;
   const snapshot = await readSnapshot(args);
   const plans = buildReassignPlans(snapshot, {
-    fromOwnerId: from,
+    fromOwnerId: from ?? undefined,
     toOwnerId: to,
+    assignUnowned,
     objects,
     where: repeatedOption(args, "--where"),
     exceptDealStage: option(args, "--except-deal-stage") ?? undefined,
@@ -3600,6 +3685,11 @@ async function apply(args: string[]) {
       recordConsumption(new Date(), landed.length, spend);
     }
   }
+
+  // Observability: apply-outcome tallies for the web run timeline.
+  const applyTally: Record<string, number> = { applied: 0, conflict: 0, skipped: 0, failed: 0 };
+  for (const result of run.results) applyTally[result.status] = (applyTally[result.status] ?? 0) + 1;
+  reportCounts(applyTally);
 
   if (args.includes("--json")) {
     console.log(JSON.stringify(run, null, 2));
@@ -4097,7 +4187,7 @@ async function login(args: string[]) {
     console.log(`Stored Apollo API key in ${credentialsPath()}. \`fullstackgtm enrich append|refresh\` use it automatically.`);
     return;
   }
-  if (provider === "pipe0" || provider === "explorium") {
+  if (provider === "pipe0" || provider === "explorium" || provider === "heyreach") {
     rejectArgvSecret(args, "--token", "--key", "--api-key");
     const key = await readSecret(`${provider} API key`);
     if (!key) throw new Error(`No ${provider} key provided.`);
