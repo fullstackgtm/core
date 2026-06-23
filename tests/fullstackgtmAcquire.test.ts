@@ -268,6 +268,34 @@ test("create_record: a confirmed miss creates the contact (resolve-first)", asyn
   assert.ok(calls.some((c) => c.method === "POST" && /\/contacts$/.test(c.url.split("?")[0])));
 });
 
+test("create_record: a non-email match key resolves on the HubSpot property name, not the canonical key", async () => {
+  // Regression: matchKey "linkedin" must search HubSpot by "hs_linkedin_url".
+  // Filtering on a property HubSpot doesn't have (e.g. "linkedin") 400s the
+  // whole create — which broke every LinkedIn-sourced acquire lead in 0.38.0.
+  let searchFilterProperty: string | undefined;
+  const connector = createHubspotConnector({
+    getAccessToken: () => "t",
+    fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/contacts/search")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        searchFilterProperty = body.filterGroups?.[0]?.filters?.[0]?.propertyName;
+        return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ id: "c1" }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch,
+  });
+  const plan = createPlan({
+    properties: { hs_linkedin_url: "https://www.linkedin.com/in/jvonhalle", firstname: "Jeremy" },
+    matchKey: "linkedin",
+    matchValue: "https://www.linkedin.com/in/jvonhalle",
+    source: "linkedin",
+  });
+  const run = await applyPatchPlan(connector, plan, { approvedOperationIds: ["op_acq_1"], checkConflicts: false });
+  assert.equal(run.results[0].status, "applied");
+  assert.equal(searchFilterProperty, "hs_linkedin_url");
+});
+
 test("create_record: an existing match is NOT duplicated (resolve-first declines)", async () => {
   let posts = 0;
   const connector = createHubspotConnector({

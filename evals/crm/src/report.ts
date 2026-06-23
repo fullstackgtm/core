@@ -1,4 +1,4 @@
-import { aggregateCells } from "./metrics.ts";
+import { aggregateCells, cellCost, paretoFrontier } from "./metrics.ts";
 import type { RunResult } from "./types.ts";
 
 type Cell = { runs: number; score: number; max: number; violations: number; byCode: Map<string, number>; errors: number };
@@ -36,6 +36,21 @@ export function buildReport(results: RunResult[]): string {
   for (const c of aggregateCells(results)) {
     const p2 = c.passK.get(2); const p4 = c.passK.get(4);
     lines.push(`| ${c.model} · ${c.arm} | ${c.cupPct.toFixed(1)}% | ${c.accuracyPct.toFixed(1)}% | ${p2 === undefined ? "—" : (100 * p2).toFixed(0) + "%"} | ${p4 === undefined ? "—" : (100 * p4).toFixed(0) + "%"} | ${c.violations} | ${c.runs} |`);
+  }
+  lines.push("");
+  lines.push("## Cost efficiency (list prices 2026-06 — see PRICING in metrics.ts)");
+  lines.push("");
+  lines.push("$/safe-completion = total spend / CuP successes (amortized — failures still cost). k-tok/success is pricing-free. ★ = Pareto-efficient (nothing beats it on both cost and CuP).");
+  lines.push("");
+  const cells = aggregateCells(results);
+  const frontier = paretoFrontier(cells, (c) => cellCost(c).dollarsPerSuccess);
+  lines.push("| Entry | CuP | $/run | $/safe completion | k-tok/success | |");
+  lines.push("|---|---|---|---|---|---|");
+  for (const c of [...cells].sort((a, b) => cellCost(a).dollarsPerSuccess - cellCost(b).dollarsPerSuccess)) {
+    const cost = cellCost(c);
+    const usd = (v: number) => (Number.isFinite(v) ? `$${v < 0.1 ? v.toFixed(4) : v < 1 ? v.toFixed(3) : v.toFixed(2)}` : "—");
+    const ktok = Number.isFinite(cost.tokensPerSuccess) ? `${(cost.tokensPerSuccess / 1000).toFixed(0)}k` : "—";
+    lines.push(`| ${c.model} · ${c.arm} | ${c.cupPct.toFixed(1)}% | ${usd(cost.dollarsPerRun)} | ${usd(cost.dollarsPerSuccess)} | ${ktok} | ${frontier.has(c) ? "★" : ""} |`);
   }
   lines.push("");
   lines.push("## Task accuracy (points earned / available)");

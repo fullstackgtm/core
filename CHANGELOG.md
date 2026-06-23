@@ -7,6 +7,18 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
 
 ## [Unreleased]
 
+## [0.38.1] — 2026-06-23
+
+### Fixed
+
+- **`enrich acquire` LinkedIn creates failed with HubSpot 400.** The resolve-first
+  search before a `create_record` filtered on the *canonical* match key
+  (`linkedin`) instead of the HubSpot property name (`hs_linkedin_url`); HubSpot
+  400s on a filter against a property it doesn't have, so every LinkedIn-sourced
+  lead failed at apply. The connector now translates the match key through
+  `HUBSPOT_DEFAULT_FIELD_MAPPINGS.contacts` before searching (email is unaffected
+  — its canonical name already equals the property name). Regression test added.
+
 ## [0.38.0] — 2026-06-23
 
 ### Added
