@@ -493,13 +493,17 @@ export function createHubspotConnector(options) {
             }
             return { operationId: operation.id, status: "applied", detail: `Resolved/created company "${matchValue}" (${id}).`, providerData: { id } };
         }
-        // contact — resolve-first on the dedupe key (email by default)
+        // contact — resolve-first on the dedupe key (email by default). The match
+        // key is canonical (e.g. "linkedin"); translate it to the HubSpot property
+        // name ("hs_linkedin_url") before searching — HubSpot 400s on a filter
+        // against a property it doesn't have (there is no property named "linkedin").
         const matchKey = payload.matchKey || "email";
+        const searchProperty = HUBSPOT_DEFAULT_FIELD_MAPPINGS.contacts[matchKey] ?? matchKey;
         const matchKeyLower = `${matchKey}:${matchValue.toLowerCase()}`;
         if (createdContactsByMatch.has(matchKeyLower)) {
             return { operationId: operation.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already created earlier in this run; not duplicating.`, providerData: { id: createdContactsByMatch.get(matchKeyLower), existing: true } };
         }
-        const existing = await searchContactsBy(matchKey, matchValue);
+        const existing = await searchContactsBy(searchProperty, matchValue);
         if (existing.length > 0) {
             createdContactsByMatch.set(matchKeyLower, existing[0]);
             return { operationId: operation.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already exists (${existing.join(", ")}); resolve-first declined to create.`, providerData: { id: existing[0], existing: true } };

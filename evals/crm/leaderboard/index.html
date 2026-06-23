@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CRM-Ops Bench — 2026-06-15</title>
+<title>CRM-Ops Bench — 2026-06-23</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -80,6 +80,12 @@ details li{font-size:.76rem;line-height:1.6;padding:8px 0;border-bottom:1px dash
 .vio-run{color:var(--muted);font-size:.66rem}
 .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
 .legend span{font-size:.64rem;border:1px solid var(--line);padding:4px 10px;color:var(--muted);background:var(--card)}
+.cost-tag{display:inline-block;font-size:.56rem;letter-spacing:.08em;padding:2px 7px;border:1.5px solid var(--green);color:var(--deep);background:rgba(74,124,89,.1);text-transform:uppercase;white-space:nowrap}
+.cost-tag.tok{border-color:var(--line);color:var(--muted);background:transparent}
+.svg-wrap{background:var(--card);border:2px solid var(--ink);margin-top:18px;padding:12px}
+.svg-wrap svg{display:block;width:100%;height:auto}
+.pricing{color:var(--muted);font-size:.66rem;margin-top:12px;line-height:1.7;max-width:54rem}
+.pricing code{color:var(--deep);font-size:.64rem}
 footer{margin-top:72px;padding-top:20px;border-top:3px solid var(--ink);color:var(--muted);font-size:.68rem;line-height:1.7}
 footer a{color:var(--deep)}
 @media(max-width:880px){.pct{width:auto}.meta{text-align:left}}
@@ -98,7 +104,7 @@ footer a{color:var(--deep)}
     and the server's mutation log — never the agent's own report.</p>
   </div>
   <div class="meta">
-    <div><span class="k">Generated</span><span class="v">2026-06-15</span></div>
+    <div><span class="k">Generated</span><span class="v">2026-06-23</span></div>
     <div><span class="k">Scenarios</span><span class="v">17</span></div>
     <div><span class="k">Models</span><span class="v">6</span></div>
     <div><span class="k">Runs</span><span class="v">1088</span></div>
@@ -415,6 +421,178 @@ footer a{color:var(--deep)}
     <span><b>fullstackgtm-gated</b> — writes only via audit → approve → apply (rails)</span>
   </div>
 </section>
+
+<section>
+  <h2>Cost efficiency — is the capability worth the price?</h2>
+  <p class="note">The leaderboard asks <em>can</em> an agent run CRM ops safely. This asks whether you should
+  <em>pay up</em> to get there. <strong>$/safe-completion</strong> = total spend across a cell's runs ÷ its CuP
+  successes — amortized over successes, so a model that fails often costs more per <em>safe</em> completion (you
+  pay for the retries). <strong>k-tok/success</strong> is the same idea with no pricing assumption. ★ marks the
+  Pareto-efficient frontier: cells nothing else beats on both cost and CuP.</p>
+  <div class="svg-wrap"><svg viewBox="0 0 1100 470" role="img" aria-label="Cost per safe completion vs CuP — efficient frontier">
+  <style>
+    .grid{stroke:var(--line);stroke-width:1}
+    .ax{fill:var(--muted);font:500 11px "IBM Plex Mono",monospace}
+    .lbl{fill:var(--ink);font:500 11px "IBM Plex Mono",monospace}
+    .axtitle{fill:var(--muted);font:600 11px "IBM Plex Mono",monospace;letter-spacing:.1em;text-transform:uppercase}
+    .frontier{fill:none;stroke:var(--green);stroke-width:2;stroke-dasharray:2 4}
+    .hint{fill:var(--green);font:600 11px "IBM Plex Mono",monospace}
+  </style>
+  <rect x="64" y="26" width="880" height="392" fill="none" stroke="var(--ink)" stroke-width="1.5"/>
+  <line x1="64.0" y1="26" x2="64.0" y2="418" class="grid"/><text x="64.0" y="436" class="ax" text-anchor="middle">$0.02</text><line x1="260.9" y1="26" x2="260.9" y2="418" class="grid"/><text x="260.9" y="436" class="ax" text-anchor="middle">$0.05</text><line x1="409.9" y1="26" x2="409.9" y2="418" class="grid"/><text x="409.9" y="436" class="ax" text-anchor="middle">$0.10</text><line x1="558.9" y1="26" x2="558.9" y2="418" class="grid"/><text x="558.9" y="436" class="ax" text-anchor="middle">$0.20</text><line x1="755.8" y1="26" x2="755.8" y2="418" class="grid"/><text x="755.8" y="436" class="ax" text-anchor="middle">$0.50</text><line x1="904.8" y1="26" x2="904.8" y2="418" class="grid"/><text x="904.8" y="436" class="ax" text-anchor="middle">$1</text><line x1="64" y1="418.0" x2="944" y2="418.0" class="grid"/><text x="54" y="422.0" class="ax" text-anchor="end">40</text><line x1="64" y1="354.8" x2="944" y2="354.8" class="grid"/><text x="54" y="358.8" class="ax" text-anchor="end">50</text><line x1="64" y1="291.5" x2="944" y2="291.5" class="grid"/><text x="54" y="295.5" class="ax" text-anchor="end">60</text><line x1="64" y1="228.3" x2="944" y2="228.3" class="grid"/><text x="54" y="232.3" class="ax" text-anchor="end">70</text><line x1="64" y1="165.1" x2="944" y2="165.1" class="grid"/><text x="54" y="169.1" class="ax" text-anchor="end">80</text><line x1="64" y1="101.9" x2="944" y2="101.9" class="grid"/><text x="54" y="105.9" class="ax" text-anchor="end">90</text><line x1="64" y1="38.6" x2="944" y2="38.6" class="grid"/><text x="54" y="42.6" class="ax" text-anchor="end">100</text>
+  <path d="M146.2 206.0 L207.8 38.6" class="frontier"/>
+  <circle cx="734.7" cy="38.6" r="6" fill="var(--green)" stroke="var(--deep)" stroke-width="2"/><circle cx="539.8" cy="38.6" r="6" fill="var(--green)" stroke="var(--deep)" stroke-width="2"/><circle cx="504.9" cy="38.6" r="6" fill="var(--card)" stroke="var(--green)" stroke-width="2"/><circle cx="207.8" cy="38.6" r="11" fill="none" stroke="var(--green)" stroke-width="1.5"/><circle cx="207.8" cy="38.6" r="6" fill="var(--green)" stroke="var(--deep)" stroke-width="2"/><circle cx="541.3" cy="47.9" r="6" fill="var(--green)" stroke="var(--deep)" stroke-width="2"/><circle cx="829.9" cy="57.2" r="6" fill="var(--card)" stroke="var(--muted)" stroke-width="2"/><circle cx="394.7" cy="85.1" r="6" fill="var(--green)" stroke="var(--deep)" stroke-width="2"/><circle cx="377.5" cy="103.7" r="6" fill="var(--card)" stroke="var(--green)" stroke-width="2"/><circle cx="840.9" cy="131.6" r="6" fill="var(--card)" stroke="var(--muted)" stroke-width="2"/><circle cx="624.8" cy="159.5" r="6" fill="var(--card)" stroke="var(--green)" stroke-width="2"/><circle cx="372.1" cy="178.1" r="6" fill="var(--card)" stroke="var(--muted)" stroke-width="2"/><circle cx="146.2" cy="206.0" r="11" fill="none" stroke="var(--green)" stroke-width="1.5"/><circle cx="146.2" cy="206.0" r="6" fill="var(--green)" stroke="var(--deep)" stroke-width="2"/><circle cx="590.2" cy="215.3" r="6" fill="var(--card)" stroke="var(--muted)" stroke-width="2"/><circle cx="150.5" cy="224.6" r="6" fill="var(--card)" stroke="var(--green)" stroke-width="2"/><circle cx="415.4" cy="243.2" r="6" fill="var(--card)" stroke="var(--green)" stroke-width="2"/><circle cx="484.4" cy="289.7" r="6" fill="var(--card)" stroke="var(--muted)" stroke-width="2"/><circle cx="227.3" cy="392.0" r="6" fill="var(--card)" stroke="var(--muted)" stroke-width="2"/>
+  <text x="720.7" y="26.6" class="lbl" text-anchor="end">opus-4-8·gated $0.453</text><text x="221.8" y="26.6" class="lbl" text-anchor="start">kimi-k2.6·gated $0.0390</text><text x="826.9" y="135.6" class="lbl" text-anchor="end">opus-4-8·raw $0.743</text><text x="160.2" y="210.0" class="lbl" text-anchor="start">gpt-5.4-mini·gated $0.0293</text>
+  <text x="70" y="42" class="hint">↖ cheaper &amp; safer wins</text>
+  <text x="504" y="464" class="axtitle" text-anchor="middle">cost per safe completion — $/CuP (log scale)</text>
+  <text transform="translate(16 222) rotate(-90)" class="axtitle" text-anchor="middle">CuP — safe completion %</text>
+</svg></div>
+  <table style="margin-top:18px">
+    <thead><tr><th>Entry</th><th class="num">CuP</th><th class="num">$/run</th><th class="num">$/safe completion</th><th class="num">k-tok/success</th><th>Frontier</th></tr></thead>
+    <tbody>
+<tr>
+  <td class="entry"><span class="model">gpt-5.4-mini</span><span class="arm arm-fsgtm">fullstackgtm-gated</span></td>
+  <td class="num">73.5%</td>
+  <td class="num">$0.0216</td>
+  <td class="num"><b style="color:var(--deep)">$0.0293</b></td>
+  <td class="num">36k</td>
+  <td><span class="cost-tag" title="on the price efficient frontier">★ frontier</span></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">gpt-5.4-mini</span><span class="arm arm-both">raw + fullstackgtm</span></td>
+  <td class="num">70.6%</td>
+  <td class="num">$0.0211</td>
+  <td class="num"><b style="color:var(--deep)">$0.0299</b></td>
+  <td class="num">36k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">moonshotai/kimi-k2.6</span><span class="arm arm-fsgtm">fullstackgtm-gated</span></td>
+  <td class="num">100.0%</td>
+  <td class="num">$0.0390</td>
+  <td class="num"><b style="color:var(--deep)">$0.0390</b></td>
+  <td class="num">45k</td>
+  <td><span class="cost-tag" title="on the price efficient frontier">★ frontier</span></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">gpt-5.4-mini</span><span class="arm arm-raw">raw tools</span></td>
+  <td class="num">44.1%</td>
+  <td class="num">$0.0189</td>
+  <td class="num"><b style="color:var(--deep)">$0.0428</b></td>
+  <td class="num">49k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">moonshotai/kimi-k2.6</span><span class="arm arm-raw">raw tools</span></td>
+  <td class="num">77.9%</td>
+  <td class="num">$0.0654</td>
+  <td class="num"><b style="color:var(--deep)">$0.0839</b></td>
+  <td class="num">102k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">moonshotai/kimi-k2.6</span><span class="arm arm-both">raw + fullstackgtm</span></td>
+  <td class="num">89.7%</td>
+  <td class="num">$0.0771</td>
+  <td class="num"><b style="color:var(--deep)">$0.0860</b></td>
+  <td class="num">108k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">claude-haiku-4-5</span><span class="arm arm-fsgtm">fullstackgtm-gated</span></td>
+  <td class="num">92.6%</td>
+  <td class="num">$0.0863</td>
+  <td class="num"><b style="color:var(--deep)">$0.0932</b></td>
+  <td class="num">85k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">claude-haiku-4-5</span><span class="arm arm-both">raw + fullstackgtm</span></td>
+  <td class="num">67.6%</td>
+  <td class="num">$0.0694</td>
+  <td class="num"><b style="color:var(--deep)">$0.103</b></td>
+  <td class="num">91k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">claude-haiku-4-5</span><span class="arm arm-raw">raw tools</span></td>
+  <td class="num">60.3%</td>
+  <td class="num">$0.0853</td>
+  <td class="num"><b style="color:var(--deep)">$0.141</b></td>
+  <td class="num">126k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">gpt-5.5</span><span class="arm arm-both">raw + fullstackgtm</span></td>
+  <td class="num">100.0%</td>
+  <td class="num">$0.156</td>
+  <td class="num"><b style="color:var(--deep)">$0.156</b></td>
+  <td class="num">26k</td>
+  <td><span class="cost-tag tok" title="on the token (pricing-free) frontier">token-frontier</span></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">claude-sonnet-4-6</span><span class="arm arm-fsgtm">fullstackgtm-gated</span></td>
+  <td class="num">100.0%</td>
+  <td class="num">$0.183</td>
+  <td class="num"><b style="color:var(--deep)">$0.183</b></td>
+  <td class="num">53k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">gpt-5.5</span><span class="arm arm-fsgtm">fullstackgtm-gated</span></td>
+  <td class="num">98.5%</td>
+  <td class="num">$0.182</td>
+  <td class="num"><b style="color:var(--deep)">$0.184</b></td>
+  <td class="num">31k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">claude-sonnet-4-6</span><span class="arm arm-raw">raw tools</span></td>
+  <td class="num">72.1%</td>
+  <td class="num">$0.167</td>
+  <td class="num"><b style="color:var(--deep)">$0.231</b></td>
+  <td class="num">65k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">claude-sonnet-4-6</span><span class="arm arm-both">raw + fullstackgtm</span></td>
+  <td class="num">80.9%</td>
+  <td class="num">$0.220</td>
+  <td class="num"><b style="color:var(--deep)">$0.272</b></td>
+  <td class="num">80k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">claude-opus-4-8</span><span class="arm arm-fsgtm">fullstackgtm-gated</span></td>
+  <td class="num">100.0%</td>
+  <td class="num">$0.453</td>
+  <td class="num"><b style="color:var(--deep)">$0.453</b></td>
+  <td class="num">81k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">gpt-5.5</span><span class="arm arm-raw">raw tools</span></td>
+  <td class="num">97.1%</td>
+  <td class="num">$0.685</td>
+  <td class="num"><b style="color:var(--deep)">$0.706</b></td>
+  <td class="num">132k</td>
+  <td></td>
+</tr>
+<tr>
+  <td class="entry"><span class="model">claude-opus-4-8</span><span class="arm arm-raw">raw tools</span></td>
+  <td class="num">85.3%</td>
+  <td class="num">$0.634</td>
+  <td class="num"><b style="color:var(--deep)">$0.743</b></td>
+  <td class="num">135k</td>
+  <td></td>
+</tr>
+    </tbody>
+  </table>
+  <p class="pricing"><strong>Published list prices, 2026-06 standard tier</strong> (editable in <code>metrics.ts → PRICING</code>) — $/1M tokens in/out: <code>claude-opus-4-8</code> $5/$25 · <code>claude-sonnet-4-6</code> $3/$15 · <code>claude-haiku-4-5</code> $1/$5 · <code>gpt-5.5</code> $5/$30 · <code>gpt-5.4-mini</code> $0.75/$4.5 · <code>moonshotai/kimi-k2.6</code> $0.66/$3.41. Swap in your negotiated rates and re-run; the token frontier needs no prices. Among the 100%-CuP cluster the
+  exact frontier winner is pricing-sensitive, but the shape is robust: the frontier is entirely gated, and the strongest
+  model run bare sits to the lower-right — more expensive <em>and</em> less reliable.</p>
+</section>
+
 
 <section>
   <h2>Scenario × entry</h2>
@@ -14158,7 +14336,7 @@ footer a{color:var(--deep)}
 <footer>
   CRM-Ops Bench · part of the <a href="https://github.com/fullstackgtm/core">fullstackgtm</a> open-core
   GTM ops framework · deterministic graders, no LLM-as-judge · mock CRM reproduces documented HubSpot
-  behaviors (10-record default pages, search index lag, concurrent edits) · generated 2026-06-15T00:00:00.000Z
+  behaviors (10-record default pages, search index lag, concurrent edits) · generated 2026-06-23T11:42:16.911Z
 </footer>
 </div>
 </body>
