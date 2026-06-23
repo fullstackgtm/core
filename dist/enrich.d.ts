@@ -1,4 +1,5 @@
 import type { AcquireBudget } from "./acquireMeter.ts";
+import type { AssignmentContext, AssignmentPolicy } from "./assign.ts";
 import type { CanonicalGtmSnapshot, PatchPlan } from "./types.ts";
 /**
  * The enrich layer: governed append/refresh of third-party data into the CRM.
@@ -75,10 +76,12 @@ export type AcquireCreateMap = {
  * real emails (e.g. explorium discovers, pipe0 resolves the work email).
  */
 export type AcquireDiscoveryConfig = {
-    provider: "explorium" | "pipe0";
+    provider: "explorium" | "pipe0" | "linkedin" | "heyreach";
     filters?: Record<string, unknown>;
     size?: number;
     resolveEmailsWith?: "pipe0";
+    /** LinkedIn sources only: the provider-native list id to read (HeyReach lead-list id). */
+    listId?: string;
 };
 export type AcquireConfig = {
     /** Windowed budget enforced by the acquire meter; absent = unmetered. */
@@ -89,6 +92,12 @@ export type AcquireConfig = {
     create: Partial<Record<EnrichObjectType, AcquireCreateMap>>;
     /** Net-new discovery params for API sources, by source id. */
     discovery?: Record<string, AcquireDiscoveryConfig>;
+    /**
+     * Ownership rule stamped onto every created lead so it is never born
+     * ownerless. Absent = no auto-assignment (the CLI may still default to the
+     * portal's sole active owner). Shared with `reassign --assign-unowned`.
+     */
+    assign?: AssignmentPolicy;
 };
 export declare const ENRICH_CONFIG_FILE_NAME = "enrich.config.json";
 export declare const DEFAULT_STALE_DAYS = 90;
@@ -216,6 +225,10 @@ export type AcquireCounts = {
     created: number;
     /** unmatched rows that would have been created but for the meter ceiling. */
     withheldByMeter: number;
+    /** created ops that got an owner stamped (a subset of `created`). */
+    assigned: number;
+    /** created ops left ownerless (no policy, or policy could not place them). */
+    unassigned: number;
 };
 export type AcquirePlanResult = {
     plan: PatchPlan;
@@ -232,6 +245,13 @@ export type BuildAcquirePlanOptions = {
     maxRecords?: number | null;
     now?: () => Date;
 };
+/**
+ * Lift a prospect/source payload into the routing attributes a territory rule
+ * reads. Tolerant of provider spellings (explorium vs pipe0); absent attributes
+ * stay undefined, so a rule that routes on them simply won't match (falling to
+ * the policy fallback) instead of mis-routing.
+ */
+export declare function acquireAssignmentContext(payload: Record<string, unknown>, companyName: string | undefined, accountOwnerByName: ReadonlyMap<string, string>): AssignmentContext;
 /**
  * Match each sourced record against the snapshot and route it: matched =
  * already in the CRM (skip), ambiguous = a possible duplicate exists (skip —

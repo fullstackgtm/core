@@ -102,7 +102,10 @@ emits a standard dry-run `PatchPlan` for the normal approve → apply chain:
   duplicate groups by normalized identity key, one `merge_records` per group,
   deterministic survivor selection (`richest` / `oldest`).
 - `buildReassignPlans(snapshot, options: ReassignOptions)` — one plan per
-  `ReassignObjectType`, account-lifted scoping, stage exclusions.
+  `ReassignObjectType`, account-lifted scoping, stage exclusions. With
+  `assignUnowned` (CLI `--assign-unowned`) it targets ownerless records
+  (`ownerId:empty`) and claims them for `--to` — the backfill twin of
+  `enrich acquire`'s create-time assignment, for clearing existing ownerless debt.
 
 `fix` is CLI-only composition of existing surfaces (audit → suggest →
 approve → apply for one rule).
@@ -138,11 +141,31 @@ zero-config `EnrichConfig.acquire` (budget, provider, create-mapping) so
   waterfall, chunked, surfaces upstream errors), `fetchPipe0CrustdataProspects`
   (people search). `prospectIdentityKeys` / `crmContactKeys` /
   `partitionFreshProspects` power the pre-email dedup.
+- **LinkedIn source** (`connectors/linkedin.ts`, `acquireLinkedIn.ts`): the
+  injectable `LinkedInProvider` interface with a default HeyReach adapter
+  (`createHeyReachProvider`, `HEYREACH_BASE`, `X-API-KEY`, `normalizeHeyReachLead`)
+  and `createFakeLinkedInProvider` for keyless/offline tests; `createLinkedInProvider`
+  selects the adapter (`heyreach` only; rejects unknown). `discoverLinkedInProspects`
+  pulls a HeyReach lead list and `linkedInProspectToProspect` maps each lead to the
+  canonical `Prospect` (match key = LinkedIn URL), so ICP scoring / dedup / meter /
+  apply are reused unchanged. Phase 1 is discovery-only — read-only, never sends.
 - **Meter** (`acquireMeter.ts`): `AcquireBudget`, `loadMeter` / `remaining` /
   `recordConsumption` — per-profile windowed record+spend budget, charged only
   for landed creates.
 - **Seen cache** (`acquireSeen.ts`): `loadSeen` / `recordSeen` — cross-run
   memory so a re-run never re-pays to enrich a known prospect.
+- **Assignment** (`assign.ts`): `AssignmentPolicy` (`fixed` / `round-robin` /
+  `territory` / `account-owner`), `parseAssignmentPolicy`, pure
+  `resolveAssignment(policy, ctx, index, knownOwnerIds)`. Set
+  `EnrichConfig.acquire.assign` and `buildAcquirePlan` stamps `ownerId` into each
+  `create_record` payload so a **lead is never born ownerless** — the connector
+  maps it to HubSpot `hubspot_owner_id` at create time. Round-robin distributes
+  by the within-run index (deterministic, no persisted cursor); every result is
+  gated by the snapshot's active owners (an unknown/inactive owner collapses to
+  unassigned, never a bad write). The CLI defaults to the portal's sole active
+  owner when no policy is set (or `--assign-owner <id>`); with multiple owners
+  and no policy it warns and leaves leads unassigned rather than guess. The same
+  policy backfills existing debt via `reassign --assign-unowned`.
 
 `CanonicalContact.linkedin` (mapped from HubSpot `hs_linkedin_url`) is the
 strong dedup key across all of the above.

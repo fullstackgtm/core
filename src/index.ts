@@ -1,4 +1,14 @@
 export { auditSnapshot, defaultPolicy } from "./audit.ts";
+export {
+  matchesTerritory,
+  parseAssignmentPolicy,
+  resolveAssignment,
+  type AssignmentContext,
+  type AssignmentPolicy,
+  type AssignmentResult,
+  type AssignmentStrategy,
+  type TerritoryRule,
+} from "./assign.ts";
 export { buildBulkUpdatePlan, isFilterableField, parseWhere, type BulkUpdateOptions } from "./bulkUpdate.ts";
 export { buildDedupePlan, dedupeKey, type DedupeOptions } from "./dedupe.ts";
 export { buildReassignPlans, type ReassignObjectType, type ReassignOptions } from "./reassign.ts";

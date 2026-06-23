@@ -58,10 +58,11 @@ credentials AND stored plans per client org.
 | `resolve <contact\|account\|deal>` | Create gate: exit 0 = safe to create, 2 = exists/ambiguous — never blind-create |
 | `dedupe <object> --key <domain\|email\|name>` | One merge op per duplicate group, deterministic survivor; merges are irreversible |
 | `bulk-update <object> --where … --set\|--archive\|--create-task` | Filtered dry-run plan; filter re-verified per record at apply time |
-| `reassign --from <owner> --to <owner>` | Ownership handoff plans per object type |
+| `reassign --from <owner> --to <owner>` | Ownership handoff plans per object type; `--assign-unowned --to <id>` backfills every ownerless record |
 | `fix --rule <id>` | audit one rule → suggest → approve at the confidence bar → apply only with `--yes` |
 | `call parse\|score\|link\|plan` | Transcripts → evidence-quoted insights, rubric scorecards, deal linking, governed next-step writes |
 | `enrich append\|refresh\|ingest\|status` | Governed enrichment (Apollo pull / Clay ingest), fill-blanks-only plans |
+| `enrich acquire [--source explorium\|pipe0\|linkedin]` | Net-new ICP-targeted lead gen: resolve-first deduped `create_record` plans, capped by a per-profile windowed meter (records + spend); owner-stamped via `acquire.assign`/`--assign-owner` (never born ownerless); `--source linkedin --list <id>` reads a HeyReach lead list (Phase 1 discovery, read-only — never sends); never auto-writes |
 | `market init\|capture\|classify\|worksheet\|observe\|fronts\|axes\|overlay\|scale\|report\|refresh` | Competitive category map; evidence quotes verified verbatim against stored captures |
 | `schedule add\|list\|remove\|enable\|disable\|run\|install\|uninstall\|status` | Horizontal cron; read/plan-side allowlist only — scheduling NEVER auto-approves |
 | `report` | Client-ready audit deliverable (markdown or self-contained HTML) |
@@ -85,6 +86,6 @@ Tools over stdio: `fullstackgtm_audit` (read-only), `fullstackgtm_rules`,
 
 ## Going deeper
 
-- [llms.txt](https://github.com/fullstackgtm/core/blob/main/llms.txt) — the full invariant map per layer (calls, market, write verbs, enrich, schedule)
+- [llms.txt](https://github.com/fullstackgtm/core/blob/main/llms.txt) — the full invariant map per layer (calls, market, write verbs, enrich, schedule, engagement/health)
 - [INSTALL_FOR_AGENTS.md](https://github.com/fullstackgtm/core/blob/main/INSTALL_FOR_AGENTS.md) — deterministic install-and-verify with expected outputs
 - [docs/api.md](https://github.com/fullstackgtm/core/blob/main/docs/api.md) — semver-covered surfaces: canonical model, rule interface, plan/apply contract, connectors, config, CLI, MCP

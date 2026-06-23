@@ -78,6 +78,9 @@ provider  ──fetchSnapshot()──►  CanonicalGtmSnapshot
   translation, prospect fit scoring, and the agent-driven interview spec.
 - `acquireMeter.ts` — per-profile windowed budget (records + spend) for acquire.
 - `acquireSeen.ts` — cross-run "seen" cache so re-runs don't re-pay for dupes.
+- `assign.ts` — `AssignmentPolicy` (fixed / round-robin / territory /
+  account-owner): the pure owner-routing rule `buildAcquirePlan` stamps onto new
+  leads (never born ownerless) and `reassign --assign-unowned` reuses to backfill.
 - `connectors/prospectSources.ts` — API prospect sources (Explorium discovery,
   pipe0 work-email waterfall, pipe0/Crustdata search) + the pre-email dedup keys.
 

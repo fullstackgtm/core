@@ -128,6 +128,7 @@ fullstackgtm bulk-update deal --where "stage=closedwon" --where "amount:empty" \
   --set amount=from:account.annualrevenue --save     # per-record derived values; empty sources skipped, never guessed
 fullstackgtm dedupe account --key domain --keep richest --save   # one merge_records op per duplicate group
 fullstackgtm reassign --from 411 --to 902 --except-deal-stage closing --save   # ownership handoff playbook
+fullstackgtm reassign --assign-unowned --to 902 --save          # claim every ownerless record for an owner
 fullstackgtm fix --rule missing-deal-owner --provider hubspot --yes  # audit one rule → suggest → approve → apply, one command
 ```
 
@@ -193,6 +194,17 @@ The **ICP** (`icp.json`) is the single targeting artifact: it generates each pro
 - Two more checkpoints stay precise: the email-level match at plan build, and **resolve-first at apply** (re-checks the live CRM, never double-creates, never charges the meter).
 
 Every run is **metered**: a per-profile budget caps both record count and provider spend (per-day + per-month, whichever binds first), charged only for creates that actually land. `enrich acquire` runs with just an `icp.json` and a `login` — sensible defaults for budget, provider, and create-mapping ship in the box.
+
+**Discovery sources** are zero-config presets behind `--source`: `explorium` and `pipe0` run ICP-driven people search, while `linkedin` (Phase 1 — discovery + dry-run) reads a pre-built **HeyReach** lead list:
+
+```bash
+echo "$HEYREACH_API_KEY" | fullstackgtm login heyreach        # or set HEYREACH_API_KEY
+fullstackgtm enrich acquire --source linkedin --list <listId> --provider hubspot   # score → dedup → dry-run diff
+```
+
+LinkedIn is just another discovery source on the same scored → deduped → metered → dry-run→approve→apply spine; the LinkedIn profile URL is the match key and the list costs `$0`/record. **It never sends** — connect/message operations are out of scope for Phase 1, so without `--save` there is zero send/ToS exposure.
+
+**Leads are never born ownerless.** An `acquire.assign` policy stamps an owner onto every created lead at create time (mapped to HubSpot `hubspot_owner_id`), routed by one of four strategies — `fixed`, `round-robin` (distributed deterministically, no rotation state to drift), `territory` (by geo / industry / size / department / title), or `account-owner` (inherit the matched company's owner). With no policy and a single-owner portal, acquire defaults every lead to that owner (or pass `--assign-owner <id>`); with multiple owners and no policy it warns and leaves them unassigned rather than guess. To clear *existing* ownerless records, `reassign --assign-unowned --to <ownerId>` applies the same intent as a backfill.
 
 ## Schedules: declare a cadence once, keep the governance contract under automation
 
@@ -270,6 +282,8 @@ fullstackgtm login --via https://gtm.yourco.com
 ```
 
 An admin connects HubSpot **once** in the hosted dashboard (the org's OAuth tokens live encrypted in the deployment). Pairing a CLI is a device-flow handshake: the CLI prints a code, an admin or manager approves it in the dashboard, and the CLI receives a long-lived broker token (stored hashed server-side, revocable per CLI). From then on, every provider command silently exchanges the broker token for a short-lived CRM access token minted from the org's stored sync credentials — and inherits the org's field mappings. No one pastes CRM tokens; revoking a laptop is one row.
+
+**Run observability (paired CLIs).** Once paired, each command best-effort reports a run record — command, status (`success`/`partial`/`error`), duration, headline counts (e.g. ops emitted, leads created, est. cost), and structured events (plan saved, meter charged) — to the deployment's **run timeline** in the dashboard. It's opt-in by pairing (an unpaired CLI sends nothing), a 4-second-capped POST that swallows every error, and never changes the command's exit code. Setup/inspection verbs (`login`, `doctor`, `help`, `--version`) are skipped.
 
 ### Individuals: no deployment needed
 

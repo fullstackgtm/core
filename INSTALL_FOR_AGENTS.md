@@ -69,6 +69,14 @@ the environment, or have the human run `echo "$KEY" | fullstackgtm login apollo`
 once. Without it, `enrich ingest <file> --source clay` still stages push-style
 data keyless.
 
+`enrich acquire` differs from `append`/`refresh`: instead of filling blanks on
+existing records it creates net-new, ICP-targeted leads via governed
+`create_record` plans (resolve-first dedupe re-checks the key at apply, never
+double-creates) and is capped by a per-profile windowed meter bounding record
+count and provider spend per day and per month. It still flows through
+dry-run → approve → apply and never auto-writes — expect it to refuse rather
+than silently exceed the meter.
+
 Provider prerequisites (what the human must create, and which scopes) are in
 the README's **"Connect your CRM"** section: HubSpot needs a private app with
 four `crm.objects.*.read` scopes (plus write scopes only for `apply`);

@@ -68,6 +68,14 @@ export type CreateRecordPayload = {
   source: string;
   estCostUsd?: number;
   associateCompanyName?: string;
+  /**
+   * Owner to stamp on the new record (canonical owner id). The connector maps
+   * it to the CRM's owner property (HubSpot `hubspot_owner_id`) at create time
+   * so a lead is never born ownerless. Absent = leave unassigned.
+   */
+  ownerId?: string;
+  /** Audit label for how the owner was chosen (e.g. "fixed", "territory:0"). */
+  assignedBy?: string;
 };
 
 export type AuditFindingSeverity = "info" | "warning" | "critical";

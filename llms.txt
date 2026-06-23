@@ -76,7 +76,10 @@ identity key — merge with `dedupe` instead. `dedupe <object> --key
 deterministic survivor (`--keep richest|oldest`); merges are irreversible and
 stay low-confidence-capped at approval. `reassign --from <owner> --to
 <owner>` = ownership handoff plans per object type; `--except-deal-stage`
-also excludes records whose account has an open deal in that stage. `fix
+also excludes records whose account has an open deal in that stage;
+`reassign --assign-unowned --to <id>` instead claims every ownerless record
+(`ownerId:empty`) for an owner — the backfill twin of acquire's create-time
+assignment. `fix
 --rule <id>` = audit one rule → suggest → approve at the confidence bar →
 apply only with `--yes`. All four produce plans; none writes outside
 approve → apply.
@@ -95,6 +98,24 @@ where the source value changed (beforeValue = current CRM value → apply-time
 CAS). Conflict policy MVP is `never`; `system-only`/`always` are phase 2 and
 refused explicitly. Run store (checkpoint + staleness ledger + `status`) is
 profile-scoped under `<home>/enrich/runs`. No cron — scheduling is horizontal.
+`acquire` is the one enrich verb that creates net-new records instead of
+filling blanks: it discovers ICP-targeted people, resolves work email, and
+proposes governed `create_record` ops through the same dry-run → approve →
+apply gate — resolve-first dedupe re-checks the key at apply time so it never
+double-creates. A per-profile windowed meter (`acquireMeter.ts`) caps both
+record count and provider spend (per-day + per-month, whichever binds first);
+sources come from staged ingest lists. Acquired leads are never born ownerless:
+an `acquire.assign` policy (`fixed`/`round-robin`/`territory`/`account-owner`,
+or `--assign-owner <id>`) stamps an owner into every `create_record`, gated by
+the snapshot's active owners (unknown/inactive owner → unassigned, never a bad
+owner); with multiple owners and no policy it warns and leaves leads unassigned.
+Discovery sources are presets behind `--source`: `explorium`/`pipe0` (ICP-driven
+people search) and `linkedin` (Phase 1, discovery + dry-run) which reads a
+pre-built HeyReach lead list (`--list <id>` or `acquire.discovery.linkedin.listId`,
+match key = LinkedIn URL, $0/record, `login heyreach`/`HEYREACH_API_KEY`) via the
+injectable `LinkedInProvider` (default HeyReach; `FakeLinkedInProvider` for tests).
+LinkedIn is read-only — Phase 1 has no `linkedin_connect`/`linkedin_message` ops
+and no webhook ingestion (Phase 2). Never auto-writes.
 
 ## Key invariants (schedule)
 

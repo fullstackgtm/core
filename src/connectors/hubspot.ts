@@ -608,6 +608,11 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
     }
 
     const properties: Record<string, string> = { ...payload.properties };
+    // Stamp ownership at create time so the lead is never born ownerless. The
+    // canonical ownerId maps to HubSpot's standard owner property.
+    if (payload.ownerId && !properties.hubspot_owner_id) {
+      properties.hubspot_owner_id = String(payload.ownerId);
+    }
     let created;
     try {
       created = await request(`/crm/v3/objects/${objectPath}`, {
