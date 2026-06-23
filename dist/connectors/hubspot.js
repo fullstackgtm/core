@@ -785,7 +785,16 @@ export function createHubspotConnector(options) {
         const defaults = HUBSPOT_DEFAULT_FIELD_MAPPINGS[mappingType] ?? {};
         const property = mappedField(mappings, mappingType, field, defaults[field] ?? field);
         const data = await request(`/crm/v3/objects/${objectPath}/${encodeURIComponent(objectId)}?properties=${encodeURIComponent(property)}`);
-        return data?.properties?.[property] ?? null;
+        const value = data?.properties?.[property] ?? null;
+        // fetchSnapshot normalizes closeDate to a date with `?.split("T")[0]`, so the
+        // value baked into an op's beforeValue is date-only ("2026-03-07"). The
+        // single-object read here returns HubSpot's raw "2026-03-07T00:00:00Z", which
+        // made compare-and-set see a spurious drift and refuse every date-field write.
+        // Mirror the snapshot's normalization so the comparison is apples-to-apples.
+        if (field === "closeDate" && typeof value === "string") {
+            return value.split("T")[0];
+        }
+        return value;
     }
     return {
         provider: "hubspot",

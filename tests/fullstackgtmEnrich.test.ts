@@ -98,6 +98,10 @@ test("enrich config: strict validation rejects bad configs with named problems",
     () => parseEnrichConfig(JSON.stringify({ ...base, sources: { ...base.sources, zoominfo: { kind: "api" } } })),
     /api source "zoominfo" is not supported yet/,
   );
+  // linkedin is a supported api source (explicit config enables size + email-chaining)
+  assert.doesNotThrow(() =>
+    parseEnrichConfig(JSON.stringify({ ...base, sources: { ...base.sources, linkedin: { kind: "api" } } })),
+  );
   assert.throws(
     () => parseEnrichConfig(JSON.stringify({ ...base, sources: { apollo: { kind: "webhook" } } })),
     /kind must be "api" or "ingest"/,

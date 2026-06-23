@@ -144,6 +144,73 @@ export async function pipe0ResolveWorkEmails(opts) {
 function personKey(name, company) {
     return `${(name ?? "").trim().toLowerCase()}|${(company ?? "").trim().toLowerCase()}`;
 }
+/** Bare registrable host from a URL or domain string ("https://www.x.com/a" → "x.com"). */
+export function hostFromUrl(url) {
+    if (!url || !url.trim())
+        return undefined;
+    try {
+        const u = url.includes("://") ? url : `https://${url}`;
+        const host = new URL(u).hostname.replace(/^www\./, "");
+        return host || undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+/**
+ * Fill `companyDomain` for prospects that have a company NAME but no domain,
+ * using pipe0's `company:identity@1` pipe (name → website URL). The work-email
+ * waterfall requires a domain — a LinkedIn/HeyReach list supplies only names, so
+ * without this step every resolution fails. Resolves each unique company once
+ * (companies repeat across a list); leaves a prospect untouched when the domain
+ * can't be found, so the waterfall simply skips it rather than guessing.
+ */
+export async function pipe0ResolveCompanyDomains(opts) {
+    const fetchImpl = opts.fetchImpl ?? fetch;
+    const base = (opts.apiBaseUrl ?? "https://api.pipe0.com").replace(/\/$/, "");
+    const chunkSize = Math.max(1, opts.chunkSize ?? 5);
+    const uniqueNames = [
+        ...new Set(opts.prospects
+            .filter((p) => !p.companyDomain && p.companyName)
+            .map((p) => p.companyName.trim())
+            .filter(Boolean)),
+    ];
+    if (uniqueNames.length === 0)
+        return opts.prospects;
+    const domainByName = new Map();
+    for (let i = 0; i < uniqueNames.length; i += chunkSize) {
+        const chunk = uniqueNames.slice(i, i + chunkSize);
+        try {
+            const response = await fetchImpl(`${base}/v1/pipes/run/sync`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    pipes: [{ pipe_id: "company:identity@1" }],
+                    input: chunk.map((company_name) => ({ company_name })),
+                }),
+            });
+            if (!response.ok)
+                continue;
+            const body = (await response.json());
+            for (const recordId of body.order ?? []) {
+                const fields = body.records?.[recordId]?.fields ?? {};
+                const name = fieldValue(fields.company_name) ?? fieldValue(fields.cleaned_company_name);
+                const domain = hostFromUrl(fieldValue(fields.company_website_url));
+                if (name && domain)
+                    domainByName.set(name.trim().toLowerCase(), domain);
+            }
+        }
+        catch {
+            continue;
+        }
+    }
+    return opts.prospects.map((p) => {
+        if (p.companyDomain || !p.companyName)
+            return p;
+        const domain = domainByName.get(p.companyName.trim().toLowerCase());
+        return domain ? { ...p, companyDomain: domain } : p;
+    });
+}
 function fieldValue(field) {
     const v = field?.value;
     return typeof v === "string" && v.trim() ? v : undefined;

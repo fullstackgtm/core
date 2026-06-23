@@ -161,11 +161,15 @@ export type IcpFit = { score: number; reasons: string[] };
  * Firmographics aren't re-scored here — discovery already filtered on them.
  */
 export function scoreProspectAgainstIcp(
-  prospect: { jobTitle?: string; jobLevel?: string; jobDepartment?: string },
+  prospect: { jobTitle?: string; jobLevel?: string; jobDepartment?: string; headline?: string },
   icp: Icp,
 ): IcpFit {
   const reasons: string[] = [];
-  const title = (prospect.jobTitle ?? "").toLowerCase();
+  // Match title keywords across BOTH the formal title and the headline: on
+  // LinkedIn-sourced prospects the role signal often lives only in the headline
+  // (e.g. position "Founder" but headline "… | RevOps | …"), so scoring on the
+  // title alone would miss genuine in-persona leads.
+  const title = `${prospect.jobTitle ?? ""} ${prospect.headline ?? ""}`.trim().toLowerCase();
   const keywords = (icp.persona.titleKeywords ?? []).map((k) => k.toLowerCase());
   const levels = (icp.persona.jobLevels ?? []).map((l) => l.toLowerCase());
   const depts = (icp.persona.departments ?? []).map((d) => d.toLowerCase());

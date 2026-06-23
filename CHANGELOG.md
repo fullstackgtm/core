@@ -7,6 +7,32 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
 
 ## [Unreleased]
 
+## [0.39.0] — 2026-06-23
+
+### Added
+
+- **LinkedIn acquire: configurable + email-resolving.** `linkedin` is now a
+  first-class `SUPPORTED_API_SOURCES` entry, so an explicit `enrich.config.json`
+  can drive it (set discovery `size` to read a whole list, not the preset's 25).
+  Email resolution is no longer gated on the dedupe key being `email`: any source
+  can opt in with `acquire.discovery.<src>.resolveEmailsWith: "pipe0"`, so a
+  LinkedIn source (which keys on the profile URL) can still resolve real work
+  emails (name + company → pipe0 waterfall) and create outreach-ready contacts.
+- **Company-domain resolution for email enrichment** (`pipe0ResolveCompanyDomains`,
+  `hostFromUrl`). The work-email waterfall requires a company domain, but a
+  LinkedIn/HeyReach list supplies only company names — so the email step now
+  first resolves each unique company's domain via pipe0 `company:identity@1`
+  (name → website → bare host) before the waterfall. Unresolved companies are
+  left untouched (never a guessed domain), and the lookup is deduped per company.
+
+### Changed
+
+- **ICP scoring reads the LinkedIn headline, not just the formal title.**
+  `scoreProspectAgainstIcp` now matches title keywords across `jobTitle` *and*
+  `headline`. On LinkedIn-sourced prospects the role signal often lives only in
+  the headline (position "Founder", headline "… | RevOps | …"), which scoring on
+  the title alone would miss. `Prospect` gains a `headline` field.
+
 ## [0.38.1] — 2026-06-23
 
 ### Fixed

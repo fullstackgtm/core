@@ -370,3 +370,82 @@ test("salesforce merge surfaces a SOAP fault / rejection as failed (not a silent
   assert.equal(r2.status, "failed");
   assert.match(r2.detail!, /entity is locked/);
 });
+
+test("salesforce create_record creates a net-new contact on a confirmed miss (resolve-first + owner stamp)", async () => {
+  const calls: { url: string; method?: string; body?: string }[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, method: init?.method, body: init?.body as string | undefined });
+    if (init?.method === "POST") {
+      return new Response(JSON.stringify({ id: "003NEW", success: true }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    // SOQL search → no existing contact, so the create proceeds.
+    return new Response(JSON.stringify({ totalSize: 0, done: true, records: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const connector = createSalesforceConnector({
+    getConnection: () => ({ accessToken: "t", instanceUrl: "https://x.my.salesforce.com" }),
+    fetchImpl,
+  });
+  const result = await connector.applyOperation!({
+    id: "op_acq",
+    objectType: "contact",
+    operation: "create_record",
+    objectId: "create:a@b.com",
+    beforeValue: null,
+    afterValue: {
+      properties: { FirstName: "A", LastName: "B", Email: "a@b.com" },
+      matchKey: "email",
+      matchValue: "a@b.com",
+      source: "test",
+      ownerId: "005OWNER",
+    },
+  } as never);
+
+  assert.equal(result.status, "applied");
+  assert.equal((result.providerData as { id: string }).id, "003NEW");
+  // resolve-first searched Contact by the mapped Email field before creating.
+  const search = calls.find((c) => /query\?q=/.test(c.url));
+  assert.match(decodeURIComponent(search!.url), /FROM Contact WHERE Email = 'a@b\.com'/);
+  // created with the configured fields + a stamped owner (lead never born ownerless).
+  const post = calls.find((c) => c.method === "POST" && /sobjects\/Contact/.test(c.url));
+  const body = JSON.parse(post!.body as string);
+  assert.equal(body.Email, "a@b.com");
+  assert.equal(body.OwnerId, "005OWNER");
+});
+
+test("salesforce create_record declines to create when a contact already matches (resolve-first)", async () => {
+  const calls: { method?: string }[] = [];
+  const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ method: init?.method });
+    // SOQL search → an existing contact matches, so resolve-first must decline.
+    return new Response(JSON.stringify({ totalSize: 1, done: true, records: [{ Id: "003EXIST" }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const connector = createSalesforceConnector({
+    getConnection: () => ({ accessToken: "t", instanceUrl: "https://x.my.salesforce.com" }),
+    fetchImpl,
+  });
+  const result = await connector.applyOperation!({
+    id: "op_acq",
+    objectType: "contact",
+    operation: "create_record",
+    objectId: "create:a@b.com",
+    beforeValue: null,
+    afterValue: { properties: { Email: "a@b.com" }, matchKey: "email", matchValue: "a@b.com", source: "test" },
+  } as never);
+
+  assert.equal(result.status, "skipped");
+  assert.match(result.detail!, /already exists/);
+  assert.equal((result.providerData as { id: string }).id, "003EXIST");
+  assert.equal(calls.some((c) => c.method === "POST"), false); // never created
+});

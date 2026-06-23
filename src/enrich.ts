@@ -139,7 +139,7 @@ const MATCH_KEYS: Record<EnrichObjectType, string[]> = {
 };
 
 /** API source ids the MVP can pull from. */
-export const SUPPORTED_API_SOURCES = ["apollo", "explorium", "pipe0"];
+export const SUPPORTED_API_SOURCES = ["apollo", "explorium", "pipe0", "linkedin"];
 
 /**
  * Canonical fields enrich may target, plus the HubSpot property spellings the

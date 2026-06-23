@@ -25,6 +25,9 @@ export function linkedInProspectToProspect(lp) {
         fullName: lp.fullName,
         // Title drives ICP scoring; fall back to the headline when no title is set.
         jobTitle: lp.jobTitle ?? lp.headline,
+        // Keep the headline distinct too: the scorer matches keywords across both,
+        // so a role named only in the headline (not the position) still scores.
+        headline: lp.headline,
         companyName: lp.company,
         linkedin: lp.profileUrl || undefined,
         email: lp.email,

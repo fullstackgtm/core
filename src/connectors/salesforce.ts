@@ -12,6 +12,7 @@ import type {
   CanonicalDeal,
   CanonicalGtmSnapshot,
   CanonicalUser,
+  CreateRecordPayload,
   GtmConnector,
   GtmObjectType,
   PatchOperation,
@@ -72,6 +73,37 @@ export function createSalesforceConnector(
   const mappings = options.fieldMappings;
   // create:<Name> dedup within one connector lifetime (one apply run).
   const createdAccountsByName = new Map<string, string>();
+  // create_record contact dedup (keyed by matchKey:matchValue), same lifetime.
+  const createdContactsByMatch = new Map<string, string>();
+
+  // Resolve an Account by exact name: a unique existing match is reused, a
+  // confirmed miss is created, and an ambiguous name (>1 match) is refused.
+  // Caches within the run so the same name is never created twice — shared by
+  // `link_record`'s create:<Name> path and `create_record`'s company linking.
+  async function resolveOrCreateAccountByName(
+    name: string,
+  ): Promise<{ id: string; createdNew: boolean } | { ambiguous: number }> {
+    const nameKey = name.toLowerCase();
+    const cached = createdAccountsByName.get(nameKey);
+    if (cached) return { id: cached, createdNew: false };
+    const soqlName = name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    const matches = await query(`SELECT Id FROM Account WHERE Name = '${soqlName}' LIMIT 3`);
+    if (matches.length > 1) return { ambiguous: matches.length };
+    let id: string;
+    let createdNew = false;
+    if (matches.length === 1) {
+      id = String(matches[0].Id);
+    } else {
+      const created = await request(`/services/data/${apiVersion}/sobjects/Account`, {
+        method: "POST",
+        body: JSON.stringify({ Name: name }),
+      });
+      id = String(created.id);
+      createdNew = true;
+    }
+    createdAccountsByName.set(nameKey, id);
+    return { id, createdNew };
+  }
 
   async function request(path: string, init: RequestInit = {}): Promise<any> {
     const connection = await options.getConnection();
@@ -484,6 +516,87 @@ export function createSalesforceConnector(
     };
   }
 
+  // Resolve-first net-new lead creation (the `enrich acquire` path). Re-resolves
+  // on matchKey/matchValue at apply time — search is the source of truth — and
+  // creates only on a confirmed miss, so concurrent writers never get duplicated.
+  // Mirrors the HubSpot connector's createRecord contract.
+  async function createRecord(operation: PatchOperation): Promise<PatchOperationResult> {
+    const payload = operation.afterValue as CreateRecordPayload | undefined;
+    if (!payload || typeof payload !== "object" || !payload.properties) {
+      return { operationId: operation.id, status: "skipped", detail: "create_record needs a CreateRecordPayload afterValue." };
+    }
+    if (operation.objectType !== "contact" && operation.objectType !== "account") {
+      return { operationId: operation.id, status: "skipped", detail: "create_record supports contacts and accounts." };
+    }
+    const matchValue = String(payload.matchValue ?? "").trim();
+    if (!matchValue) {
+      return { operationId: operation.id, status: "skipped", detail: "create_record needs a non-empty matchValue to resolve-first." };
+    }
+
+    if (operation.objectType === "account") {
+      const resolved = await resolveOrCreateAccountByName(matchValue);
+      if ("ambiguous" in resolved) {
+        return { operationId: operation.id, status: "skipped", detail: `create_record: ambiguous — ${resolved.ambiguous} accounts named "${matchValue}". Not creating.` };
+      }
+      return { operationId: operation.id, status: "applied", detail: `Resolved/created account "${matchValue}" (${resolved.id}).`, providerData: { id: resolved.id, created: resolved.createdNew } };
+    }
+
+    // contact — resolve-first on the dedupe key (email by default). matchKey is
+    // canonical; translate it to the Salesforce field before the SOQL search.
+    const matchKey = payload.matchKey || "email";
+    const searchField = mappedField(mappings, "contacts", matchKey, SALESFORCE_DEFAULT_FIELD_MAPPINGS.contacts[matchKey] ?? matchKey);
+    const matchKeyLower = `${matchKey}:${matchValue.toLowerCase()}`;
+    if (createdContactsByMatch.has(matchKeyLower)) {
+      return { operationId: operation.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already created earlier in this run; not duplicating.`, providerData: { id: createdContactsByMatch.get(matchKeyLower), existing: true } };
+    }
+    const soqlValue = matchValue.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    const existing = await query(`SELECT Id FROM Contact WHERE ${searchField} = '${soqlValue}' LIMIT 5`);
+    if (existing.length > 0) {
+      const existingId = String(existing[0].Id);
+      createdContactsByMatch.set(matchKeyLower, existingId);
+      return { operationId: operation.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already exists (${existing.map((r) => String(r.Id)).join(", ")}); resolve-first declined to create.`, providerData: { id: existingId, existing: true } };
+    }
+
+    const fields: Record<string, string> = { ...payload.properties };
+    // Stamp ownership at create time so the lead is never born ownerless. The
+    // canonical ownerId maps to Salesforce's OwnerId.
+    if (payload.ownerId) {
+      const ownerField = mappedField(mappings, "contacts", "ownerId", SALESFORCE_DEFAULT_FIELD_MAPPINGS.contacts.ownerId ?? "OwnerId");
+      if (!fields[ownerField]) fields[ownerField] = String(payload.ownerId);
+    }
+    const created = await request(`/services/data/${apiVersion}/sobjects/Contact`, {
+      method: "POST",
+      body: JSON.stringify(fields),
+    });
+    const contactId = String(created.id);
+    createdContactsByMatch.set(matchKeyLower, contactId);
+
+    let companyNote = "";
+    if (payload.associateCompanyName) {
+      try {
+        const resolved = await resolveOrCreateAccountByName(payload.associateCompanyName);
+        if ("ambiguous" in resolved) {
+          companyNote = ` Account "${payload.associateCompanyName}" was ambiguous; left unlinked.`;
+        } else {
+          await request(`/services/data/${apiVersion}/sobjects/Contact/${encodeURIComponent(contactId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ AccountId: resolved.id }),
+          });
+          companyNote = ` Linked to account "${payload.associateCompanyName}" (${resolved.id}).`;
+        }
+      } catch (error) {
+        // Association is best-effort — the contact create already succeeded.
+        companyNote = ` (account link failed: ${error instanceof Error ? error.message : String(error)})`;
+      }
+    }
+    return {
+      operationId: operation.id,
+      status: "applied",
+      detail: `Created contact ${matchKey}=${matchValue} (${contactId}).${companyNote}`,
+      providerData: { id: contactId, created: true },
+    };
+  }
+
   async function applyOperation(operation: PatchOperation): Promise<PatchOperationResult> {
     try {
       switch (operation.operation) {
@@ -501,33 +614,15 @@ export function createSalesforceConnector(
             if (!name) {
               return { operationId: operation.id, status: "skipped", detail: "create: needs an account name (create:<Name>)." };
             }
-            const nameKey = name.toLowerCase();
-            let accountId = createdAccountsByName.get(nameKey);
-            let createdNew = false;
-            if (!accountId) {
-              const soqlName = name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-              const matches = await query(
-                `SELECT Id FROM Account WHERE Name = '${soqlName}' LIMIT 3`,
-              );
-              if (matches.length > 1) {
-                return {
-                  operationId: operation.id,
-                  status: "skipped",
-                  detail: `create:${name} is ambiguous — ${matches.length} accounts already named "${name}". Link an explicit account id instead.`,
-                };
-              }
-              if (matches.length === 1) {
-                accountId = String(matches[0].Id);
-              } else {
-                const created = await request(`/services/data/${apiVersion}/sobjects/Account`, {
-                  method: "POST",
-                  body: JSON.stringify({ Name: name }),
-                });
-                accountId = String(created.id);
-                createdNew = true;
-              }
-              createdAccountsByName.set(nameKey, accountId);
+            const resolved = await resolveOrCreateAccountByName(name);
+            if ("ambiguous" in resolved) {
+              return {
+                operationId: operation.id,
+                status: "skipped",
+                detail: `create:${name} is ambiguous — ${resolved.ambiguous} accounts already named "${name}". Link an explicit account id instead.`,
+              };
             }
+            const { id: accountId, createdNew } = resolved;
             const result = await setField({ ...operation, operation: "set_field", afterValue: accountId });
             return result.status === "applied"
               ? {
@@ -547,6 +642,8 @@ export function createSalesforceConnector(
           return await mergeRecords(operation);
         case "archive_record":
           return await archiveRecord(operation);
+        case "create_record":
+          return await createRecord(operation);
         default:
           return {
             operationId: operation.id,
