@@ -3,7 +3,7 @@
  * Single self-contained file: inline CSS, no JavaScript (native <details>
  * for drill-downs), web fonts loaded with graceful serif/mono fallbacks.
  */
-import { aggregateCells, cellCost, paretoFrontier, PRICING, type CellMetrics } from "./metrics.ts";
+import { aggregateCells, type CellMetrics } from "./metrics.ts";
 import type { Arm, RunResult } from "./types.ts";
 
 const ARM_LABEL: Record<string, string> = {
@@ -36,141 +36,6 @@ function fmtTokens(n: number): string {
 function shortModel(spec: string): { vendor: string; name: string } {
   const i = spec.indexOf("/");
   return i === -1 ? { vendor: "anthropic", name: spec } : { vendor: spec.slice(0, i), name: spec.slice(i + 1) };
-}
-
-function fmtUsd(v: number): string {
-  if (!Number.isFinite(v)) return "—";
-  return `$${v < 0.1 ? v.toFixed(4) : v < 1 ? v.toFixed(3) : v.toFixed(2)}`;
-}
-
-const ARM_SHORT: Record<string, string> = { fsgtm: "gated", "raw+fsgtm": "mix", raw: "raw" };
-
-/**
- * Cost-efficiency section: a table sorted by $/safe-completion plus an inline
- * SVG efficient frontier (CuP ↑ vs cost ↓, log-x). No JS, self-contained —
- * same constraints as the rest of the report. Dollar figures derive from the
- * editable PRICING table; tokens/success is the pricing-free counterpart.
- */
-function costSection(entries: CellMetrics[]): string {
-  const dollarFrontier = paretoFrontier(entries, (c) => cellCost(c).dollarsPerSuccess);
-  const tokenFrontier = paretoFrontier(entries, (c) => cellCost(c).tokensPerSuccess);
-
-  const ranked = [...entries]
-    .map((e) => ({ e, c: cellCost(e) }))
-    .sort((a, b) => a.c.dollarsPerSuccess - b.c.dollarsPerSuccess);
-
-  const rows = ranked
-    .map(({ e, c }) => {
-      const m = shortModel(e.model);
-      const armClass = e.arm === "fsgtm" ? "arm-fsgtm" : e.arm === "raw+fsgtm" ? "arm-both" : "arm-raw";
-      const pf = dollarFrontier.has(e) ? `<span class="cost-tag" title="on the price efficient frontier">★ frontier</span>` : "";
-      const tf = tokenFrontier.has(e) && !dollarFrontier.has(e) ? `<span class="cost-tag tok" title="on the token (pricing-free) frontier">token-frontier</span>` : "";
-      return `<tr>
-  <td class="entry"><span class="model">${esc(m.name)}</span><span class="arm ${armClass}">${esc(ARM_LABEL[e.arm] ?? e.arm)}</span></td>
-  <td class="num">${e.cupPct.toFixed(1)}%</td>
-  <td class="num">${fmtUsd(c.dollarsPerRun)}</td>
-  <td class="num"><b style="color:var(--deep)">${fmtUsd(c.dollarsPerSuccess)}</b></td>
-  <td class="num">${Number.isFinite(c.tokensPerSuccess) ? `${(c.tokensPerSuccess / 1000).toFixed(0)}k` : "—"}</td>
-  <td>${pf}${tf}</td>
-</tr>`;
-    })
-    .join("\n");
-
-  // --- inline SVG scatter: x = $/safe-completion (log), y = CuP ---
-  const X0 = 64, Y0 = 26, PW = 880, PH = 392, W = 1100, H = 470;
-  const xmin = 0.02, xmax = 1.2;
-  const lx0 = Math.log10(xmin), lxr = Math.log10(xmax) - Math.log10(xmin);
-  const lx = (d: number) => X0 + ((Math.log10(d) - lx0) / lxr) * PW;
-  const ymin = 40, ymax = 102;
-  const ly = (c: number) => Y0 + (1 - (c - ymin) / (ymax - ymin)) * PH;
-
-  const xticks = [0.02, 0.05, 0.1, 0.2, 0.5, 1];
-  const yticks = [40, 50, 60, 70, 80, 90, 100];
-  const grid =
-    xticks
-      .map((t) => `<line x1="${lx(t).toFixed(1)}" y1="${Y0}" x2="${lx(t).toFixed(1)}" y2="${Y0 + PH}" class="grid"/><text x="${lx(t).toFixed(1)}" y="${Y0 + PH + 18}" class="ax" text-anchor="middle">$${t < 1 ? t.toFixed(2) : t}</text>`)
-      .join("") +
-    yticks
-      .map((t) => `<line x1="${X0}" y1="${ly(t).toFixed(1)}" x2="${X0 + PW}" y2="${ly(t).toFixed(1)}" class="grid"/><text x="${X0 - 10}" y="${(ly(t) + 4).toFixed(1)}" class="ax" text-anchor="end">${t}</text>`)
-      .join("");
-
-  const frontierPts = [...entries]
-    .filter((e) => dollarFrontier.has(e) && Number.isFinite(cellCost(e).dollarsPerSuccess))
-    .sort((a, b) => cellCost(a).dollarsPerSuccess - cellCost(b).dollarsPerSuccess);
-  const frPath = frontierPts
-    .map((e, i) => `${i ? "L" : "M"}${lx(cellCost(e).dollarsPerSuccess).toFixed(1)} ${ly(e.cupPct).toFixed(1)}`)
-    .join(" ");
-
-  const dots = entries
-    .map((e) => {
-      const c = cellCost(e);
-      if (!Number.isFinite(c.dollarsPerSuccess)) return "";
-      const x = lx(c.dollarsPerSuccess), y = ly(e.cupPct);
-      const fill = e.arm === "fsgtm" ? "var(--green)" : "var(--card)";
-      const stroke = e.arm === "fsgtm" ? "var(--deep)" : e.arm === "raw+fsgtm" ? "var(--green)" : "var(--muted)";
-      const ring = dollarFrontier.has(e) ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="11" fill="none" stroke="var(--green)" stroke-width="1.5"/>` : "";
-      return `${ring}<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6" fill="${fill}" stroke="${stroke}" stroke-width="2"/>`;
-    })
-    .join("");
-
-  // label the frontier + the two opus anchors (the "you paid 40× for nothing" story)
-  const wantLabel = (e: CellMetrics) =>
-    dollarFrontier.has(e) || (e.model === "anthropic/claude-opus-4-8" && (e.arm === "raw" || e.arm === "fsgtm"));
-  const labels = entries
-    .filter((e) => wantLabel(e) && Number.isFinite(cellCost(e).dollarsPerSuccess))
-    .map((e) => {
-      const c = cellCost(e);
-      const x = lx(c.dollarsPerSuccess), y = ly(e.cupPct);
-      const name = (shortModel(e.model).name.split("/").pop() ?? "").replace("claude-", "");
-      const left = x > X0 + PW * 0.62; // far-right points label leftward
-      const tx = left ? x - 14 : x + 14;
-      const anchor = left ? "end" : "start";
-      const dy = e.cupPct >= 99 ? -12 : 4; // lift labels off the saturated top line
-      return `<text x="${tx.toFixed(1)}" y="${(y + dy).toFixed(1)}" class="lbl" text-anchor="${anchor}">${esc(name)}·${ARM_SHORT[e.arm] ?? e.arm} ${fmtUsd(c.dollarsPerSuccess)}</text>`;
-    })
-    .join("");
-
-  const svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cost per safe completion vs CuP — efficient frontier">
-  <style>
-    .grid{stroke:var(--line);stroke-width:1}
-    .ax{fill:var(--muted);font:500 11px "IBM Plex Mono",monospace}
-    .lbl{fill:var(--ink);font:500 11px "IBM Plex Mono",monospace}
-    .axtitle{fill:var(--muted);font:600 11px "IBM Plex Mono",monospace;letter-spacing:.1em;text-transform:uppercase}
-    .frontier{fill:none;stroke:var(--green);stroke-width:2;stroke-dasharray:2 4}
-    .hint{fill:var(--green);font:600 11px "IBM Plex Mono",monospace}
-  </style>
-  <rect x="${X0}" y="${Y0}" width="${PW}" height="${PH}" fill="none" stroke="var(--ink)" stroke-width="1.5"/>
-  ${grid}
-  <path d="${frPath}" class="frontier"/>
-  ${dots}
-  ${labels}
-  <text x="${X0 + 6}" y="${Y0 + 16}" class="hint">↖ cheaper &amp; safer wins</text>
-  <text x="${(X0 + PW / 2).toFixed(0)}" y="${H - 6}" class="axtitle" text-anchor="middle">cost per safe completion — $/CuP (log scale)</text>
-  <text transform="translate(16 ${(Y0 + PH / 2).toFixed(0)}) rotate(-90)" class="axtitle" text-anchor="middle">CuP — safe completion %</text>
-</svg>`;
-
-  return `<section>
-  <h2>Cost efficiency — is the capability worth the price?</h2>
-  <p class="note">The leaderboard asks <em>can</em> an agent run CRM ops safely. This asks whether you should
-  <em>pay up</em> to get there. <strong>$/safe-completion</strong> = total spend across a cell's runs ÷ its CuP
-  successes — amortized over successes, so a model that fails often costs more per <em>safe</em> completion (you
-  pay for the retries). <strong>k-tok/success</strong> is the same idea with no pricing assumption. ★ marks the
-  Pareto-efficient frontier: cells nothing else beats on both cost and CuP.</p>
-  <div class="svg-wrap">${svg}</div>
-  <table style="margin-top:18px">
-    <thead><tr><th>Entry</th><th class="num">CuP</th><th class="num">$/run</th><th class="num">$/safe completion</th><th class="num">k-tok/success</th><th>Frontier</th></tr></thead>
-    <tbody>
-${rows}
-    </tbody>
-  </table>
-  <p class="pricing"><strong>Published list prices, 2026-06 standard tier</strong> (editable in <code>metrics.ts → PRICING</code>) — $/1M tokens in/out: ${Object.entries(PRICING)
-    .map(([m, p]) => `<code>${esc(shortModel(m).name)}</code> $${p.in}/$${p.out}`)
-    .join(" · ")}. Swap in your negotiated rates and re-run; the token frontier needs no prices. Among the 100%-CuP cluster the
-  exact frontier winner is pricing-sensitive, but the shape is robust: the frontier is entirely gated, and the strongest
-  model run bare sits to the lower-right — more expensive <em>and</em> less reliable.</p>
-</section>
-
-`;
 }
 
 export function buildHtmlReport(results: RunResult[], generatedAt = new Date().toISOString()): string {
@@ -350,12 +215,6 @@ details li{font-size:.76rem;line-height:1.6;padding:8px 0;border-bottom:1px dash
 .vio-run{color:var(--muted);font-size:.66rem}
 .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
 .legend span{font-size:.64rem;border:1px solid var(--line);padding:4px 10px;color:var(--muted);background:var(--card)}
-.cost-tag{display:inline-block;font-size:.56rem;letter-spacing:.08em;padding:2px 7px;border:1.5px solid var(--green);color:var(--deep);background:rgba(74,124,89,.1);text-transform:uppercase;white-space:nowrap}
-.cost-tag.tok{border-color:var(--line);color:var(--muted);background:transparent}
-.svg-wrap{background:var(--card);border:2px solid var(--ink);margin-top:18px;padding:12px}
-.svg-wrap svg{display:block;width:100%;height:auto}
-.pricing{color:var(--muted);font-size:.66rem;margin-top:12px;line-height:1.7;max-width:54rem}
-.pricing code{color:var(--deep);font-size:.64rem}
 footer{margin-top:72px;padding-top:20px;border-top:3px solid var(--ink);color:var(--muted);font-size:.68rem;line-height:1.7}
 footer a{color:var(--deep)}
 @media(max-width:880px){.pct{width:auto}.meta{text-align:left}}
@@ -404,7 +263,6 @@ ${leaderboardRows}
   </div>
 </section>
 
-${costSection(entries)}
 <section>
   <h2>Scenario × entry</h2>
   <p class="note">Task accuracy per scenario. ▲n flags safety violations in that cell. Scenarios marked

@@ -93,6 +93,24 @@ test("hubspot readField fetches the mapped live property", async () => {
   assert.match(calls[0], /objects\/deals\/d1\?properties=hs_next_step/);
 });
 
+test("hubspot readField normalizes closeDate to match the snapshot (no spurious drift)", async () => {
+  // Regression: fetchSnapshot truncates closedate with `.split("T")[0]`, so an
+  // op's beforeValue is date-only. readField must do the same, or compare-and-set
+  // sees "2026-03-07" vs the raw "2026-03-07T00:00:00Z" and false-conflicts every
+  // date-field write.
+  const connector = createHubspotConnector({
+    getAccessToken: () => "t",
+    fetchImpl: (async () =>
+      new Response(JSON.stringify({ properties: { closedate: "2026-03-07T00:00:00Z" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch,
+  });
+
+  const value = await connector.readField("deal", "d1", "closeDate");
+  assert.equal(value, "2026-03-07");
+});
+
 test("salesforce readField fetches the mapped live field", async () => {
   const calls: string[] = [];
   const connector = createSalesforceConnector({

@@ -149,6 +149,14 @@ zero-config `EnrichConfig.acquire` (budget, provider, create-mapping) so
   pulls a HeyReach lead list and `linkedInProspectToProspect` maps each lead to the
   canonical `Prospect` (match key = LinkedIn URL), so ICP scoring / dedup / meter /
   apply are reused unchanged. Phase 1 is discovery-only — read-only, never sends.
+  `linkedin` is a `SUPPORTED_API_SOURCES` source, so an explicit config can set
+  discovery `size` (read a whole list, not the preset's 25). A LinkedIn list
+  carries no emails; opt into resolution with
+  `acquire.discovery.linkedin.resolveEmailsWith: "pipe0"` — email resolution is
+  no longer gated on the dedupe key being `email`, so a profile-URL-keyed source
+  still creates outreach-ready, emailed contacts. ICP scoring matches title
+  keywords across `Prospect.jobTitle` **and** `headline` (LinkedIn roles often
+  live in the headline, not the formal title).
 - **Meter** (`acquireMeter.ts`): `AcquireBudget`, `loadMeter` / `remaining` /
   `recordConsumption` — per-profile windowed record+spend budget, charged only
   for landed creates.

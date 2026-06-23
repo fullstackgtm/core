@@ -19,6 +19,9 @@ export type Prospect = {
     lastName?: string;
     fullName?: string;
     jobTitle?: string;
+    /** LinkedIn headline — secondary role signal for ICP scoring (the title
+     *  keyword may live here, not in the formal jobTitle). */
+    headline?: string;
     /** normalized seniority, e.g. "cxo","vp","director" (Explorium job_level_main) */
     jobLevel?: string;
     /** normalized department, e.g. "sales" (Explorium job_department_main) */
@@ -66,6 +69,23 @@ export declare function pipe0ResolveWorkEmails(opts: {
     /** Rows per pipe0 call. Small chunks are resilient to the waterfall's
      *  batch rate-limit (a throttled chunk returns work_email status "failed"
      *  for every row, so one big batch is all-or-nothing). Default 3. */
+    chunkSize?: number;
+}): Promise<Prospect[]>;
+/** Bare registrable host from a URL or domain string ("https://www.x.com/a" → "x.com"). */
+export declare function hostFromUrl(url: string | undefined): string | undefined;
+/**
+ * Fill `companyDomain` for prospects that have a company NAME but no domain,
+ * using pipe0's `company:identity@1` pipe (name → website URL). The work-email
+ * waterfall requires a domain — a LinkedIn/HeyReach list supplies only names, so
+ * without this step every resolution fails. Resolves each unique company once
+ * (companies repeat across a list); leaves a prospect untouched when the domain
+ * can't be found, so the waterfall simply skips it rather than guessing.
+ */
+export declare function pipe0ResolveCompanyDomains(opts: {
+    apiKey: string;
+    prospects: Prospect[];
+    apiBaseUrl?: string;
+    fetchImpl?: FetchImpl;
     chunkSize?: number;
 }): Promise<Prospect[]>;
 /**

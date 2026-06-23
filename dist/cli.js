@@ -32,7 +32,7 @@ import { marketMapToHtml, marketMapToMarkdown } from "./marketReport.js";
 import { DEFAULT_RUBRIC, classifyCallLlm, detectProviderFromKey, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, validateLlmKey, } from "./llm.js";
 import { buildAcquirePlan, buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, builtinAcquirePreset, builtinEnrichPreset, enrichRunId, inferIngestObjectType, latestStamps, loadEnrichConfig, parseCsv, resolveCrmField, selectStaleWork, stagedSourceRecords, staleDaysFor, } from "./enrich.js";
 import { loadMeter, recordConsumption, remaining, } from "./acquireMeter.js";
-import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspects, partitionFreshProspects, pipe0ResolveWorkEmails, prospectIdentityKeys, } from "./connectors/prospectSources.js";
+import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspects, partitionFreshProspects, pipe0ResolveCompanyDomains, pipe0ResolveWorkEmails, prospectIdentityKeys, } from "./connectors/prospectSources.js";
 import { loadSeen, recordSeen } from "./acquireSeen.js";
 import { reportCounts, reportEvent } from "./runReport.js";
 import { createLinkedInProvider, discoverLinkedInProspects } from "./acquireLinkedIn.js";
@@ -2096,9 +2096,18 @@ async function acquireFromApi(config, source, rest, icp, snapshot, seen) {
     //     and apply-time resolve-first remain the precise backstop.
     const { fresh, skippedCrm, skippedSeen } = partitionFreshProspects(prospects, crmContactKeys(snapshot), seen);
     prospects = fresh;
-    // 3. Resolve real work emails (both providers need it: Explorium's email is
-    //    hashed, Crustdata search returns none). pipe0 waterfall, chunked.
-    if (matchKey === "email") {
+    // 3. Resolve real work emails. Triggered either when email IS the dedupe key
+    //    (Explorium's email is hashed, Crustdata returns none) or when a source
+    //    that keys on something else opts in via `resolveEmailsWith: "pipe0"`
+    //    (e.g. LinkedIn keys on the profile URL but still wants outreach emails).
+    //    pipe0 waterfall, chunked; resolves from name + company domain/name.
+    if (matchKey === "email" || disc.resolveEmailsWith === "pipe0") {
+        // The waterfall needs a company DOMAIN; LinkedIn/HeyReach lists carry only
+        // names. Resolve domains first (pipe0 company:identity) so resolution can
+        // actually land — without it, name-only resolution fails for every lead.
+        if (prospects.some((p) => !p.companyDomain && p.companyName)) {
+            prospects = await pipe0ResolveCompanyDomains({ apiKey: providerKey("pipe0"), prospects });
+        }
         prospects = await pipe0ResolveWorkEmails({ apiKey: providerKey("pipe0"), prospects });
     }
     const processedKeys = prospects.flatMap(prospectIdentityKeys);

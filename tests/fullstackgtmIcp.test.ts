@@ -68,6 +68,20 @@ test("scoreProspectAgainstIcp: title match clears threshold; off-persona does no
   assert.ok(offIcp.score < fitThreshold(ICP), `expected fit < threshold, got ${offIcp.score}`);
 });
 
+test("scoreProspectAgainstIcp: matches the keyword in the headline when the formal title misses", () => {
+  // LinkedIn-sourced: position is generic, but the headline carries the role.
+  const viaHeadline = scoreProspectAgainstIcp(
+    { jobTitle: "Founder & Managing Partner", headline: "Fractional RevOps Architect | Revenue Operations", jobLevel: "owner" },
+    ICP,
+  );
+  assert.ok(viaHeadline.score >= fitThreshold(ICP), `expected headline match to clear threshold, got ${viaHeadline.score}`);
+  assert.ok(viaHeadline.reasons.some((r) => /keyword/.test(r)));
+
+  // No keyword in title OR headline → still below threshold (no false positive).
+  const neither = scoreProspectAgainstIcp({ jobTitle: "Founder", headline: "Building cool things" }, ICP);
+  assert.ok(neither.score < fitThreshold(ICP), `expected no-match below threshold, got ${neither.score}`);
+});
+
 test("icpFromAnswers assembles an ICP and infers levels from titles", () => {
   const icp = icpFromAnswers("Test", {
     industries: ["software", "saas"],

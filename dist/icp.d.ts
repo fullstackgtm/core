@@ -69,6 +69,7 @@ export declare function scoreProspectAgainstIcp(prospect: {
     jobTitle?: string;
     jobLevel?: string;
     jobDepartment?: string;
+    headline?: string;
 }, icp: Icp): IcpFit;
 export declare function fitThreshold(icp: Icp): number;
 export type IcpInterviewQuestion = {

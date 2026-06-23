@@ -130,6 +130,7 @@ import {
   fetchExploriumProspects,
   fetchPipe0CrustdataProspects,
   partitionFreshProspects,
+  pipe0ResolveCompanyDomains,
   pipe0ResolveWorkEmails,
   prospectIdentityKeys,
   type Prospect,
@@ -2450,9 +2451,18 @@ async function acquireFromApi(
   const { fresh, skippedCrm, skippedSeen } = partitionFreshProspects(prospects, crmContactKeys(snapshot), seen);
   prospects = fresh;
 
-  // 3. Resolve real work emails (both providers need it: Explorium's email is
-  //    hashed, Crustdata search returns none). pipe0 waterfall, chunked.
-  if (matchKey === "email") {
+  // 3. Resolve real work emails. Triggered either when email IS the dedupe key
+  //    (Explorium's email is hashed, Crustdata returns none) or when a source
+  //    that keys on something else opts in via `resolveEmailsWith: "pipe0"`
+  //    (e.g. LinkedIn keys on the profile URL but still wants outreach emails).
+  //    pipe0 waterfall, chunked; resolves from name + company domain/name.
+  if (matchKey === "email" || disc.resolveEmailsWith === "pipe0") {
+    // The waterfall needs a company DOMAIN; LinkedIn/HeyReach lists carry only
+    // names. Resolve domains first (pipe0 company:identity) so resolution can
+    // actually land — without it, name-only resolution fails for every lead.
+    if (prospects.some((p) => !p.companyDomain && p.companyName)) {
+      prospects = await pipe0ResolveCompanyDomains({ apiKey: providerKey("pipe0"), prospects });
+    }
     prospects = await pipe0ResolveWorkEmails({ apiKey: providerKey("pipe0"), prospects });
   }
 
