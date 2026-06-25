@@ -22,6 +22,20 @@ export const DEFAULT_MODELS: Record<LlmProvider, string> = {
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+
+/**
+ * Resolve the effective endpoint, honoring an optional base-URL override.
+ * Mirrors the `prospectSources.ts` idiom (`(base ?? default).replace(/\/$/, "")`):
+ * trailing-slash-stripped; if the configured base already ends in the known
+ * path suffix it is used as-is, otherwise the suffix is appended so callers can
+ * pass either a bare origin (`https://glm.example`) or a full endpoint URL.
+ * Unset override → the upstream default, so behavior is unchanged.
+ */
+function resolveLlmUrl(override: string | undefined, defaultUrl: string, pathSuffix: string): string {
+  if (!override) return defaultUrl;
+  const base = override.replace(/\/$/, "");
+  return base.endsWith(pathSuffix) ? base : `${base}${pathSuffix}`;
+}
 // Bound cost and context: long calls keep the head and tail.
 const MAX_TRANSCRIPT_CHARS = 28_000;
 
@@ -92,6 +106,19 @@ export type LlmCallOptions = {
   apiKey: string;
   model?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Override the Anthropic Messages endpoint — point the package at an
+   * OpenAI/Anthropic-compatible gateway (GLM-5.2, z.ai, a local proxy) without
+   * code changes. An origin (`https://...`) gets `/v1/messages` appended; a base
+   * already ending in `/messages` is used verbatim. Threaded from
+   * `ANTHROPIC_API_BASE_URL` at the LlmCallOptions-construction layer (cli.ts),
+   * never read inside `forcedToolCall`. Unset → default api.anthropic.com.
+   */
+  anthropicBaseUrl?: string;
+  /** OpenAI equivalent of `anthropicBaseUrl` (e.g. an Ollama OpenAI-compatible
+   * endpoint). Origin → `/v1/chat/completions` appended; a base ending in
+   * `/chat/completions` is used verbatim. Threaded from `OPENAI_API_BASE_URL`. */
+  openaiBaseUrl?: string;
 };
 
 export type LlmExtractedInsight = ExtractedCallInsight & {
@@ -398,7 +425,8 @@ export async function forcedToolCall(
 ): Promise<unknown> {
   const fetchImpl = options.fetchImpl ?? fetch;
   if (options.provider === "anthropic") {
-    const response = await llmFetch(fetchImpl, ANTHROPIC_URL, {
+    const anthropicUrl = resolveLlmUrl(options.anthropicBaseUrl, ANTHROPIC_URL, "/v1/messages");
+    const response = await llmFetch(fetchImpl, anthropicUrl, {
       method: "POST",
       headers: {
         "x-api-key": options.apiKey,
@@ -419,7 +447,8 @@ export async function forcedToolCall(
     if (!block?.input) throw new Error("Anthropic returned no tool call — try again or a different --model.");
     return block.input;
   }
-  const response = await llmFetch(fetchImpl, OPENAI_URL, {
+  const openaiUrl = resolveLlmUrl(options.openaiBaseUrl, OPENAI_URL, "/v1/chat/completions");
+  const response = await llmFetch(fetchImpl, openaiUrl, {
     method: "POST",
     headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({

@@ -56,11 +56,6 @@ export declare function fetchPipe0CrustdataProspects(opts: {
     apiBaseUrl?: string;
     fetchImpl?: FetchImpl;
 }): Promise<Prospect[]>;
-/**
- * Resolve real work emails for people via pipe0's waterfall. Input rows need a
- * full name + a company domain (or name). Returns the prospects with `email`
- * filled where the waterfall found one; rows with no hit are returned unchanged.
- */
 export declare function pipe0ResolveWorkEmails(opts: {
     apiKey: string;
     prospects: Prospect[];
@@ -70,6 +65,11 @@ export declare function pipe0ResolveWorkEmails(opts: {
      *  batch rate-limit (a throttled chunk returns work_email status "failed"
      *  for every row, so one big batch is all-or-nothing). Default 3. */
     chunkSize?: number;
+    /** Chunks resolved in parallel, bounded to respect pipe0's rate limit. Default
+     *  3 — paired with pipe0Post's backoff this cuts wall-clock from O(n) serial
+     *  calls without throttling away coverage (higher defaults tanked the hit-rate
+     *  at scale). */
+    concurrency?: number;
 }): Promise<Prospect[]>;
 /** Bare registrable host from a URL or domain string ("https://www.x.com/a" → "x.com"). */
 export declare function hostFromUrl(url: string | undefined): string | undefined;
@@ -87,6 +87,8 @@ export declare function pipe0ResolveCompanyDomains(opts: {
     apiBaseUrl?: string;
     fetchImpl?: FetchImpl;
     chunkSize?: number;
+    /** Chunks resolved in parallel (bounded). Default 3. */
+    concurrency?: number;
 }): Promise<Prospect[]>;
 /**
  * Stable identity keys for a prospect (prefixed by kind). A match on ANY key

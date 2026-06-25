@@ -37,6 +37,11 @@ import { loadSeen, recordSeen } from "./acquireSeen.js";
 import { reportCounts, reportEvent } from "./runReport.js";
 import { createLinkedInProvider, discoverLinkedInProspects } from "./acquireLinkedIn.js";
 import { fitThreshold, icpFromAnswers, icpToCrustdataFilters, icpToExploriumFilters, parseIcp, scoreProspectAgainstIcp, INTERVIEW_SPEC, } from "./icp.js";
+import { buildSignalsFromAts, computeWeights, createFileSignalStore, DEFAULT_SIGNALS_CONFIG, dedupeSignals, loadSignalsConfig, makeOutcome, normalizeAccountDomain, SIGNAL_BUCKETS, signalRunId, signalId, } from "./signals.js";
+import { fetchAtsJobs } from "./connectors/atsBoards.js";
+import { createFileJudgeStore, DEFAULT_JUDGE_PROMPT, judgeRunId, judgeSignals, } from "./judge.js";
+import { authorOpeners, DEFAULT_DRAFT_PROMPT, DRAFT_CHANNELS, draft, } from "./draft.js";
+import { DEFAULT_GOLDEN_SET, DEFAULT_MIN_ACCURACY, defaultJudgeFn, gradeAgainstOutcomes, gradeJudge, parseGoldenSet, } from "./judgeEval.js";
 import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, } from "./enrichApollo.js";
 import { computeMissedFirings, createFileScheduleRunStore, createFileScheduleStore, nextCronFiring, parseCron, renderManagedBlock, replaceManagedBlock, assertSingleLineLabel, hasControlChar, scheduleId, systemCrontabIo, tokenizeCommand, validateSchedulableArgv, } from "./schedule.js";
 import { resolveRecord } from "./resolve.js";
@@ -106,6 +111,29 @@ Usage:
                                                fill-blanks-only patch plan through the normal dry-run →
                                                approve → apply gate. refresh re-checks stale stamped fields
                                                and proposes updates only where the source value changed.
+  fullstackgtm signals fetch [--bucket job,…] [--source greenhouse,lever,ashby] [--watchlist <path|crm:seg>] [--keywords …] [--from <file.json>] [--save]
+  fullstackgtm signals list [--since 7d] [--bucket b] [--account d] [--unjudged]
+  fullstackgtm signals outcome --account <d> [--touch <id>] --result replied|meeting|bounced|no_reply
+  fullstackgtm signals weights [--explain]
+                                               detect fresh buying triggers (ATS hiring scrapes + staged
+                                               funding/company/social ingest), rank them, persist a local
+                                               signal ledger. READ-ONLY re: CRM — fetch NEVER emits a plan;
+                                               --save persists only the signal ledger. outcome feeds the
+                                               learned per-bucket weights.
+  fullstackgtm icp interview | set <answers.json> | show
+  fullstackgtm icp judge [--signals-from latest|<label>] [--with-history] [--prompt <path>] [--min-score 0] [--save]
+  fullstackgtm icp eval [--golden <path>|default] [--against-outcomes] [--min-accuracy 0.8] [--json]
+                                               build the ICP, then judge fresh signals into
+                                               send/nurture/skip (timing × fit × memory). Deterministic
+                                               baseline; LLM why-now + play with a key (gated verbatim).
+                                               eval grades the judge and exits 2 below the bar — the
+                                               probabilistic-judgment gate. Read-only; --save writes only
+                                               the local judge store.
+  fullstackgtm draft [--from-judge latest|<label>] [--min-score 80] [--prompt <path>] [--channel email|linkedin|task] [--save]
+                                               author one trigger-grounded opener per hot judge decision as
+                                               a governed create_task plan. First line must contain a
+                                               verbatim span of the why-now or the draft is rejected. Never
+                                               sends — --save stages a needs_approval plan for approve → apply.
   fullstackgtm bulk-update <account|contact|deal> --where <expr> [--where …] (--set <field>=<value> [--set …] | --archive [--force-archive-duplicates] | --create-task <text>) [--require <field>=<value> …] [--guard <object>:<where>[;<where>]:<none|some> …] [source options] [--save] [--json] [--out <path>]
                                                governed generic writes: filter the snapshot
                                                (field=value, field!=value, field~substr, field!~substr,
@@ -438,10 +466,43 @@ const HELP = {
         detail: "Capture vendor pages (content-addressed), classify intensity per claim (LLM bring-your-own-key, or fill the worksheet with any agent), then compute deterministic front states and drift. Every quoted span is verified verbatim against the stored capture before it's accepted.",
         seeAlso: [],
     },
+    // Outbound intelligence — signals → judge → draft (the GTM brain)
+    signals: {
+        summary: "detect fresh buying triggers (ATS hiring + staged ingest), ranked",
+        phase: "Detect",
+        synopsis: [
+            "fullstackgtm signals fetch [--bucket job,…] [--source greenhouse,lever,ashby] [--watchlist <path|crm:seg>] [--keywords …] [--from <file.json>] [--save]",
+            "fullstackgtm signals list [--since 7d] [--bucket b] [--account d] [--unjudged]",
+            "fullstackgtm signals outcome --account <d> [--touch <id>] --result replied|meeting|bounced|no_reply",
+            "fullstackgtm signals weights [--explain]",
+        ],
+        detail: "Read-only re: CRM — `fetch` NEVER emits a patch plan; `--save` persists only the local signal ledger. ATS adapters are no-auth. `outcome` feeds the learned per-bucket `weights`.",
+        seeAlso: ["icp", "draft"],
+    },
+    icp: {
+        summary: "build the ICP, then judge fresh signals into send/nurture/skip",
+        phase: "Detect",
+        synopsis: [
+            "fullstackgtm icp interview | set <answers.json> | show",
+            "fullstackgtm icp judge [--signals-from latest|<label>] [--with-history] [--prompt <path>] [--min-score 0] [--save]",
+            "fullstackgtm icp eval [--golden <path>|default] [--against-outcomes] [--min-accuracy 0.8] [--json]",
+        ],
+        detail: "`judge` ranks unjudged signals by timing × fit × memory (deterministic baseline; LLM why-now + play with a key, gated verbatim). `eval` is the probabilistic-judgment gate — exits 2 below the bar. Read-only; --save writes only the local judge store.",
+        seeAlso: ["signals", "draft", "enrich"],
+    },
+    draft: {
+        summary: "author one trigger-grounded opener per hot decision as a governed plan",
+        phase: "Remediate",
+        synopsis: [
+            "fullstackgtm draft [--from-judge latest|<label>] [--min-score 80] [--prompt <path>] [--channel email|linkedin|task] [--save]",
+        ],
+        detail: "Takes hot judge decisions (send, score>=min) and stages ONE create_task opener each. The first line must contain a verbatim span of the why-now or the draft is rejected. Never sends — --save stages a needs_approval plan for `plans approve` -> `apply`.",
+        seeAlso: ["icp", "plans", "apply"],
+    },
 };
 // Verbs that print their own richer multi-subcommand help; runCli routes their
 // `--help` to themselves, so commandHelp() only renders these via `help <verb>`.
-const BESPOKE_HELP = ["call", "market", "enrich", "bulk-update", "schedule"];
+const BESPOKE_HELP = ["call", "market", "enrich", "bulk-update", "schedule", "signals", "icp", "draft"];
 // Lifecycle-grouped front door. One line per verb, organized by the
 // Prevent→Detect→Remediate→Verify loop so a new user sees ~6 jobs, not 22 verbs.
 function shortUsage() {
@@ -453,6 +514,7 @@ function shortUsage() {
         ["Calls → evidence", ["call"]],
         ["Govern — the plan/apply spine", ["suggest", "plans", "apply", "audit-log", "merge"]],
         ["Market intelligence", ["market"]],
+        ["Outbound — signals → judge → draft", ["signals", "icp", "draft"]],
         ["Schedule — make it continuous", ["schedule"]],
     ];
     const pad = Math.max(...Object.keys(HELP).map((k) => k.length)) + 2;
@@ -1127,9 +1189,13 @@ score always needs a key (scoring is LLM work).`);
  * logins). Non-interactive contexts get an actionable error instead.
  */
 async function requireLlmCredential(command = "parse") {
+    // Base-URL overrides are resolved here (not inside forcedToolCall) so the LLM
+    // seam stays pure/injectable. Spread into LlmCallOptions at every call site
+    // via `...credential`; unset env leaves the upstream defaults untouched.
+    const baseUrls = resolveLlmBaseUrls();
     const resolved = resolveLlmCredential();
     if (resolved)
-        return resolved;
+        return { ...resolved, ...baseUrls };
     // Scoring is inherently LLM work — there is no keyword fallback to suggest.
     const fallbackHint = command === "parse"
         ? ", or pass --deterministic for the free keyword baseline"
@@ -1151,7 +1217,21 @@ async function requireLlmCredential(command = "parse") {
     const now = new Date().toISOString();
     storeCredential(provider, { kind: "api_key", accessToken: apiKey, createdAt: now, updatedAt: now });
     console.error(`Stored ${provider} key (${validation.detail}). Future runs use it automatically; remove with \`fullstackgtm logout ${provider}\`.\n`);
-    return { provider, apiKey };
+    return { provider, apiKey, ...baseUrls };
+}
+/**
+ * Read optional LLM base-URL overrides from env so the package can run against
+ * an Anthropic/OpenAI-compatible gateway (GLM-5.2, z.ai, Ollama) without code
+ * changes. Returns only the keys that are set; an empty object when neither is,
+ * so spreading into LlmCallOptions is a no-op by default.
+ */
+function resolveLlmBaseUrls(env = process.env) {
+    const out = {};
+    if (env.ANTHROPIC_API_BASE_URL)
+        out.anthropicBaseUrl = env.ANTHROPIC_API_BASE_URL;
+    if (env.OPENAI_API_BASE_URL)
+        out.openaiBaseUrl = env.OPENAI_API_BASE_URL;
+    return out;
 }
 function renderScorecard(scorecard, title) {
     const bandText = scorecard.band ? ` — ${scorecard.band.label}` : "";
@@ -1989,6 +2069,385 @@ function loadIcp(args) {
     return parseIcp(readFileSync(path, "utf8"));
 }
 /**
+ * Resolve a signals config: explicit --config, else signals.config.json in cwd,
+ * else the zero-config DEFAULT_SIGNALS_CONFIG (preset-first, like enrich).
+ */
+function resolveSignalsConfig(args) {
+    const explicit = option(args, "--config");
+    if (explicit)
+        return loadSignalsConfig(resolve(process.cwd(), explicit));
+    const local = resolve(process.cwd(), "signals.config.json");
+    if (existsSync(local))
+        return loadSignalsConfig(local);
+    return DEFAULT_SIGNALS_CONFIG;
+}
+/**
+ * Resolve the watchlist of accounts to scan. Sources, in precedence order:
+ *  - a --watchlist file (JSON array of {domain, boards?} or bare domain strings),
+ *  - a `crm:<segment>` token (derive account domains from a CRM snapshot, scoped
+ *    by the segment's `field=value` where-clauses; reuses readSnapshot),
+ *  - config.watchlist.domains.
+ * Board tokens come from the entry's own `boards`, else config.watchlist.boards.
+ */
+async function resolveWatchlist(args, config) {
+    const configBoards = config.watchlist.boards ?? {};
+    const fromConfig = (domain) => {
+        const normalized = normalizeAccountDomain(domain);
+        const token = configBoards[normalized] ?? configBoards[domain];
+        return token ? { domain: normalized, boards: { greenhouse: token, lever: token, ashby: token } } : { domain: normalized };
+    };
+    const watchlistArg = option(args, "--watchlist") ?? config.watchlist.source;
+    if (watchlistArg && watchlistArg.startsWith("crm:")) {
+        const segment = watchlistArg.slice("crm:".length);
+        const snapshot = await readSnapshot(args);
+        // Segment is an optional `;`-separated list of `field=value` equality
+        // clauses over snapshot accounts (the common case; richer filtering lives in
+        // bulk-update). Empty segment = every account with a domain.
+        const clauses = (segment ? segment.split(";").map((s) => s.trim()).filter(Boolean) : []).map((clause) => {
+            const eq = clause.indexOf("=");
+            if (eq === -1)
+                throw new Error(`--watchlist crm:<segment>: clause "${clause}" must be field=value.`);
+            return { field: clause.slice(0, eq).trim(), value: clause.slice(eq + 1).trim() };
+        });
+        const accounts = (snapshot.accounts ?? []).filter((acct) => clauses.every((c) => {
+            const raw = acct[c.field];
+            return (raw == null ? "" : String(raw)).toLowerCase() === c.value.toLowerCase();
+        }));
+        const domains = accounts
+            .map((acct) => normalizeAccountDomain(acct.domain ?? ""))
+            .filter((d) => Boolean(d));
+        return [...new Set(domains)].map(fromConfig);
+    }
+    if (watchlistArg) {
+        const raw = JSON.parse(readFileSync(resolve(process.cwd(), watchlistArg), "utf8"));
+        if (!Array.isArray(raw))
+            throw new Error(`--watchlist ${watchlistArg}: expected a JSON array of domains or {domain, boards?} objects`);
+        return raw.map((entry) => {
+            if (typeof entry === "string")
+                return fromConfig(entry);
+            if (entry && typeof entry === "object" && typeof entry.domain === "string") {
+                const e = entry;
+                const base = fromConfig(e.domain);
+                return e.boards ? { domain: base.domain, boards: { ...base.boards, ...e.boards } } : base;
+            }
+            throw new Error(`--watchlist ${watchlistArg}: each entry must be a domain string or {domain, boards?} object`);
+        });
+    }
+    return (config.watchlist.domains ?? []).map(fromConfig);
+}
+/**
+ * `signals` — detect fresh buying triggers (ATS job-board scrapes + staged
+ * funding/company/social ingest), rank them, and persist a local signal ledger.
+ * READ-ONLY re: CRM: NEVER emits a PatchPlan, never calls a recording connector.
+ * `--save` persists only to the signal store, not a plan.
+ */
+async function signalsCommand(args) {
+    const [sub, ...rest] = args;
+    // Help-before-network: catch --help/-h BEFORE any config load or fetch —
+    // anywhere in argv (`signals --help` and `signals fetch --help` both land here).
+    if (!sub || args.includes("--help") || args.includes("-h")) {
+        console.log(`Usage:
+  fullstackgtm signals fetch [--bucket job,funding,...] [--source greenhouse,lever,ashby] [--watchlist <path|crm:segment>] [--keywords "growth,revops"] [--from <file.json>] [--config <path>] [--save]
+  fullstackgtm signals list [--since 7d] [--bucket b] [--account d] [--unjudged]
+  fullstackgtm signals outcome --account <domain> [--touch <id>] --result replied|meeting|bounced|no_reply
+  fullstackgtm signals weights [--explain]
+
+Detect fresh buying triggers and rank them. \`fetch\` is read-only re: CRM — it
+NEVER emits a patch plan; --save persists only the local signal ledger (used by
+\`icp judge\`). ATS adapters are no-auth, so no credential flags exist.`);
+        return;
+    }
+    if (sub === "fetch") {
+        const config = resolveSignalsConfig(rest);
+        // Merge --keywords into the job bucket; filter buckets + job sources.
+        const keywordsArg = option(rest, "--keywords");
+        if (keywordsArg) {
+            const merged = keywordsArg.split(",").map((k) => k.trim()).filter(Boolean);
+            config.buckets.job = { ...config.buckets.job, keywords: merged };
+        }
+        const bucketFilter = option(rest, "--bucket");
+        const buckets = bucketFilter
+            ? bucketFilter.split(",").map((b) => b.trim()).filter(Boolean)
+            : SIGNAL_BUCKETS.filter((b) => (config.buckets[b]?.sources.length ?? 0) > 0);
+        for (const b of buckets) {
+            if (!SIGNAL_BUCKETS.includes(b))
+                throw new Error(`Unknown bucket: ${b} (one of ${SIGNAL_BUCKETS.join(", ")})`);
+        }
+        const sourceFilter = option(rest, "--source");
+        const allJobSources = ["greenhouse", "lever", "ashby"];
+        const jobSources = sourceFilter
+            ? sourceFilter.split(",").map((s) => s.trim()).filter(Boolean).filter((s) => allJobSources.includes(s))
+            : config.buckets.job.sources.filter((s) => allJobSources.includes(s));
+        const now = new Date();
+        const store = createFileSignalStore();
+        const priorSignals = await store.allSignals();
+        const candidates = [];
+        // Job bucket: scan ATS boards for each watchlist account x job source.
+        if (buckets.includes("job")) {
+            const watchlist = await resolveWatchlist(rest, config);
+            for (const account of watchlist) {
+                const rawJobs = [];
+                for (const source of jobSources) {
+                    const boardToken = account.boards?.[source] ?? account.domain;
+                    const jobs = await fetchAtsJobs({
+                        source,
+                        boardToken,
+                        accountDomain: account.domain,
+                        keywords: config.buckets.job.keywords,
+                    });
+                    for (const job of jobs)
+                        rawJobs.push({ ...job, source });
+                }
+                const accountSignals = buildSignalsFromAts(rawJobs, { domain: account.domain }, config, {
+                    now,
+                    priorSignals,
+                });
+                candidates.push(...accountSignals);
+            }
+        }
+        // Staged ingest (funding/company/social): --from <file.json>.
+        const fromFile = option(rest, "--from");
+        if (fromFile) {
+            const ingested = readStagedSignals(resolve(process.cwd(), fromFile), buckets, now);
+            candidates.push(...ingested);
+        }
+        const fetched = candidates.length;
+        const { fresh, deduped } = dedupeSignals(candidates, priorSignals, config.dedupWindowDays, now);
+        const ranked = [...fresh].sort((a, b) => b.weight - a.weight || a.accountDomain.localeCompare(b.accountDomain));
+        // Ranked fresh signals to stdout; guidance to stderr.
+        console.log(JSON.stringify(ranked, null, 2));
+        console.error(`Fetched ${fetched} candidate signal(s); ${fresh.length} fresh, ${deduped.length} deduped ` +
+            `(window ${config.dedupWindowDays}d). NO plan emitted — signals are read-only re: CRM.`);
+        const save = rest.includes("--save");
+        if (save) {
+            const runLabel = option(rest, "--label") ?? `signals-${now.toISOString().slice(0, 10)}`;
+            const startedAt = now.toISOString();
+            await store.appendRun({
+                id: signalRunId(runLabel),
+                runLabel,
+                startedAt,
+                completedAt: new Date().toISOString(),
+                buckets,
+                counts: { fetched, new: fresh.length, deduped: deduped.length },
+                signals: ranked,
+            });
+            console.error(`Saved signal run "${runLabel}" (${fresh.length} fresh). Next: \`fullstackgtm icp judge --save\`.`);
+        }
+        else {
+            console.error("(not saved — re-run with --save to persist this run to the signal ledger)");
+        }
+        return;
+    }
+    if (sub === "list") {
+        const store = createFileSignalStore();
+        const all = await store.allSignals();
+        const sinceArg = option(rest, "--since");
+        const sinceMs = sinceArg ? parseSinceWindowMs(sinceArg) : undefined;
+        const now = Date.now();
+        const bucket = option(rest, "--bucket");
+        const accountArg = option(rest, "--account");
+        const account = accountArg ? normalizeAccountDomain(accountArg) : undefined;
+        const unjudgedOnly = rest.includes("--unjudged");
+        const filtered = all.filter((s) => {
+            if (sinceMs !== undefined) {
+                const seen = Date.parse(s.firstSeen);
+                if (!Number.isFinite(seen) || now - seen > sinceMs)
+                    return false;
+            }
+            if (bucket && s.bucket !== bucket)
+                return false;
+            if (account && s.accountDomain !== account)
+                return false;
+            if (unjudgedOnly && s.judgedBy)
+                return false;
+            return true;
+        });
+        const ranked = filtered.sort((a, b) => b.weight - a.weight || a.accountDomain.localeCompare(b.accountDomain));
+        console.log(JSON.stringify(ranked, null, 2));
+        console.error(`${ranked.length} signal(s)${unjudgedOnly ? " (unjudged)" : ""}.`);
+        return;
+    }
+    if (sub === "outcome") {
+        const accountArg = option(rest, "--account");
+        if (!accountArg)
+            throw new Error("signals outcome: --account <domain> is required.");
+        const result = option(rest, "--result");
+        const valid = ["replied", "meeting", "bounced", "no_reply"];
+        if (!result || !valid.includes(result)) {
+            throw new Error(`signals outcome: --result must be one of ${valid.join(", ")}.`);
+        }
+        const touchId = option(rest, "--touch") ?? undefined;
+        const outcome = makeOutcome({ accountDomain: accountArg, touchId, result: result });
+        await createFileSignalStore().appendOutcome(outcome);
+        console.error(`Recorded outcome "${outcome.result}" for ${outcome.accountDomain} (${outcome.id}). ` +
+            `Re-run \`fullstackgtm signals weights\` to see the learned shift.`);
+        return;
+    }
+    if (sub === "weights") {
+        const config = resolveSignalsConfig(rest);
+        const store = createFileSignalStore();
+        const outcomes = await store.listOutcomes();
+        const signalsById = new Map((await store.allSignals()).map((s) => [s.id, s]));
+        const weights = computeWeights(config, outcomes, signalsById);
+        console.log(JSON.stringify(weights, null, 2));
+        if (rest.includes("--explain")) {
+            // Per-bucket config default vs learned + booked/total over credited signals.
+            const booked = new Map();
+            const total = new Map();
+            for (const outcome of outcomes) {
+                for (const id of outcome.creditedSignals) {
+                    const signal = signalsById.get(id);
+                    if (!signal)
+                        continue;
+                    total.set(signal.bucket, (total.get(signal.bucket) ?? 0) + 1);
+                    if (outcome.result === "meeting")
+                        booked.set(signal.bucket, (booked.get(signal.bucket) ?? 0) + 1);
+                }
+            }
+            console.error("Per-bucket weight (config default vs learned, booked/total credited):");
+            for (const b of SIGNAL_BUCKETS) {
+                console.error(`  ${b.padEnd(8)} default ${config.buckets[b].weight.toFixed(2)} -> learned ${weights[b].toFixed(4)} ` +
+                    `(${booked.get(b) ?? 0}/${total.get(b) ?? 0} booked)`);
+            }
+        }
+        return;
+    }
+    throw new Error(`Unknown signals subcommand: ${sub} (try: fetch, list, outcome, weights)`);
+}
+/** Parse a "7d"/"30d"/"12h" recency window into milliseconds. */
+function parseSinceWindowMs(value) {
+    const match = /^(\d+)\s*([dhwm])$/i.exec(value.trim());
+    if (!match)
+        throw new Error(`--since: expected a window like 7d, 24h, 2w (got "${value}").`);
+    const n = Number(match[1]);
+    const unit = match[2].toLowerCase();
+    const ms = unit === "h" ? 3600_000 : unit === "w" ? 7 * 86_400_000 : unit === "m" ? 30 * 86_400_000 : 86_400_000;
+    return n * ms;
+}
+/**
+ * Read staged funding/company/social signals from a JSON file (array of partial
+ * signals). Each row is validated against the signal schema + the quote gate
+ * (a non-empty verbatim quote is required); source = "ingest".
+ */
+function readStagedSignals(path, buckets, now) {
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    if (!Array.isArray(raw))
+        throw new Error(`--from ${path}: expected a JSON array of staged signals.`);
+    const nowIso = now.toISOString();
+    const out = [];
+    raw.forEach((entry, index) => {
+        if (!entry || typeof entry !== "object")
+            throw new Error(`--from ${path}: row ${index} is not an object.`);
+        const e = entry;
+        const bucket = String(e.bucket ?? "");
+        if (!SIGNAL_BUCKETS.includes(bucket)) {
+            throw new Error(`--from ${path}: row ${index} has unknown bucket "${bucket}" (one of ${SIGNAL_BUCKETS.join(", ")}).`);
+        }
+        if (buckets.length && !buckets.includes(bucket))
+            return; // filtered out by --bucket
+        const accountDomain = normalizeAccountDomain(String(e.accountDomain ?? e.domain ?? ""));
+        if (!accountDomain)
+            throw new Error(`--from ${path}: row ${index} is missing accountDomain.`);
+        const trigger = String(e.trigger ?? "").trim();
+        if (!trigger)
+            throw new Error(`--from ${path}: row ${index} is missing trigger.`);
+        const quote = String(e.quote ?? "").trim();
+        if (!quote)
+            throw new Error(`--from ${path}: row ${index} is missing the verbatim quote (the evidence anchor).`);
+        const base = { accountDomain, bucket: bucket, trigger };
+        const firstSeen = typeof e.firstSeen === "string" && e.firstSeen ? e.firstSeen : nowIso;
+        out.push({
+            id: signalId(base),
+            accountDomain,
+            bucket: bucket,
+            trigger,
+            quote,
+            sourceUrl: String(e.sourceUrl ?? ""),
+            firstSeen,
+            weight: typeof e.weight === "number" ? e.weight : DEFAULT_SIGNALS_CONFIG.buckets[bucket].weight,
+            source: "ingest",
+            judgedBy: null,
+        });
+    });
+    return out;
+}
+/**
+ * `draft` — author ONE trigger-grounded opener per hot judge decision as a
+ * governed create_task plan. Structurally a proposal: never sends, never writes
+ * a CRM record. With --save the plan is staged needs_approval for plans approve
+ * -> apply.
+ */
+async function draftCommand(args) {
+    // Help-before-network: catch --help/-h BEFORE any config/credential/LLM call.
+    if (args.includes("--help") || args.includes("-h")) {
+        console.log(`Usage:
+  fullstackgtm draft [--from-judge latest|<runLabel>] [--min-score 80] [--prompt <path>] [--channel email|linkedin|task] [--save]
+
+Author one trigger-grounded opener per hot judge decision (decision=send,
+score>=min) as a governed create_task plan. The opener's first line must contain
+a verbatim span of the why-now trigger or the draft is rejected. Never sends —
+--save stages a needs_approval plan for \`plans approve\` -> \`apply\`. Without an
+LLM key it emits a clearly-labeled stub rather than fake authored copy.`);
+        return;
+    }
+    const fromJudge = option(args, "--from-judge") ?? "latest";
+    const minScore = numericOption(args, "--min-score") ?? 80;
+    const promptPath = option(args, "--prompt");
+    const channelArg = option(args, "--channel") ?? "task";
+    if (!DRAFT_CHANNELS.includes(channelArg)) {
+        throw new Error(`--channel must be one of ${DRAFT_CHANNELS.join(", ")} (got "${channelArg}").`);
+    }
+    const channel = channelArg;
+    const save = args.includes("--save");
+    // Load the JudgeRun.
+    const judgeStore = createFileJudgeStore();
+    const judgeRun = fromJudge === "latest" ? await judgeStore.latestRun() : await judgeStore.getRun(fromJudge);
+    if (!judgeRun) {
+        throw new Error(`No judge run "${fromJudge}" — run \`fullstackgtm icp judge --save\` first.`);
+    }
+    // Rebuild the signalsById map the openers ground in: from the referenced signal
+    // run, falling back to every stored signal.
+    const signalStore = createFileSignalStore();
+    const signalRun = await signalStore.getRun(judgeRun.signalRunLabel);
+    const signals = signalRun ? signalRun.signals : await signalStore.allSignals();
+    const signalsById = new Map(signals.map((s) => [s.id, s]));
+    // LLM resolution (optional — no-key path is the honestly-degraded stub).
+    const cred = resolveLlmCredential();
+    const model = option(args, "--model") ?? undefined;
+    const llm = cred
+        ? { ...cred, ...resolveLlmBaseUrls(), ...(model ? { model } : {}) }
+        : undefined;
+    const promptTemplate = promptPath ? readFileSync(resolve(process.cwd(), promptPath), "utf8") : DEFAULT_DRAFT_PROMPT;
+    const openers = await authorOpeners({
+        decisions: judgeRun.decisions,
+        signalsById,
+        minScore,
+        promptTemplate,
+        llm,
+    });
+    const { plan, drafts, rejected } = draft({
+        decisions: judgeRun.decisions,
+        signalsById,
+        minScore,
+        channel,
+        openers,
+    });
+    console.log(JSON.stringify({ drafts, rejected }, null, 2));
+    const stale = drafts.filter((d) => d.staleTrigger);
+    console.error(`${drafts.length} opener(s) staged as create_task proposals (channel ${channel}, min score ${minScore})` +
+        `${rejected.length ? `; ${rejected.length} rejected (ungrounded first line)` : ""}` +
+        `${stale.length ? `; ${stale.length} flagged staleTrigger` : ""}` +
+        `${llm ? "" : " — DETERMINISTIC stub (no LLM key)"}. A draft is a proposal; nothing is sent.`);
+    if (save) {
+        await createFilePlanStore().save(plan);
+        console.error(`Saved plan ${plan.id} (status ${plan.status}). Review: \`fullstackgtm plans show ${plan.id}\`, ` +
+            `then \`fullstackgtm plans approve ${plan.id} --operations all\` and \`fullstackgtm apply --plan-id ${plan.id} --provider <name>\`.`);
+    }
+    else {
+        console.error("(not saved — re-run with --save to stage the plan for plans approve -> apply)");
+    }
+}
+/**
  * `icp` — develop and inspect the Ideal Customer Profile that targets acquire.
  * The CLI can't run AskUserQuestion itself; `icp interview` emits the question
  * spec an agent (Claude Code / Codex) drives with its AskUserQuestion tool, then
@@ -1996,16 +2455,22 @@ function loadIcp(args) {
  */
 async function icpCommand(args) {
     const [sub, ...rest] = args;
-    if (!sub || sub === "--help" || sub === "-h") {
+    // Help-before-network: catch --help/-h anywhere in argv (so `icp --help`,
+    // `icp judge --help`, `icp eval --help` all print usage before any work).
+    if (!sub || args.includes("--help") || args.includes("-h")) {
         console.log(`Usage:
   fullstackgtm icp interview                      emit the interview spec (an agent drives it with AskUserQuestion)
   fullstackgtm icp set <answers.json> [--name <n>] [--out <path>]   write icp.json from interview answers
   fullstackgtm icp show [--icp <path>]            render the ICP + the discovery filters it produces
+  fullstackgtm icp judge [--signals-from latest|<label>] [--with-history] [--prompt <path>] [--min-score 0] [--save]   rank unjudged signals into send/nurture/skip decisions (timing x fit x memory)
+  fullstackgtm icp eval [--golden <path>|default] [--against-outcomes] [--min-accuracy 0.8] [--json]   grade the judge: golden-set accuracy and/or hot>cold calibration; exits 2 below the bar
 
 The ICP makes \`enrich acquire\` targeted, not random: it generates each
 provider's discovery filters (Explorium, pipe0/Crustdata) AND scores every
 discovered prospect for fit — only above-threshold leads become create_record
-ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.`);
+ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.
+\`icp judge\` ranks fresh signals (from \`signals fetch --save\`) into send/nurture/skip;
+\`icp eval\` is the probabilistic-judgment gate before any apply.`);
         return;
     }
     if (sub === "interview") {
@@ -2039,7 +2504,143 @@ ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.`);
         }, null, 2));
         return;
     }
-    throw new Error(`Unknown icp subcommand: ${sub} (try: interview, set, show)`);
+    if (sub === "judge") {
+        // The parent icpCommand already caught --help/-h before any work, so we can
+        // flag-parse then act (no network until judgeSignals, and only with a key).
+        const signalsFrom = option(rest, "--signals-from") ?? "latest";
+        const withHistory = rest.includes("--with-history");
+        const promptPath = option(rest, "--prompt");
+        const minScore = numericOption(rest, "--min-score") ?? 0;
+        const save = rest.includes("--save");
+        // 1) Load signals from the signal store.
+        const signalStore = createFileSignalStore();
+        const signalRun = signalsFrom === "latest" ? await signalStore.latestRun() : await signalStore.getRun(signalsFrom);
+        if (!signalRun) {
+            throw new Error(`No signal run "${signalsFrom}" — run \`fullstackgtm signals fetch --save\` first.`);
+        }
+        const unjudged = signalRun.signals.filter((s) => !s.judgedBy);
+        if (unjudged.length === 0)
+            throw new Error(`Signal run "${signalRun.runLabel}" has no unjudged signals.`);
+        // 2) Optional inputs: ICP (may be undefined), snapshot (only --with-history),
+        //    outcomes + config from the signal store / DEFAULT_SIGNALS_CONFIG.
+        const icp = loadIcp(rest);
+        const config = DEFAULT_SIGNALS_CONFIG;
+        const outcomes = await signalStore.listOutcomes();
+        const snapshot = withHistory ? await readSnapshot(rest) : undefined;
+        // 3) Resolve the LLM seam ONLY if a key already exists (deterministic baseline
+        //    otherwise — never PROMPT here; judge must run key-free).
+        const cred = resolveLlmCredential();
+        const baseUrls = resolveLlmBaseUrls();
+        const model = option(rest, "--model") ?? undefined;
+        const llm = cred
+            ? { ...cred, ...baseUrls, ...(model ? { model } : {}) }
+            : undefined;
+        const promptTemplate = llm
+            ? promptPath
+                ? readFileSync(resolve(process.cwd(), promptPath), "utf8")
+                : DEFAULT_JUDGE_PROMPT
+            : undefined;
+        // 4) Judge.
+        const decisions = (await judgeSignals({
+            signals: unjudged,
+            outcomes,
+            config,
+            icp,
+            snapshot,
+            withHistory,
+            promptTemplate,
+            llm,
+        })).filter((d) => d.score >= minScore);
+        // 5) Ranked decisions to stdout (JSON), guidance to stderr.
+        console.log(JSON.stringify(decisions, null, 2));
+        console.error(`Judged ${unjudged.length} signal(s) across ${new Set(decisions.map((d) => d.accountDomain)).size} account(s): ` +
+            `${decisions.filter((d) => d.decision === "send").length} send, ` +
+            `${decisions.filter((d) => d.decision === "nurture").length} nurture, ` +
+            `${decisions.filter((d) => d.decision === "skip").length} skip` +
+            `${llm ? "" : " (deterministic — no LLM key; run `login anthropic|openai` for why-now + play)"}.`);
+        // 6) --save: persist a JudgeRun + stamp consumed signals judgedBy.
+        if (save) {
+            const runLabel = option(rest, "--label") ?? `judge-${new Date().toISOString().slice(0, 10)}`;
+            const store = createFileJudgeStore();
+            await store.appendRun({
+                id: judgeRunId(runLabel),
+                runLabel,
+                signalRunLabel: signalRun.runLabel,
+                createdAt: new Date().toISOString(),
+                decisions,
+            });
+            const judgedIds = new Set(decisions.flatMap((d) => d.evidence));
+            for (const s of signalRun.signals)
+                if (judgedIds.has(s.id))
+                    s.judgedBy = runLabel;
+            await signalStore.updateRun(signalRun);
+            console.error(`Saved judge run "${runLabel}" (${decisions.length} decisions); stamped ${judgedIds.size} signals judgedBy. ` +
+                `Next: \`fullstackgtm draft --from-judge ${runLabel} --save\`.`);
+        }
+        else {
+            console.error("(not saved — re-run with --save to persist a judge run and stamp the consumed signals)");
+        }
+        return;
+    }
+    if (sub === "eval") {
+        // The parent icpCommand already caught --help/-h before any work. The whole
+        // command is read-only: it grades, never emits a plan, never touches a provider.
+        const goldenArg = option(rest, "--golden") ?? "default";
+        const againstOutcomes = rest.includes("--against-outcomes");
+        const minAccuracy = numericOption(rest, "--min-accuracy") ?? DEFAULT_MIN_ACCURACY;
+        const asJson = rest.includes("--json");
+        if (againstOutcomes) {
+            // The empirical gate: hot decisions must book strictly more than cold.
+            const judgeStore = createFileJudgeStore();
+            const labelArg = option(rest, "--from-judge");
+            const judgeRun = labelArg ? await judgeStore.getRun(labelArg) : await judgeStore.latestRun();
+            if (!judgeRun) {
+                throw new Error(`No judge run ${labelArg ? `"${labelArg}"` : "to grade"} — run \`fullstackgtm icp judge --save\` first.`);
+            }
+            const outcomes = await createFileSignalStore().listOutcomes();
+            const cal = gradeAgainstOutcomes(judgeRun.decisions, outcomes);
+            if (asJson) {
+                console.log(JSON.stringify(cal, null, 2));
+            }
+            else {
+                console.log(`Outcome calibration (judge run "${judgeRun.runLabel}"):\n` +
+                    `  hot book rate:  ${(cal.hotBookRate * 100).toFixed(1)}% over ${cal.hotCount} hot account(s)\n` +
+                    `  cold book rate: ${(cal.coldBookRate * 100).toFixed(1)}% over ${cal.coldCount} cold account(s)\n` +
+                    `  calibrated:     ${cal.calibrated ? "yes (hot > cold)" : "NO (hot did not strictly beat cold)"}`);
+            }
+            console.error(cal.calibrated
+                ? "Calibrated: hot scores book strictly more than cold — the judge earns its interrupt."
+                : "NOT calibrated: hot did not strictly beat cold. Tune the rubric before scheduling apply behind this gate.");
+            if (!cal.calibrated)
+                process.exitCode = 2;
+            return;
+        }
+        // The golden-set gate (default). Resolve "default" BEFORE any file read.
+        const rows = goldenArg === "default"
+            ? DEFAULT_GOLDEN_SET
+            : parseGoldenSet(readFileSync(resolve(process.cwd(), goldenArg), "utf8"));
+        const result = await gradeJudge(rows, defaultJudgeFn({ icp: loadIcp(rest), now: new Date() }));
+        if (asJson) {
+            console.log(JSON.stringify(result, null, 2));
+        }
+        else {
+            const c = result.confusion;
+            console.log(`Golden-set grade (${rows.length} row(s)):\n` +
+                `  accuracy:  ${(result.accuracy * 100).toFixed(1)}%  (bar ${(minAccuracy * 100).toFixed(0)}%)\n` +
+                `  precision: ${(result.precision * 100).toFixed(1)}%\n` +
+                `  recall:    ${(result.recall * 100).toFixed(1)}%\n` +
+                `  confusion: tp=${c.truePositive} fp=${c.falsePositive} tn=${c.trueNegative} fn=${c.falseNegative}`);
+        }
+        if (result.accuracy < minAccuracy) {
+            console.error(`Judge accuracy ${(result.accuracy * 100).toFixed(1)}% is below the ${(minAccuracy * 100).toFixed(0)}% bar — exit 2.`);
+            process.exitCode = 2;
+        }
+        else {
+            console.error(`Judge passes the golden-set gate (${(result.accuracy * 100).toFixed(1)}% >= ${(minAccuracy * 100).toFixed(0)}%).`);
+        }
+        return;
+    }
+    throw new Error(`Unknown icp subcommand: ${sub} (try: interview, set, show, judge, eval)`);
 }
 /**
  * Pull net-new prospects from an API acquire source into source records the
@@ -4000,6 +4601,14 @@ export async function runCli(argv) {
     }
     if (command === "icp") {
         await icpCommand(args);
+        return;
+    }
+    if (command === "signals") {
+        await signalsCommand(args);
+        return;
+    }
+    if (command === "draft") {
+        await draftCommand(args);
         return;
     }
     if (command === "schedule") {

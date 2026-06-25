@@ -23,6 +23,19 @@ export type LlmCallOptions = {
     apiKey: string;
     model?: string;
     fetchImpl?: typeof fetch;
+    /**
+     * Override the Anthropic Messages endpoint — point the package at an
+     * OpenAI/Anthropic-compatible gateway (GLM-5.2, z.ai, a local proxy) without
+     * code changes. An origin (`https://...`) gets `/v1/messages` appended; a base
+     * already ending in `/messages` is used verbatim. Threaded from
+     * `ANTHROPIC_API_BASE_URL` at the LlmCallOptions-construction layer (cli.ts),
+     * never read inside `forcedToolCall`. Unset → default api.anthropic.com.
+     */
+    anthropicBaseUrl?: string;
+    /** OpenAI equivalent of `anthropicBaseUrl` (e.g. an Ollama OpenAI-compatible
+     * endpoint). Origin → `/v1/chat/completions` appended; a base ending in
+     * `/chat/completions` is used verbatim. Threaded from `OPENAI_API_BASE_URL`. */
+    openaiBaseUrl?: string;
 };
 export type LlmExtractedInsight = ExtractedCallInsight & {
     owner?: string;

@@ -7,6 +7,46 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
 
 ## [Unreleased]
 
+## [0.41.0] — 2026-06-23
+
+### Added
+
+- **Signal-based outbound: `signals`, `icp judge`/`icp eval`, `draft`.** A timing
+  layer on top of CRM hygiene — reach an account the week something changes, not
+  from a rented list. `signals fetch/list/outcome/weights` captures buying
+  triggers into a local, profile-scoped ledger (Detect-side — it writes nothing
+  to the CRM), sorted into five weighted buckets
+  (`demand`/`funding`/`job`/`company`/`social`); public ATS boards (Greenhouse,
+  Lever, Ashby) are the free, no-auth source in the box, while
+  funding/company/social arrive via staged ingest and `demand` is reserved for a
+  privileged source. A reposted role outweighs a first-time post, and recorded
+  outcomes (`signals outcome`) re-weight which buckets earn a touch. `icp judge`
+  scores each account on timing × fit × memory into `send`/`nurture`/`skip` —
+  every *why-now* must quote a real trigger verbatim (the same evidence gate as
+  `call`/`market`), with a deterministic baseline when no LLM key is set.
+  `icp eval` grades the judge against a golden set (and hot-vs-cold outcomes),
+  exiting `2` below the bar — the calibration gate that blocks a miscalibrated
+  judge from a live send. `draft` writes one trigger-grounded opener per hot
+  account as a governed `create_task` plan through the existing approve → apply
+  gate; it has no send capability and adds none. All four are read/plan-side and
+  schedulable; none can auto-apply or send.
+- **LLM base-URL override.** `ANTHROPIC_API_BASE_URL` / `OPENAI_API_BASE_URL` let
+  every LLM feature run against an Anthropic/OpenAI-compatible endpoint (e.g. a
+  GLM/z.ai endpoint or a local Ollama) with no code change; unset preserves the
+  default endpoints.
+
+### Changed
+
+- **pipe0 resolution runs chunks in parallel (bounded) with exponential backoff.**
+  `pipe0ResolveWorkEmails` and `pipe0ResolveCompanyDomains` previously issued one
+  serial HTTP call per chunk — a few hundred leads took tens of minutes. They now
+  run up to `concurrency` chunks at once (default 3) with exponential backoff on
+  transient failures (throttle/5xx/network: 500ms → 4s, up to 5 attempts). Bounded
+  concurrency + real backoff cuts wall-clock several-fold while keeping coverage:
+  an early concurrency-6 + single-retry build throttled pipe0 at scale and dropped
+  the work-email hit-rate from ~79% to ~17%, so the pairing matters. Chunk size
+  stays small (the waterfall's batch failure is all-or-nothing).
+
 ## [0.40.0] — 2026-06-23
 
 ### Added
