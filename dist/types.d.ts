@@ -385,6 +385,17 @@ export type GtmConnector = {
     fetchSnapshot: () => Promise<CanonicalGtmSnapshot>;
     applyOperation?: (operation: PatchOperation) => Promise<PatchOperationResult>;
     /**
+     * Bulk fast-path for independent `create_record` contact ops: batch the
+     * resolve-first read and the create writes instead of one round-trip per
+     * record (orders of magnitude fewer API calls for lead acquisition). The
+     * caller (`applyPatchPlan`) only routes ops here that are safe to batch —
+     * approved, no group, no value override, no company association — and falls
+     * back to `applyOperation` for the rest. Implementations MUST preserve
+     * resolve-first (never create over an existing match) and return exactly one
+     * result per input op. Optional: connectors without it use `applyOperation`.
+     */
+    applyCreateContactsBatch?: (operations: PatchOperation[]) => Promise<PatchOperationResult[]>;
+    /**
      * Read the live value of one canonical field, used for compare-and-set:
      * apply orchestration refuses to write over values that drifted since the
      * plan was proposed.

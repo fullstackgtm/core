@@ -597,6 +597,118 @@ export function createSalesforceConnector(
     };
   }
 
+  /**
+   * Batch create_record for contacts: bulk resolve-first (SOQL IN), then create
+   * the misses via the Composite sObject Collections API (allOrNone:false,
+   * 200/call), instead of two round-trips per lead. A record-level failure in
+   * the collection (e.g. a duplicate rule) falls back to per-record createRecord
+   * so one bad row never sinks the rest. Returns one result per input op.
+   */
+  async function applyCreateContactsBatch(operations: PatchOperation[]): Promise<PatchOperationResult[]> {
+    const byId = new Map<string, PatchOperationResult>();
+    const groups = new Map<string, PatchOperation[]>();
+    for (const op of operations) {
+      const matchKey = (op.afterValue as CreateRecordPayload | undefined)?.matchKey || "email";
+      const searchField = mappedField(mappings, "contacts", matchKey, SALESFORCE_DEFAULT_FIELD_MAPPINGS.contacts[matchKey] ?? matchKey);
+      let arr = groups.get(searchField);
+      if (!arr) groups.set(searchField, (arr = []));
+      arr.push(op);
+    }
+
+    for (const [searchField, ops] of groups) {
+      // 1. Bulk resolve-first via SOQL IN (chunked; values SOQL-escaped).
+      const existing = new Map<string, string>();
+      const uniqueValues = [
+        ...new Set(ops.map((op) => String((op.afterValue as CreateRecordPayload).matchValue ?? "").trim()).filter(Boolean)),
+      ];
+      for (let i = 0; i < uniqueValues.length; i += 200) {
+        const inList = uniqueValues
+          .slice(i, i + 200)
+          .map((v) => `'${v.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`)
+          .join(",");
+        const rows = await query(`SELECT Id, ${searchField} FROM Contact WHERE ${searchField} IN (${inList})`);
+        for (const row of rows) {
+          const v = row?.[searchField];
+          if (typeof v === "string" && row.Id) existing.set(v.toLowerCase(), String(row.Id));
+        }
+      }
+
+      // 2. Partition: existing / already-this-run / dup-in-batch / to-create.
+      const toCreate: PatchOperation[] = [];
+      const seenInBatch = new Set<string>();
+      for (const op of ops) {
+        const payload = op.afterValue as CreateRecordPayload;
+        const matchKey = payload.matchKey || "email";
+        const matchValue = String(payload.matchValue ?? "").trim();
+        if (!matchValue) {
+          byId.set(op.id, { operationId: op.id, status: "skipped", detail: "create_record needs a non-empty matchValue to resolve-first." });
+          continue;
+        }
+        const lower = matchValue.toLowerCase();
+        const dedupeKey = `${matchKey}:${lower}`;
+        const already = createdContactsByMatch.get(dedupeKey);
+        if (already) {
+          byId.set(op.id, { operationId: op.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already created earlier in this run; not duplicating.`, providerData: { id: already, existing: true } });
+          continue;
+        }
+        const existingId = existing.get(lower);
+        if (existingId) {
+          createdContactsByMatch.set(dedupeKey, existingId);
+          byId.set(op.id, { operationId: op.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already exists (${existingId}); resolve-first declined to create.`, providerData: { id: existingId, existing: true } });
+          continue;
+        }
+        if (seenInBatch.has(lower)) {
+          byId.set(op.id, { operationId: op.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} duplicated within this batch; not duplicating.` });
+          continue;
+        }
+        seenInBatch.add(lower);
+        toCreate.push(op);
+      }
+
+      // 3. Bulk create via Composite sObject Collections (allOrNone:false →
+      //    per-record results in request order).
+      for (let i = 0; i < toCreate.length; i += 200) {
+        const chunk = toCreate.slice(i, i + 200);
+        const records = chunk.map((op) => {
+          const payload = op.afterValue as CreateRecordPayload;
+          const fields: Record<string, string> = { ...payload.properties };
+          if (payload.ownerId) {
+            const ownerField = mappedField(mappings, "contacts", "ownerId", SALESFORCE_DEFAULT_FIELD_MAPPINGS.contacts.ownerId ?? "OwnerId");
+            if (!fields[ownerField]) fields[ownerField] = String(payload.ownerId);
+          }
+          return { attributes: { type: "Contact" }, ...fields };
+        });
+        let results: Array<{ id?: string; success?: boolean }>;
+        try {
+          results = (await request(`/services/data/${apiVersion}/composite/sobjects`, {
+            method: "POST",
+            body: JSON.stringify({ allOrNone: false, records }),
+          })) as Array<{ id?: string; success?: boolean }>;
+        } catch {
+          for (const op of chunk) byId.set(op.id, await createRecord(op));
+          continue;
+        }
+        for (let j = 0; j < chunk.length; j++) {
+          const op = chunk[j];
+          const res = Array.isArray(results) ? results[j] : undefined;
+          const payload = op.afterValue as CreateRecordPayload;
+          const matchKey = payload.matchKey || "email";
+          const matchValue = String(payload.matchValue).trim();
+          if (res?.success && res.id) {
+            createdContactsByMatch.set(`${matchKey}:${matchValue.toLowerCase()}`, String(res.id));
+            byId.set(op.id, { operationId: op.id, status: "applied", detail: `Created contact ${matchKey}=${matchValue} (${res.id}).`, providerData: { id: String(res.id), created: true } });
+          } else {
+            byId.set(op.id, await createRecord(op)); // record-level failure → isolate per record
+          }
+        }
+      }
+    }
+
+    return operations.map(
+      (op) => byId.get(op.id) ?? { operationId: op.id, status: "skipped", detail: "create_record was not processed." },
+    );
+  }
+
   async function applyOperation(operation: PatchOperation): Promise<PatchOperationResult> {
     try {
       switch (operation.operation) {
@@ -683,6 +795,7 @@ export function createSalesforceConnector(
     fetchSnapshot,
     fetchChanges,
     applyOperation,
+    applyCreateContactsBatch,
     readField,
   };
 }

@@ -37,9 +37,16 @@ release.
 
 ## Connectors
 
-- `GtmConnector` — `{ provider, fetchSnapshot(), applyOperation?, readField?, fetchChanges? }`.
+- `GtmConnector` — `{ provider, fetchSnapshot(), applyOperation?, applyCreateContactsBatch?, readField?, fetchChanges? }`.
   - Connectors never silently drop unresolvable records; audits surface them.
   - `fetchChanges(sinceIso)` returns a partial snapshot; change feeds may omit associations.
+  - `applyCreateContactsBatch?(operations)` — optional bulk fast-path for
+    independent `create_record` contact ops. `applyPatchPlan` routes safe-to-batch
+    creates here (batched resolve-first + batched create — ~N/100 calls instead of
+    ~2N), and falls back to `applyOperation` per record on a batch rejection and
+    for any op that isn't batch-safe (grouped, value-overridden, company-
+    associated, conflicted). HubSpot: `search IN` + `batch/create`; Salesforce:
+    SOQL `IN` + Composite sObject Collections (`allOrNone:false`).
 - `createHubspotConnector(options)` — read/write/readField/fetchChanges. `applyOperation` implements every `PatchOperationType`: `set_field`, `clear_field`, `link_record`, `create_task`, `create_record` (resolve-first net-new contact/company create — re-checks the dedupe key at apply, never double-creates), `archive_record`, `merge_records` (HubSpot v3 merge — pairwise, irreversible; survivor must belong to the duplicate group). (The Salesforce connector implements the same operation set, with the platform-specific constraints noted below.)
 - `createSalesforceConnector(options)` — read/write/readField/fetchChanges; probabilities normalized to 0..1. `applyOperation` implements every operation type, with two platform constraints: `merge_records` covers **Accounts and Contacts** only (Salesforce exposes no Opportunity merge), and `create_record` resolve-first creates **contacts/accounts** (SOQL search on the match key, create only on a confirmed miss; stamps the canonical `ownerId` onto `OwnerId`).
 - `createStripeConnector(options)` — read-only billing by design (`applyOperation` returns `skipped`); email domains are the cross-system merge keys. Implements `fetchChanges` (incremental via `created[gte]`).

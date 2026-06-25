@@ -555,6 +555,129 @@ export function createHubspotConnector(options) {
             providerData: { id: contactId, created: true },
         };
     }
+    /** Bulk resolve-first lookup: which match values already exist (value→id). */
+    async function searchContactsByValues(property, values) {
+        const found = new Map();
+        for (let i = 0; i < values.length; i += 100) {
+            const chunk = values.slice(i, i + 100);
+            const data = await request(`/crm/v3/objects/contacts/search`, {
+                method: "POST",
+                body: JSON.stringify({
+                    filterGroups: [{ filters: [{ propertyName: property, operator: "IN", values: chunk }] }],
+                    properties: [property],
+                    limit: 100,
+                }),
+            });
+            for (const rec of (data?.results ?? [])) {
+                const v = rec?.properties?.[property];
+                if (typeof v === "string" && rec.id)
+                    found.set(v.toLowerCase(), String(rec.id));
+            }
+        }
+        return found;
+    }
+    /**
+     * Batch create_record for contacts: bulk resolve-first (search IN), then
+     * bulk-create the genuine misses (batch/create, 100/call) — two API calls per
+     * ~100 leads instead of two per lead. On a batch-create rejection (e.g. an
+     * email collision HubSpot 409s the whole batch over), it falls back to
+     * per-record createRecord for that chunk, so one bad row never sinks the rest
+     * and resolve-first is preserved. Returns one result per input op.
+     */
+    async function applyCreateContactsBatch(operations) {
+        const byId = new Map();
+        // Group by the HubSpot search property (matchKey is usually uniform across a
+        // plan, but a mixed plan stays correct this way).
+        const groups = new Map();
+        for (const op of operations) {
+            const matchKey = op.afterValue?.matchKey || "email";
+            const searchProperty = HUBSPOT_DEFAULT_FIELD_MAPPINGS.contacts[matchKey] ?? matchKey;
+            let arr = groups.get(searchProperty);
+            if (!arr)
+                groups.set(searchProperty, (arr = []));
+            arr.push(op);
+        }
+        for (const [searchProperty, ops] of groups) {
+            const wanted = ops
+                .map((op) => String(op.afterValue.matchValue ?? "").trim())
+                .filter(Boolean);
+            const existing = await searchContactsByValues(searchProperty, [...new Set(wanted.map((v) => v.toLowerCase()))]);
+            const toCreate = [];
+            const seenInBatch = new Set();
+            for (const op of ops) {
+                const payload = op.afterValue;
+                const matchKey = payload.matchKey || "email";
+                const matchValue = String(payload.matchValue ?? "").trim();
+                if (!matchValue) {
+                    byId.set(op.id, { operationId: op.id, status: "skipped", detail: "create_record needs a non-empty matchValue to resolve-first." });
+                    continue;
+                }
+                const lower = matchValue.toLowerCase();
+                const dedupeKey = `${matchKey}:${lower}`;
+                const already = createdContactsByMatch.get(dedupeKey);
+                if (already) {
+                    byId.set(op.id, { operationId: op.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already created earlier in this run; not duplicating.`, providerData: { id: already, existing: true } });
+                    continue;
+                }
+                const existingId = existing.get(lower);
+                if (existingId) {
+                    createdContactsByMatch.set(dedupeKey, existingId);
+                    byId.set(op.id, { operationId: op.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} already exists (${existingId}); resolve-first declined to create.`, providerData: { id: existingId, existing: true } });
+                    continue;
+                }
+                if (seenInBatch.has(lower)) {
+                    byId.set(op.id, { operationId: op.id, status: "skipped", detail: `Contact ${matchKey}=${matchValue} duplicated within this batch; not duplicating.` });
+                    continue;
+                }
+                seenInBatch.add(lower);
+                toCreate.push(op);
+            }
+            for (let i = 0; i < toCreate.length; i += 100) {
+                const chunk = toCreate.slice(i, i + 100);
+                const inputs = chunk.map((op) => {
+                    const payload = op.afterValue;
+                    const properties = { ...payload.properties };
+                    if (payload.ownerId && !properties.hubspot_owner_id)
+                        properties.hubspot_owner_id = String(payload.ownerId);
+                    properties.hs_object_source_detail_2 = `fullstackgtm acquire (${op.id})`;
+                    return { properties };
+                });
+                try {
+                    const data = await request(`/crm/v3/objects/contacts/batch/create`, {
+                        method: "POST",
+                        body: JSON.stringify({ inputs }),
+                    });
+                    const created = (data?.results ?? []);
+                    const idByValue = new Map();
+                    for (const rec of created) {
+                        const v = rec?.properties?.[searchProperty];
+                        if (typeof v === "string" && rec.id)
+                            idByValue.set(v.toLowerCase(), String(rec.id));
+                    }
+                    for (const op of chunk) {
+                        const payload = op.afterValue;
+                        const matchKey = payload.matchKey || "email";
+                        const matchValue = String(payload.matchValue).trim();
+                        const id = idByValue.get(matchValue.toLowerCase());
+                        if (id) {
+                            createdContactsByMatch.set(`${matchKey}:${matchValue.toLowerCase()}`, id);
+                            byId.set(op.id, { operationId: op.id, status: "applied", detail: `Created contact ${matchKey}=${matchValue} (${id}).`, providerData: { id, created: true } });
+                        }
+                        else {
+                            // Result didn't echo this value — resolve it per-record to be safe.
+                            byId.set(op.id, await createRecord(op));
+                        }
+                    }
+                }
+                catch {
+                    // Whole-chunk rejection (e.g. a collision). Isolate per record.
+                    for (const op of chunk)
+                        byId.set(op.id, await createRecord(op));
+                }
+            }
+        }
+        return operations.map((op) => byId.get(op.id) ?? { operationId: op.id, status: "skipped", detail: "create_record was not processed." });
+    }
     async function createTask(operation) {
         const associationTypeId = TASK_ASSOCIATION_TYPE_IDS[operation.objectType];
         if (associationTypeId === undefined) {
@@ -801,6 +924,7 @@ export function createHubspotConnector(options) {
         fetchSnapshot,
         fetchChanges,
         applyOperation,
+        applyCreateContactsBatch,
         readField,
     };
 }
