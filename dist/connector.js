@@ -227,7 +227,41 @@ export async function applyPatchPlan(connector, plan, options) {
             }
         }
     }
+    // Bulk fast-path: route independent, approved create_record CONTACT ops
+    // through the connector's batch API (batched resolve-first read + batched
+    // writes) instead of one round-trip per record. Only ops that are safe to
+    // batch are eligible — every other op (grouped, needs an override, carries a
+    // company association, conflicted, or any non-create op) stays on the serial
+    // path below, so the safety contract is unchanged. Results are merged in by
+    // id; the serial loop short-circuits anything already resolved here.
+    const batched = new Map();
+    if (connector.applyCreateContactsBatch && !guardFailure) {
+        const eligible = plan.operations.filter((operation) => approved.has(operation.id) &&
+            operation.operation === "create_record" &&
+            operation.objectType === "contact" &&
+            options.valueOverrides?.[operation.id] === undefined &&
+            !requiresHumanInput(operation.afterValue) &&
+            !operation.groupId &&
+            !operation.afterValue?.associateCompanyName &&
+            !conflicts.has(operation.id) &&
+            !irreversibleStale.has(operation.id) &&
+            !(staleByFilter && staleByFilter.has(operation.objectId)));
+        // Only worth the batch machinery for more than a couple of creates.
+        if (eligible.length > 2) {
+            const batchResults = await connector.applyCreateContactsBatch(eligible);
+            for (const result of batchResults)
+                batched.set(result.operationId, result);
+        }
+    }
     for (const operation of plan.operations) {
+        const batchedResult = batched.get(operation.id);
+        if (batchedResult) {
+            results.push(batchedResult);
+            attempted += 1;
+            if (batchedResult.status === "applied")
+                applied += 1;
+            continue;
+        }
         if (!approved.has(operation.id)) {
             results.push({
                 operationId: operation.id,

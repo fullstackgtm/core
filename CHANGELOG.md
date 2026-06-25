@@ -7,6 +7,23 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
 
 ## [Unreleased]
 
+## [0.42.0] — 2026-06-25
+
+### Added
+
+- **Bulk apply for lead creation (HubSpot + Salesforce).** `applyPatchPlan` now
+  routes independent, approved `create_record` **contact** ops through a new
+  optional connector capability, `applyCreateContactsBatch`, instead of two API
+  round-trips per lead (a resolve-first search + a create). HubSpot batches the
+  resolve-first via a `search` `IN` and creates via `batch/create` (100/call);
+  Salesforce batches via a SOQL `IN` and the Composite sObject Collections API
+  (`allOrNone: false`, 200/call). A batch rejection (e.g. a duplicate that the
+  provider 4xxs the whole batch over) falls back to per-record `createRecord`, so
+  one bad row never sinks the rest and resolve-first is preserved. Turns ~2N API
+  calls into ~N/100; ops that aren't safe to batch (grouped, value-overridden,
+  company-associated, conflicted, or non-create) stay on the serial path
+  unchanged. Connectors without the capability are unaffected.
+
 ## [0.41.0] — 2026-06-23
 
 ### Added
