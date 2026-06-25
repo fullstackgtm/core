@@ -69,6 +69,13 @@ export type CreateRecordPayload = {
   estCostUsd?: number;
   associateCompanyName?: string;
   /**
+   * The company's domain, when known. The connector resolves the account by
+   * DOMAIN first (the accurate key), creates it with the domain, and fills the
+   * domain on an existing account that lacks one — so the lead's account is a
+   * real, signal-watchable record (`signals`/`icp judge` key on account domain).
+   */
+  associateCompanyDomain?: string;
+  /**
    * Owner to stamp on the new record (canonical owner id). The connector maps
    * it to the CRM's owner property (HubSpot `hubspot_owner_id`) at create time
    * so a lead is never born ownerless. Absent = leave unassigned.
@@ -364,7 +371,12 @@ export type PatchPlan = {
   status: ApprovalStatus;
   dryRun: true;
   summary: string;
+  /** The COMPLETE, object-typed findings list — every account/contact/deal
+   *  finding, each carrying its `objectType`. This is the canonical set. */
   findings: AuditFinding[];
+  /** A deal/sales-PIPELINE projection of `findings` (deal-level + the
+   *  call-next-step type) for the pipeline-trust queue — intentionally a subset.
+   *  Account/contact hygiene findings are NOT here; read `findings` for those. */
   pipelineFindings?: PipelineFinding[];
   evidence?: GtmEvidence[];
   operations: PatchOperation[];

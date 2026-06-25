@@ -305,9 +305,6 @@ export function draft(opts: {
   const minScore = opts.minScore ?? 80;
   const channel: DraftChannel = opts.channel ?? "task";
   const freshnessDays = opts.freshnessDays ?? DEFAULT_FRESHNESS_DAYS;
-  // `task`/`email`/`linkedin` all write a CRM task through the same gate; the
-  // object the task hangs off is the contact when known, else the account.
-  const objectType: GtmObjectType = "contact";
 
   const hot = opts.decisions
     .filter((d) => d.decision === "send" && d.score >= minScore)
@@ -349,11 +346,35 @@ export function draft(opts: {
       continue;
     }
 
+    // Resolve a REAL CRM target from the judge decision: a contact id (preferred
+    // — that's who we message), else the account id. A domain-only decision
+    // (the account isn't in the CRM yet) cannot hang a task off a record — reject
+    // it with the fix, instead of forging a contact-typed op carrying a domain.
+    let objectType: GtmObjectType;
+    let objectId: string;
+    let targetNote: string;
+    if (decision.contact?.id) {
+      objectType = "contact";
+      objectId = decision.contact.id;
+      targetNote = `contact ${decision.contact.email ?? decision.contact.id}`;
+    } else if (decision.accountId) {
+      objectType = "account";
+      objectId = decision.accountId;
+      targetNote = `account ${domain}`;
+    } else {
+      rejected.push({
+        accountDomain: domain,
+        opener,
+        reason: `account ${domain} is not in the CRM — acquire it first (enrich acquire), then judge with a snapshot, before drafting`,
+      });
+      continue;
+    }
+
     const stale = isStaleTrigger(signal.firstSeen, now, freshnessDays);
     const ev = draftEvidence(signal, nowIso);
     evidence.push(ev);
 
-    const reasonBase = `Signal-grounded opener for ${domain}: "${signal.trigger}"`;
+    const reasonBase = `Signal-grounded opener for ${domain} → ${targetNote}: "${signal.trigger}"`;
     const reason = stale
       ? `${reasonBase} [staleTrigger: grounding signal first seen ${signal.firstSeen}, older than ${freshnessDays}d — could this have gone out last month unchanged?]`
       : reasonBase;
@@ -361,7 +382,7 @@ export function draft(opts: {
     operations.push({
       id: draftOperationId(channel, domain),
       objectType,
-      objectId: domain,
+      objectId,
       operation: "create_task",
       field: "follow_up_task",
       beforeValue: null,

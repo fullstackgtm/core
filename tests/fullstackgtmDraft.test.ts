@@ -62,6 +62,11 @@ function sendDecision(
 ): JudgeDecision {
   return {
     accountDomain: s.accountDomain,
+    // A resolved CRM target by default (the account is in the CRM, with a
+    // contact to reach) — tests that exercise the domain-only path pass
+    // `{ accountId: undefined, contact: undefined }` to clear it.
+    accountId: `acct-${s.accountDomain}`,
+    contact: { id: `con-${s.accountDomain}`, email: `lead@${s.accountDomain}` },
     score: over.score ?? 88,
     decision: over.decision ?? "send",
     // whyNow is a verbatim span of the signal quote (the judge guarantees this).
@@ -70,6 +75,7 @@ function sendDecision(
     evidence: over.evidence ?? [s.id],
     producedBy: over.producedBy ?? "deterministic",
     ...(over.skippedReason !== undefined ? { skippedReason: over.skippedReason } : {}),
+    ...over,
   };
 }
 
@@ -183,8 +189,10 @@ test("draft emits exactly one create_task op per hot account, each carrying evid
 
   // One op per hot account (apex, beacon) — the nurture is dropped.
   assert.equal(result.plan.operations.length, 2);
-  const domains = result.plan.operations.map((o) => o.objectId).sort();
-  assert.deepEqual(domains, ["apexnorth.agency", "beacon.io"]);
+  // The op targets the resolved CONTACT id — never the domain.
+  const targets = result.plan.operations.map((o) => o.objectId).sort();
+  assert.deepEqual(targets, ["con-apexnorth.agency", "con-beacon.io"]);
+  assert.ok(result.plan.operations.every((o) => o.objectType === "contact"));
 
   for (const op of result.plan.operations) {
     assert.equal(op.operation, "create_task");
@@ -368,5 +376,46 @@ test("draft --save persists a needs_approval plan readable via createFilePlanSto
     if (prev === undefined) delete process.env.FSGTM_HOME;
     else process.env.FSGTM_HOME = prev;
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Object-type coherence: draft writes against a REAL record id, never a domain
+
+test("draft targets the account when no contact resolved, and rejects domain-only decisions", () => {
+  const acctOnly = signal({ accountDomain: "acctonly.com", bucket: "funding", trigger: "raised", quote: "AcctOnly raised a $20M round this week." });
+  const domainOnly = signal({ accountDomain: "newco.com", bucket: "funding", trigger: "raised", quote: "NewCo raised a seed round this week." });
+
+  // accountId present, no contact → op hangs off the ACCOUNT.
+  const dAcct = sendDecision(acctOnly, { whyNow: "raised a $20M round", contact: undefined });
+  // neither accountId nor contact (account not in CRM) → must be rejected.
+  const dDomain = sendDecision(domainOnly, { whyNow: "raised a seed round", accountId: undefined, contact: undefined });
+
+  const signalsById = new Map([acctOnly, domainOnly].map((s) => [s.id, s]));
+  const result = draft({ decisions: [dAcct, dDomain], signalsById, now: NOW });
+
+  assert.equal(result.plan.operations.length, 1, "only the account-resolved decision produces an op");
+  const op = result.plan.operations[0];
+  assert.equal(op.objectType, "account");
+  assert.equal(op.objectId, "acct-acctonly.com");
+
+  const rej = result.rejected.find((r) => r.accountDomain === "newco.com");
+  assert.ok(rej, "the domain-only decision is rejected, not emitted");
+  assert.match(rej!.reason, /not in the CRM — acquire it first/);
+});
+
+test("draft NEVER emits a contact-typed op carrying a domain (coherence invariant)", () => {
+  const a = signal({ accountDomain: "apexnorth.agency", bucket: "funding", trigger: "raised Series B", quote: "ApexNorth raised a $40M Series B this week." });
+  const result = draft({
+    decisions: [sendDecision(a, { whyNow: "raised a $40M Series B" })],
+    signalsById: new Map([[a.id, a]]),
+    now: NOW,
+  });
+  for (const op of result.plan.operations) {
+    // objectId must be the resolved record id of its declared type — never the
+    // bare account domain (the incoherence this fix removes).
+    assert.notEqual(op.objectId, "apexnorth.agency", "op must not target the bare domain");
+    if (op.objectType === "contact") assert.ok(op.objectId.startsWith("con-"));
+    if (op.objectType === "account") assert.ok(op.objectId.startsWith("acct-"));
   }
 });

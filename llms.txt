@@ -15,6 +15,7 @@ at/above `--fail-on`.
 - [README](https://github.com/fullstackgtm/core/blob/main/README.md): install, five-minute loop, auth ladder, MCP setup, programmatic use
 - [INSTALL_FOR_AGENTS](https://github.com/fullstackgtm/core/blob/main/INSTALL_FOR_AGENTS.md): deterministic install-and-verify steps with expected outputs
 - [Agent skill](https://github.com/fullstackgtm/core/blob/main/skills/fullstackgtm/SKILL.md): compact operating guide, installable via `npx skills add fullstackgtm/core`
+- [Recipes](https://github.com/fullstackgtm/core/blob/main/packages/fullstackgtm/docs/recipes.md): five composable GTM plays over the primitives (cold-start lead-fill, the trigger→judge→draft outbound loop, scheduled-continuous, ABM-from-companies, hygiene-gated outbound) — the CLI ships primitives, your agent is the orchestrator, the package never sends
 - [Architecture](https://github.com/fullstackgtm/core/blob/main/docs/architecture.md): module map + snapshot → audit → plan → apply data flow; "where do I add a rule/connector/operation"
 - [Contributing](https://github.com/fullstackgtm/core/blob/main/CONTRIBUTING.md): dev setup, the open-core mirror model, the release ritual
 - [API reference](https://github.com/fullstackgtm/core/blob/main/docs/api.md): semver-covered surfaces — canonical model, rule interface, plan/apply contract, connector contract, config, CLI, MCP tools
@@ -116,6 +117,30 @@ match key = LinkedIn URL, $0/record, `login heyreach`/`HEYREACH_API_KEY`) via th
 injectable `LinkedInProvider` (default HeyReach; `FakeLinkedInProvider` for tests).
 LinkedIn is read-only — Phase 1 has no `linkedin_connect`/`linkedin_message` ops
 and no webhook ingestion (Phase 2). Never auto-writes.
+
+## Key invariants (GTM brain — signals / icp / judge / draft)
+
+The timing/outbound layer turns "who changed" into one grounded, governed
+opener — and **never sends**. `signals fetch` captures fresh buying triggers
+into a profile-scoped ledger (free Greenhouse/Lever/Ashby ATS scrapers in the
+box; funding/social via `ingest`/`--from`), keyed by **account domain**, ranked
+by learned `weights`; it writes NOTHING to the CRM. `icp interview|set|show`
+builds `icp.json`; `icp judge` ranks fresh signals into send/nurture/skip — pass
+a snapshot (`--provider`/`--input`/`--demo`) and each decision resolves its CRM
+target: `accountId`, the best `contact {id,email,title}`, and `contacts[]` (all
+in-CRM contacts at the account, titled-first, cap 10, for multi-threading);
+`--with-history` additionally gates memory (don't re-touch a recently-touched
+account) and fit-scoring. `icp eval` is the calibration gate (exit 2 below the
+bar). `draft` emits ONE trigger-grounded opener per hot account as a governed
+`create_task` targeting the resolved `contact.id` (or `accountId`) — a
+domain-only decision (account not yet in the CRM) is REJECTED with "acquire it
+first" (run `enrich acquire`, re-judge with the snapshot). `--channel
+email|linkedin|task` shapes the opener; it is a task the operator sends from
+their own tool, never an automated send. `signals outcome --account <domain>
+--contact <id> --result replied|...` credits the contact reached so weights
+re-learn. The contact↔account join (`contact.accountId` + `account.domain`) is
+surfaced at every hop, so the loop is contact-coherent end to end — see the
+[recipes](https://github.com/fullstackgtm/core/blob/main/packages/fullstackgtm/docs/recipes.md).
 
 ## Key invariants (schedule)
 

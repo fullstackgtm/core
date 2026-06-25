@@ -323,3 +323,113 @@ test("create_record: an existing match is NOT duplicated (resolve-first declines
   assert.equal(run.results[0].status, "skipped");
   assert.equal(posts, 0, "resolve-first must not create when a contact already exists");
 });
+
+// ---------------------------------------------------------------------------
+// Seam A: the lead's account is made signal-watchable (domain threaded + surfaced)
+
+test("acquire threads the company domain onto the payload (explicit path) and surfaces the account in the op reason", () => {
+  const config = acquireConfig({
+    acquire: {
+      budget: { records: { perDay: 50, perMonth: 500 } },
+      costPerRecord: { clay: 0 },
+      create: {
+        contact: {
+          matchKey: "email",
+          properties: { email: "email", firstname: "first_name" },
+          associateCompanyFrom: "company",
+          associateCompanyDomainFrom: "company_domain",
+        },
+      },
+    },
+  });
+  const result = buildAcquirePlan({
+    config,
+    source: "clay",
+    snapshot: snapshot(),
+    runLabel: "t",
+    records: [contactRecord("r", "ceo@acme.io", { first_name: "Ada", company: "Acme", company_domain: "https://www.acme.io/about" })],
+  });
+  const op = result.plan.operations[0];
+  const payload = op.afterValue as CreateRecordPayload;
+  assert.equal(payload.associateCompanyName, "Acme");
+  assert.equal(payload.associateCompanyDomain, "acme.io"); // normalized from the URL
+  assert.match(op.reason, /Resolves\/creates its account "Acme" \(acme\.io\)/);
+});
+
+test("acquire falls back to the work-email domain when no company-domain path is set", () => {
+  const result = buildAcquirePlan({
+    config: acquireConfig(),
+    source: "clay",
+    snapshot: snapshot(),
+    runLabel: "t",
+    records: [contactRecord("r", "vp@beacon.co", { first_name: "Bo", company: "Beacon" })],
+  });
+  const payload = result.plan.operations[0].afterValue as CreateRecordPayload;
+  assert.equal(payload.associateCompanyName, "Beacon");
+  assert.equal(payload.associateCompanyDomain, "beacon.co"); // derived from the email
+});
+
+test("create_record: associates the account by DOMAIN — searches by domain, creates the company with it (seam A)", async () => {
+  const companySearchProps: string[] = [];
+  let companyCreateBody: { properties?: Record<string, string> } | undefined;
+  const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } });
+  const connector = createHubspotConnector({
+    getAccessToken: () => "t",
+    fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      if (url.includes("/contacts/search")) return json({ results: [] });
+      if (url.includes("/companies/search")) {
+        companySearchProps.push(body.filterGroups[0].filters[0].propertyName);
+        return json({ results: [] }); // no match anywhere → create
+      }
+      if (url.includes("/objects/companies") && init?.method === "POST") {
+        companyCreateBody = body;
+        return json({ id: "co1" });
+      }
+      if (url.includes("/associations/")) return json({});
+      if (url.includes("/objects/contacts") && init?.method === "POST") return json({ id: "c1" });
+      return json({ id: "x" });
+    }) as typeof fetch,
+  });
+  const plan = createPlan({
+    properties: { email: "ceo@acme.io", firstname: "Ada" },
+    matchKey: "email",
+    matchValue: "ceo@acme.io",
+    source: "clay",
+    associateCompanyName: "Acme",
+    associateCompanyDomain: "acme.io",
+  });
+  const run = await applyPatchPlan(connector, plan, { approvedOperationIds: ["op_acq_1"], checkConflicts: false });
+  assert.equal(run.results[0].status, "applied");
+  assert.ok(companySearchProps.includes("domain"), "the account is resolved by DOMAIN first");
+  assert.equal(companyCreateBody?.properties?.domain, "acme.io", "the company is created WITH the domain");
+  assert.equal(companyCreateBody?.properties?.name, "Acme");
+});
+
+test("acquire creates ACCOUNTS too: a company source row becomes an account create_record (seam I / ABM)", () => {
+  const config = acquireConfig({
+    match: { company: { keys: ["domain"], onAmbiguous: "skip" } },
+    acquire: {
+      budget: { records: { perDay: 50, perMonth: 500 } },
+      costPerRecord: { clay: 0 },
+      create: { company: { matchKey: "domain", properties: { name: "company", domain: "domain" } } },
+    },
+  });
+  const result = buildAcquirePlan({
+    config,
+    source: "clay",
+    snapshot: snapshot(),
+    runLabel: "t",
+    records: [{ id: "r", objectType: "company", keys: { domain: "acme.io" }, payload: { company: "Acme", domain: "acme.io" } }],
+  });
+  assert.equal(result.plan.operations.length, 1);
+  const op = result.plan.operations[0];
+  assert.equal(op.operation, "create_record");
+  assert.equal(op.objectType, "account", "a company source row creates an ACCOUNT, not a contact");
+  const payload = op.afterValue as CreateRecordPayload;
+  assert.equal(payload.matchKey, "domain");
+  assert.equal(payload.matchValue, "acme.io");
+  assert.equal(payload.properties.domain, "acme.io");
+  assert.equal(payload.properties.name, "Acme");
+});

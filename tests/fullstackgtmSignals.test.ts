@@ -486,3 +486,10 @@ test("signal store: governance — no plan store is touched; fetch persists a Si
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("makeOutcome credits the contact the touch went to (else stays account-level)", () => {
+  const o = makeOutcome({ accountDomain: "apexnorth.agency", touchId: "t1", contactId: "con-vp", result: "replied" });
+  assert.equal(o.contactId, "con-vp");
+  const o2 = makeOutcome({ accountDomain: "x.com", result: "replied" });
+  assert.equal(o2.contactId, undefined);
+});

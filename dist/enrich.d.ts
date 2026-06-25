@@ -68,6 +68,12 @@ export type AcquireCreateMap = {
     matchKey: string;
     /** Optional source path to a company name; the connector resolves-or-creates it. */
     associateCompanyFrom?: string;
+    /**
+     * Optional source path to the company domain. With it (or a derivable email
+     * domain) the connector resolves the account by domain and stamps the domain
+     * on it — so the lead's account is signal-watchable, not just a text field.
+     */
+    associateCompanyDomainFrom?: string;
 };
 /**
  * Net-new discovery for an API acquire source. `provider` selects the adapter

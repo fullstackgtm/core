@@ -98,6 +98,16 @@ export {
   type MatchOutcome,
 } from "./enrich.ts";
 export {
+  scaffoldWorkspace,
+  starterEnrichConfig,
+  starterIcp,
+  starterPlaybook,
+  type InitProvider,
+  type InitSource,
+  type ScaffoldFile,
+  type ScaffoldOptions,
+} from "./init.ts";
+export {
   apolloPullKeysForAppend,
   apolloPullKeysForRefresh,
   createApolloClient,

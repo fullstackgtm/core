@@ -7,6 +7,86 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
 
 ## [Unreleased]
 
+## [0.43.0] — 2026-06-25
+
+### Added
+
+- **`init` — scaffold a GTM workspace from cold scratch.** `fullstackgtm init
+  [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce]` writes
+  three files so the first acquire/signals/judge/draft commands work: a valid
+  starter `icp.json`, an acquire-ready `enrich.config.json` (the source preset
+  plus an explicit `acquire.assign` seam, placeholder owner id, so leads are
+  never silently ownerless), and a `PLAYBOOK.md` wired with the cold-start and
+  outbound-loop recipes for this workspace's source/provider/profile. Pure
+  file-writer: no network, keeps existing files unless `--force`. Library:
+  `scaffoldWorkspace`, `starterIcp`, `starterEnrichConfig`, `starterPlaybook`.
+- **`docs/recipes.md` — five composable GTM plays.** Documents how the governed
+  primitives compose into real plays (cold-start lead-fill, the
+  trigger→judge→draft outbound loop, scheduled-continuous, ABM-from-companies,
+  hygiene-gated outbound) — making explicit that the CLI ships primitives, the
+  coding agent is the orchestrator (no `outbound` mega-verb), and the package
+  never sends. Surfaced from the agent skill and `llms.txt`, which also now
+  carry the previously-undocumented GTM-brain layer (`signals`/`icp`/`judge`/
+  `draft`) and the `init`/`enrich acquire` account-stamping behavior.
+- **Account-level acquire for ABM (seam I).** `enrich acquire` creates net-new
+  **accounts**, not just contacts: configure `acquire.create.company` (match key
+  `domain`) and feed company rows (`enrich ingest companies.csv --objects
+  companies`). Each unmatched company becomes a `create_record` of
+  `objectType: account` with its domain stamped — so the acquired account is
+  immediately signal-watchable. (The spine already routed by object type; this
+  validates + documents the account path so it's discoverable.)
+- **`health` breaks down by object type.** `HealthEntry.byObjectType` reports a
+  separate record-normalized score (same 100/(1+weighted-per-record) curve) plus
+  finding/record counts for `account`, `contact`, and `deal` — so "is my contact
+  data clean but my pipeline messy?" is answerable from one audit, and `health`
+  speaks each object type instead of a single aggregate. Rendered as a "By object
+  type" table in `healthToMarkdown`.
+- **Outbound is contact-granular end to end (seam D).** `icp judge` now surfaces
+  `contacts` — all in-CRM contacts at the hot account (primary first, capped) —
+  alongside the single `contact`, so an agent can multi-thread instead of being
+  limited to one person. `signals outcome --contact <id>` records which contact a
+  touch reached (`SignalOutcome.contactId`), so the feedback loop credits the
+  person, not just the account domain.
+
+### Changed
+
+- **`call link` says HOW it matched (seam H); the findings split is documented
+  (seam G).** `CallDealSuggestion` now carries `resolvedVia`
+  (`account_domain` | `contact_email` | `both`) and `matchedContacts`, so an
+  agent can weight a deal match by whether it came from the company-wide domain
+  or a single (possibly stale) attendee email — and the contact↔account hop is
+  visible, not just the resolved account. Separately, `PatchPlan.findings` (the
+  complete, object-typed list) and `pipelineFindings` (the deliberately
+  deal/sales-pipeline subset) are now documented so account/contact findings
+  aren't mistaken for "dropped" — they live in `findings`.
+- **`enrich acquire` now gives every lead a signal-watchable account (contact↔
+  account seam).** Previously the presets wrote the company as a text field only,
+  so an acquired lead had no account record — invisible to `signals`/`icp judge`,
+  which key on account domain. Now acquire resolves-or-creates the lead's account
+  **by domain**: `AcquireCreateMap.associateCompanyDomainFrom` (preset:
+  `companyDomain`) threads the resolved domain — or the work-email's domain as a
+  free fallback — onto `CreateRecordPayload.associateCompanyDomain`. The HubSpot
+  and Salesforce connectors then match the account by domain first (the accurate
+  key), create it **with** the domain (`domain` / `Website`), and fill the domain
+  on a name-matched account that lacks one (fill-blank, never clobber). The dry-
+  run op reason now names the account + domain instead of resolving it silently.
+
+### Fixed
+
+- **Outbound now writes against a real record, not a domain (contact↔account
+  seam).** `draft` previously emitted a `create_task` op hardcoded to
+  `objectType: "contact"` while carrying the account **domain** as `objectId` —
+  an incoherent operation the apply layer had to re-interpret. The bridge is now
+  explicit: `icp judge` resolves each decision's CRM target and surfaces it on
+  `JudgeDecision` — `accountId` plus the best `contact` (`id`/`email`/`title`) at
+  the account — whenever a snapshot source is given (`--provider`/`--input`/etc;
+  `--with-history` still gates the memory + fit scoring inputs, so scores are
+  unchanged). `draft` writes the task against `contact.id` (who to message), or
+  the `accountId` when no contact resolves, and **rejects a domain-only decision**
+  ("acquire it first") instead of forging a contact-typed op with a domain. The
+  object-type coherence invariant — every op's `objectId` is a real id of its
+  declared type — now holds for the outbound path.
+
 ## [0.42.0] — 2026-06-25
 
 ### Added

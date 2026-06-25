@@ -247,6 +247,8 @@ export function builtinAcquirePreset(source) {
                             company: "companyName",
                             email: "email",
                         },
+                        associateCompanyFrom: "companyName",
+                        associateCompanyDomainFrom: "companyDomain",
                     },
                 },
             },
@@ -274,6 +276,8 @@ export function builtinAcquirePreset(source) {
                         company: "companyName",
                         hs_linkedin_url: "linkedin",
                     },
+                    associateCompanyFrom: "companyName",
+                    associateCompanyDomainFrom: "companyDomain",
                 },
             },
         },
@@ -489,6 +493,28 @@ function crmFieldValue(snapshot, objectType, objectId, field) {
 }
 function isEmptyValue(value) {
     return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
+}
+/** Bare registrable host from a domain or URL ("https://www.x.com/a" → "x.com"). */
+function normalizeCompanyDomain(value) {
+    if (typeof value !== "string" || !value.trim())
+        return undefined;
+    const host = value
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//, "")
+        .replace(/^www\./, "")
+        .replace(/\/.*$/, "")
+        .replace(/\s+/g, "");
+    return host && host.includes(".") ? host : undefined;
+}
+/** The domain of a work email ("vp@acme.com" → "acme.com"), else undefined. */
+function domainFromEmail(value) {
+    if (typeof value !== "string")
+        return undefined;
+    const at = value.lastIndexOf("@");
+    if (at < 0)
+        return undefined;
+    return normalizeCompanyDomain(value.slice(at + 1));
 }
 /** Values compare as trimmed strings; numbers compare numerically. */
 function sameValue(a, b) {
@@ -831,6 +857,21 @@ export function buildAcquirePlan(options) {
             if (!isEmptyValue(companyValue))
                 associateCompanyName = String(companyValue);
         }
+        // The company domain makes the lead's account signal-watchable. Prefer the
+        // configured source path; fall back to the work email's domain (free, and
+        // for B2B leads the email domain IS the company domain).
+        let associateCompanyDomain;
+        if (associateCompanyName) {
+            const fromPath = createMap.associateCompanyDomainFrom
+                ? sourceValueAt(record.payload, createMap.associateCompanyDomainFrom)
+                : undefined;
+            const candidate = !isEmptyValue(fromPath)
+                ? String(fromPath)
+                : domainFromEmail(sourceValueAt(record.payload, "email"));
+            const normalized = normalizeCompanyDomain(candidate);
+            if (normalized)
+                associateCompanyDomain = normalized;
+        }
         const recordEvidence = evidenceFor(source, sourceConfig.kind, sourceConfig.format, record, undefined, nowIso);
         evidence.push(recordEvidence);
         // Resolve ownership BEFORE the meter-charged create lands, so the lead is
@@ -853,8 +894,13 @@ export function buildAcquirePlan(options) {
             source,
             estCostUsd: costPerRecord,
             associateCompanyName,
+            ...(associateCompanyDomain ? { associateCompanyDomain } : {}),
             ...(ownerId ? { ownerId, assignedBy } : {}),
         };
+        // Surface the account link in the dry-run so it is not a silent side-effect.
+        const accountNote = associateCompanyName
+            ? ` Resolves/creates its account "${associateCompanyName}"${associateCompanyDomain ? ` (${associateCompanyDomain})` : ""} and links the lead.`
+            : "";
         operations.push({
             id: `op_acq_${fnv1a(`${source}:${record.objectType}:${matchValue}`)}`,
             objectType: canonicalObjectType(record.objectType),
@@ -863,7 +909,7 @@ export function buildAcquirePlan(options) {
             beforeValue: null,
             afterValue: payload,
             reason: `${source} sourced net-new ${record.objectType} "${describeSourceRecord(record)}" ` +
-                `(${createMap.matchKey}=${matchValue}); no CRM match — create as a lead.`,
+                `(${createMap.matchKey}=${matchValue}); no CRM match — create as a lead.${accountNote}`,
             sourceRuleOrPolicy: `acquire:${source}`,
             riskLevel: "medium",
             approvalRequired: true,

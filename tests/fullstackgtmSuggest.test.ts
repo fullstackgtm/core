@@ -310,7 +310,7 @@ test("salesforce link_record create:<Name> resolves first, then creates the Acco
   assert.match(result.detail ?? "", /Created account "NewCo LLC" \(001ABC\)/);
   // resolve-first SOQL, create, then the AccountId PATCH
   assert.equal(calls.length, 3);
-  assert.match(decodeURIComponent(calls[0].url), /SELECT Id FROM Account WHERE Name = 'NewCo LLC'/);
+  assert.match(decodeURIComponent(calls[0].url), /SELECT Id(?:, Website)? FROM Account WHERE Name = 'NewCo LLC'/);
   assert.match(calls[1].url, /\/sobjects\/Account$/);
   assert.equal(JSON.parse(calls[1].body!).Name, "NewCo LLC");
   assert.match(calls[2].body ?? "", /001ABC/);

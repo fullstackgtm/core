@@ -26,6 +26,23 @@ import type { CanonicalGtmSnapshot } from "./types.ts";
 export type JudgeDecisionKind = "send" | "nurture" | "skip";
 export type JudgeDecision = {
     accountDomain: string;
+    /**
+     * The CRM account this domain resolves to, when a snapshot was provided.
+     * Absent = the account is not in the CRM (a net-new domain) — downstream
+     * verbs must acquire it before they can write against it.
+     */
+    accountId?: string;
+    /**
+     * The contact at the account to reach, when resolvable from the snapshot —
+     * the answer to "who do I message at this hot account". `draft` targets this
+     * contact's id; absent contact + present accountId targets the account.
+     */
+    contact?: ContactRef;
+    /**
+     * All in-CRM contacts at the account (primary first), capped — so an agent can
+     * multi-thread beyond the single primary. `contact` is `contacts[0]`.
+     */
+    contacts?: ContactRef[];
     /** 0-100. */
     score: number;
     decision: JudgeDecisionKind;
@@ -125,9 +142,9 @@ export declare function scoreAccount(opts: {
  */
 export declare function accountRecentlyTouched(accountDomain: string, snapshot: CanonicalGtmSnapshot, now?: Date, windowDays?: number): boolean;
 /**
- * Find the best-matching contact for an account from the snapshot, for fit
- * scoring: the account's contacts, preferring one with a title (a title is what
- * fit scores on). Returns undefined when the account/contact isn't in snapshot.
+ * Best-matching contact for an account, shaped for fit scoring (the title is
+ * what `scoreProspectAgainstIcp` reads). Returns undefined when the
+ * account/contact isn't in the snapshot.
  */
 export declare function bestContactForAccount(accountDomain: string, snapshot: CanonicalGtmSnapshot): {
     jobTitle?: string;
@@ -135,6 +152,22 @@ export declare function bestContactForAccount(accountDomain: string, snapshot: C
     jobDepartment?: string;
     headline?: string;
 } | undefined;
+/**
+ * Resolve the CRM target for an account domain: its `accountId` (when the
+ * account exists in the snapshot) and the best `contact` to reach (id + email +
+ * title). This is what `draft` writes against — a real record id, never the
+ * domain. `{}` when the account is not in the CRM (a net-new domain).
+ */
+export type ContactRef = {
+    id: string;
+    email?: string;
+    title?: string;
+};
+export declare function resolveAccountTarget(accountDomain: string, snapshot: CanonicalGtmSnapshot): {
+    accountId?: string;
+    contact?: ContactRef;
+    contacts?: ContactRef[];
+};
 /**
  * Build a `JudgeDecision` from an `AccountScore` with the deterministic baseline:
  * whyNow taken VERBATIM from the top credited signal's quote (grounded by

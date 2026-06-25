@@ -457,3 +457,47 @@ test("JUDGE_SCHEMA constrains decision to the three kinds", () => {
   const enumVals = (JUDGE_SCHEMA.properties.decision as { enum: readonly string[] }).enum;
   assert.deepEqual([...enumVals].sort(), ["nurture", "send", "skip"]);
 });
+
+test("judgeSignals surfaces the CRM target (accountId + contact) when a snapshot is provided", async () => {
+  const s = signal({ accountDomain: "apexnorth.agency", bucket: "funding", trigger: "raised", quote: "ApexNorth raised a $40M Series B this week." });
+  const snapshot: CanonicalGtmSnapshot = {
+    generatedAt: "t",
+    provider: "hubspot",
+    users: [],
+    accounts: [{ id: "acct-apex", name: "ApexNorth", domain: "apexnorth.agency" }],
+    contacts: [{ id: "con-apex", accountId: "acct-apex", email: "vp@apexnorth.agency", title: "VP Growth" }],
+    deals: [],
+    activities: [],
+  };
+  const withSnap = await judgeSignals({ signals: [s], config: DEFAULT_SIGNALS_CONFIG, snapshot });
+  const d = withSnap.find((x) => x.accountDomain === "apexnorth.agency")!;
+  assert.equal(d.accountId, "acct-apex");
+  assert.deepEqual(d.contact, { id: "con-apex", email: "vp@apexnorth.agency", title: "VP Growth" });
+
+  // Without a snapshot, the decision is honest domain-only — no forged target.
+  const noSnap = await judgeSignals({ signals: [s], config: DEFAULT_SIGNALS_CONFIG });
+  const d2 = noSnap.find((x) => x.accountDomain === "apexnorth.agency")!;
+  assert.equal(d2.accountId, undefined);
+  assert.equal(d2.contact, undefined);
+});
+
+test("judgeSignals surfaces all candidate contacts at an account (primary first) for multi-threading", async () => {
+  const s = signal({ accountDomain: "apexnorth.agency", bucket: "funding", trigger: "raised", quote: "ApexNorth raised a $40M Series B this week." });
+  const snapshot: CanonicalGtmSnapshot = {
+    generatedAt: "t",
+    provider: "hubspot",
+    users: [],
+    accounts: [{ id: "acct-apex", name: "ApexNorth", domain: "apexnorth.agency" }],
+    contacts: [
+      { id: "con-untitled", accountId: "acct-apex", email: "intern@apexnorth.agency" },
+      { id: "con-vp", accountId: "acct-apex", email: "vp@apexnorth.agency", title: "VP Growth" },
+    ],
+    deals: [],
+    activities: [],
+  };
+  const [d] = await judgeSignals({ signals: [s], config: DEFAULT_SIGNALS_CONFIG, snapshot });
+  assert.equal(d.contacts?.length, 2);
+  assert.equal(d.contacts?.[0].id, "con-vp", "titled contact is primary");
+  assert.deepEqual(d.contact, d.contacts?.[0], "contact === contacts[0]");
+  assert.ok(d.contacts?.some((c) => c.id === "con-untitled"), "untitled candidate also surfaced");
+});

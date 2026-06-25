@@ -35,6 +35,18 @@ export type HealthEntry = {
   byRule: Record<string, number>;
   /** Finding count per severity. */
   severityCounts: Record<AuditFindingSeverity, number>;
+  /**
+   * Per-object-type breakdown — so "is my contact data clean but my pipeline
+   * messy?" is answerable without re-auditing. Each type carries its own
+   * record-normalized score (same curve as the overall score, scoped to that
+   * type's records + findings).
+   */
+  byObjectType: Record<"account" | "contact" | "deal", {
+    records: number;
+    findings: number;
+    weightedFindings: number;
+    score: number;
+  }>;
 };
 
 export type HealthRuleDelta = {
@@ -68,11 +80,21 @@ export type HealthRollup = {
 export function computeHealth(plan: PatchPlan, snapshot: CanonicalGtmSnapshot, at: string): HealthEntry {
   const byRule: Record<string, number> = {};
   const severityCounts: Record<AuditFindingSeverity, number> = { info: 0, warning: 0, critical: 0 };
+  const typeTally: Record<"account" | "contact" | "deal", { findings: number; weightedFindings: number }> = {
+    account: { findings: 0, weightedFindings: 0 },
+    contact: { findings: 0, weightedFindings: 0 },
+    deal: { findings: 0, weightedFindings: 0 },
+  };
   let weightedFindings = 0;
   for (const finding of plan.findings) {
     byRule[finding.ruleId] = (byRule[finding.ruleId] ?? 0) + 1;
     severityCounts[finding.severity] += 1;
     weightedFindings += SEVERITY_WEIGHT[finding.severity];
+    const t = finding.objectType;
+    if (t === "account" || t === "contact" || t === "deal") {
+      typeTally[t].findings += 1;
+      typeTally[t].weightedFindings += SEVERITY_WEIGHT[finding.severity];
+    }
   }
 
   const records = {
@@ -82,8 +104,23 @@ export function computeHealth(plan: PatchPlan, snapshot: CanonicalGtmSnapshot, a
     total: snapshot.accounts.length + snapshot.contacts.length + snapshot.deals.length,
   };
 
-  const penalty = weightedFindings / Math.max(records.total, 1);
-  const score = Math.round(100 / (1 + penalty));
+  const scoreFor = (weighted: number, recordCount: number) =>
+    Math.round(100 / (1 + weighted / Math.max(recordCount, 1)));
+  const recordsByType = { account: records.accounts, contact: records.contacts, deal: records.deals };
+  const byObjectType = (["account", "contact", "deal"] as const).reduce(
+    (acc, t) => {
+      acc[t] = {
+        records: recordsByType[t],
+        findings: typeTally[t].findings,
+        weightedFindings: typeTally[t].weightedFindings,
+        score: scoreFor(typeTally[t].weightedFindings, recordsByType[t]),
+      };
+      return acc;
+    },
+    {} as HealthEntry["byObjectType"],
+  );
+
+  const score = scoreFor(weightedFindings, records.total);
 
   return {
     at,
@@ -94,6 +131,7 @@ export function computeHealth(plan: PatchPlan, snapshot: CanonicalGtmSnapshot, a
     records,
     byRule,
     severityCounts,
+    byObjectType,
   };
 }
 
@@ -154,6 +192,13 @@ export function healthToMarkdown(rollup: HealthRollup): string {
     `Records: ${current.records.accounts} accounts, ${current.records.contacts} contacts, ${current.records.deals} deals`,
     "",
   );
+
+  lines.push("## By object type", "", "| Type | Score | Findings | Records |", "| --- | --- | --- | --- |");
+  for (const t of ["account", "contact", "deal"] as const) {
+    const b = current.byObjectType[t];
+    lines.push(`| ${t} | ${b.score}/100 | ${b.findings} | ${b.records} |`);
+  }
+  lines.push("");
 
   if (rollup.history.length > 1) {
     lines.push("## Trend", "");

@@ -63,6 +63,19 @@ export type CallDealSuggestion = {
     dealName?: string;
     accountId?: string;
     accountName?: string;
+    /**
+     * HOW the deal's account was matched — `account_domain` (the company-wide,
+     * reliable signal) vs `contact_email` (a specific person, possibly stale) vs
+     * `both`. An agent needs this to weight the match; the bare confidence hides it.
+     */
+    resolvedVia?: "account_domain" | "contact_email" | "both";
+    /** The attendee contacts that matched (the email path), so the contact↔account
+     *  hop is visible, not just the resolved account. */
+    matchedContacts?: {
+        id: string;
+        email?: string;
+        accountId?: string;
+    }[];
     confidence: "high" | "low" | "none";
     reason: string;
 };

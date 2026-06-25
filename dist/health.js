@@ -23,11 +23,21 @@ const SEVERITY_WEIGHT = { info: 1, warning: 3, critical: 10 };
 export function computeHealth(plan, snapshot, at) {
     const byRule = {};
     const severityCounts = { info: 0, warning: 0, critical: 0 };
+    const typeTally = {
+        account: { findings: 0, weightedFindings: 0 },
+        contact: { findings: 0, weightedFindings: 0 },
+        deal: { findings: 0, weightedFindings: 0 },
+    };
     let weightedFindings = 0;
     for (const finding of plan.findings) {
         byRule[finding.ruleId] = (byRule[finding.ruleId] ?? 0) + 1;
         severityCounts[finding.severity] += 1;
         weightedFindings += SEVERITY_WEIGHT[finding.severity];
+        const t = finding.objectType;
+        if (t === "account" || t === "contact" || t === "deal") {
+            typeTally[t].findings += 1;
+            typeTally[t].weightedFindings += SEVERITY_WEIGHT[finding.severity];
+        }
     }
     const records = {
         accounts: snapshot.accounts.length,
@@ -35,8 +45,18 @@ export function computeHealth(plan, snapshot, at) {
         deals: snapshot.deals.length,
         total: snapshot.accounts.length + snapshot.contacts.length + snapshot.deals.length,
     };
-    const penalty = weightedFindings / Math.max(records.total, 1);
-    const score = Math.round(100 / (1 + penalty));
+    const scoreFor = (weighted, recordCount) => Math.round(100 / (1 + weighted / Math.max(recordCount, 1)));
+    const recordsByType = { account: records.accounts, contact: records.contacts, deal: records.deals };
+    const byObjectType = ["account", "contact", "deal"].reduce((acc, t) => {
+        acc[t] = {
+            records: recordsByType[t],
+            findings: typeTally[t].findings,
+            weightedFindings: typeTally[t].weightedFindings,
+            score: scoreFor(typeTally[t].weightedFindings, recordsByType[t]),
+        };
+        return acc;
+    }, {});
+    const score = scoreFor(weightedFindings, records.total);
     return {
         at,
         planId: plan.id,
@@ -46,6 +66,7 @@ export function computeHealth(plan, snapshot, at) {
         records,
         byRule,
         severityCounts,
+        byObjectType,
     };
 }
 /** Roll a timeline up into the current state, the change since last time, and per-rule deltas. */
@@ -95,6 +116,12 @@ export function healthToMarkdown(rollup) {
         ? "(first audit — no prior reading)"
         : `${arrow(scoreDelta)} ${scoreDelta >= 0 ? "+" : ""}${scoreDelta} since the previous audit`;
     lines.push(`Score: **${current.score}/100** ${deltaText}`, `Audits: ${rollup.auditCount} over ${shortDate(rollup.first)} → ${shortDate(rollup.latest)}`, `Findings: ${current.findings} (${current.severityCounts.critical} critical, ${current.severityCounts.warning} warning, ${current.severityCounts.info} info)`, `Records: ${current.records.accounts} accounts, ${current.records.contacts} contacts, ${current.records.deals} deals`, "");
+    lines.push("## By object type", "", "| Type | Score | Findings | Records |", "| --- | --- | --- | --- |");
+    for (const t of ["account", "contact", "deal"]) {
+        const b = current.byObjectType[t];
+        lines.push(`| ${t} | ${b.score}/100 | ${b.findings} | ${b.records} |`);
+    }
+    lines.push("");
     if (rollup.history.length > 1) {
         lines.push("## Trend", "");
         for (const point of rollup.history) {

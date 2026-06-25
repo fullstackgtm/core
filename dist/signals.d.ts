@@ -53,6 +53,9 @@ export type SignalOutcome = {
     id: string;
     accountDomain: string;
     touchId?: string;
+    /** The contact the touch went to (from the judge decision), when known — so an
+     *  outcome credits the person reached, not just the account domain. */
+    contactId?: string;
     result: SignalOutcomeResult;
     recordedAt: string;
     /** Signal ids credited (from the judge decision). */
@@ -191,6 +194,7 @@ export declare function createFileSignalStore(directory?: string): SignalStore;
 export declare function makeOutcome(input: {
     accountDomain: string;
     touchId?: string;
+    contactId?: string;
     result: SignalOutcomeResult;
     creditedSignals?: string[];
     recordedAt?: string;
