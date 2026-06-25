@@ -37,29 +37,53 @@ export function createSalesforceConnector(options) {
     // confirmed miss is created, and an ambiguous name (>1 match) is refused.
     // Caches within the run so the same name is never created twice — shared by
     // `link_record`'s create:<Name> path and `create_record`'s company linking.
-    async function resolveOrCreateAccountByName(name) {
-        const nameKey = name.toLowerCase();
-        const cached = createdAccountsByName.get(nameKey);
+    async function resolveOrCreateAccount(name, domain) {
+        const cacheKey = domain ? `d:${domain.toLowerCase()}` : `n:${name.toLowerCase()}`;
+        const cached = createdAccountsByName.get(cacheKey);
         if (cached)
             return { id: cached, createdNew: false };
-        const soqlName = name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-        const matches = await query(`SELECT Id FROM Account WHERE Name = '${soqlName}' LIMIT 3`);
-        if (matches.length > 1)
-            return { ambiguous: matches.length };
+        const esc = (v) => v.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        // 1. Domain-first match on Website (the accurate key; Website often stores a
+        //    full URL, so match by substring).
+        if (domain) {
+            const byDomain = await query(`SELECT Id FROM Account WHERE Website LIKE '%${esc(domain)}%' LIMIT 3`);
+            if (byDomain.length > 1)
+                return { ambiguous: byDomain.length };
+            if (byDomain.length === 1) {
+                const id = String(byDomain[0].Id);
+                createdAccountsByName.set(cacheKey, id);
+                return { id, createdNew: false };
+            }
+        }
+        // 2. Exact-name match; stamp Website if the account has none (fill-blank).
+        const byName = await query(`SELECT Id, Website FROM Account WHERE Name = '${esc(name)}' LIMIT 3`);
+        if (byName.length > 1)
+            return { ambiguous: byName.length };
         let id;
         let createdNew = false;
-        if (matches.length === 1) {
-            id = String(matches[0].Id);
+        if (byName.length === 1) {
+            id = String(byName[0].Id);
+            if (domain && !stringOrUndefined(byName[0].Website)) {
+                try {
+                    await request(`/services/data/${apiVersion}/sobjects/Account/${encodeURIComponent(id)}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({ Website: domain }),
+                    });
+                }
+                catch {
+                    // best-effort fill — a failed Website stamp must not sink the create.
+                }
+            }
         }
         else {
             const created = await request(`/services/data/${apiVersion}/sobjects/Account`, {
                 method: "POST",
-                body: JSON.stringify({ Name: name }),
+                body: JSON.stringify({ Name: name, ...(domain ? { Website: domain } : {}) }),
             });
             id = String(created.id);
             createdNew = true;
         }
-        createdAccountsByName.set(nameKey, id);
+        createdAccountsByName.set(cacheKey, id);
         return { id, createdNew };
     }
     async function request(path, init = {}) {
@@ -427,7 +451,7 @@ export function createSalesforceConnector(options) {
             return { operationId: operation.id, status: "skipped", detail: "create_record needs a non-empty matchValue to resolve-first." };
         }
         if (operation.objectType === "account") {
-            const resolved = await resolveOrCreateAccountByName(matchValue);
+            const resolved = await resolveOrCreateAccount(matchValue);
             if ("ambiguous" in resolved) {
                 return { operationId: operation.id, status: "skipped", detail: `create_record: ambiguous — ${resolved.ambiguous} accounts named "${matchValue}". Not creating.` };
             }
@@ -465,7 +489,7 @@ export function createSalesforceConnector(options) {
         let companyNote = "";
         if (payload.associateCompanyName) {
             try {
-                const resolved = await resolveOrCreateAccountByName(payload.associateCompanyName);
+                const resolved = await resolveOrCreateAccount(payload.associateCompanyName, payload.associateCompanyDomain);
                 if ("ambiguous" in resolved) {
                     companyNote = ` Account "${payload.associateCompanyName}" was ambiguous; left unlinked.`;
                 }
@@ -474,7 +498,8 @@ export function createSalesforceConnector(options) {
                         method: "PATCH",
                         body: JSON.stringify({ AccountId: resolved.id }),
                     });
-                    companyNote = ` Linked to account "${payload.associateCompanyName}" (${resolved.id}).`;
+                    const domainNote = payload.associateCompanyDomain ? ` (${payload.associateCompanyDomain})` : "";
+                    companyNote = ` Linked to account "${payload.associateCompanyName}"${domainNote} (${resolved.id}).`;
                 }
             }
             catch (error) {
@@ -617,7 +642,7 @@ export function createSalesforceConnector(options) {
                         if (!name) {
                             return { operationId: operation.id, status: "skipped", detail: "create: needs an account name (create:<Name>)." };
                         }
-                        const resolved = await resolveOrCreateAccountByName(name);
+                        const resolved = await resolveOrCreateAccount(name);
                         if ("ambiguous" in resolved) {
                             return {
                                 operationId: operation.id,

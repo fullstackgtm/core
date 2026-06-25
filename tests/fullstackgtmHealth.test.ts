@@ -62,6 +62,11 @@ test("summarizeHealth orders oldest→newest and computes score + rule deltas", 
     records: { accounts: 0, contacts: 0, deals: 0, total: 0 },
     byRule,
     severityCounts: { info: 0, warning: 0, critical: 0 },
+    byObjectType: {
+      account: { records: 0, findings: 0, weightedFindings: 0, score: 100 },
+      contact: { records: 0, findings: 0, weightedFindings: 0, score: 100 },
+      deal: { records: 0, findings: 0, weightedFindings: 0, score: 100 },
+    },
   });
 
   // Deliberately out of chronological order in the input.
@@ -123,5 +128,24 @@ test("audit --save accrues the profile timeline; health rolls it up read-only", 
     if (prevHome === undefined) delete process.env.FSGTM_HOME;
     else process.env.FSGTM_HOME = prevHome;
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("computeHealth breaks health down by object type, each with its own record-normalized score", () => {
+  const plan = auditSnapshot(sampleSnapshot);
+  const h = computeHealth(plan, sampleSnapshot, "2026-06-01");
+  // Per-type record counts match the top-level counts.
+  assert.equal(h.byObjectType.account.records, h.records.accounts);
+  assert.equal(h.byObjectType.contact.records, h.records.contacts);
+  assert.equal(h.byObjectType.deal.records, h.records.deals);
+  // Every finding lands in exactly one of the three buckets.
+  const typed = h.byObjectType.account.findings + h.byObjectType.contact.findings + h.byObjectType.deal.findings;
+  assert.equal(typed, h.findings, "per-type findings sum to the total");
+  // Each per-type score is a valid record-normalized score.
+  for (const t of ["account", "contact", "deal"] as const) {
+    const b = h.byObjectType[t];
+    assert.ok(b.score >= 0 && b.score <= 100);
+    if (b.weightedFindings === 0) assert.equal(b.score, 100, `${t} with no findings scores 100`);
+    else assert.ok(b.score < 100, `${t} with findings scores < 100`);
   }
 });

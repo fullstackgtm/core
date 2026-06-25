@@ -21,6 +21,18 @@ export type HealthEntry = {
     byRule: Record<string, number>;
     /** Finding count per severity. */
     severityCounts: Record<AuditFindingSeverity, number>;
+    /**
+     * Per-object-type breakdown — so "is my contact data clean but my pipeline
+     * messy?" is answerable without re-auditing. Each type carries its own
+     * record-normalized score (same curve as the overall score, scoped to that
+     * type's records + findings).
+     */
+    byObjectType: Record<"account" | "contact" | "deal", {
+        records: number;
+        findings: number;
+        weightedFindings: number;
+        score: number;
+    }>;
 };
 export type HealthRuleDelta = {
     ruleId: string;

@@ -205,3 +205,25 @@ test("ndjson rows carry extractor provenance; score-specific no-key error; call 
     if (prevOpenai !== undefined) process.env.OPENAI_API_KEY = prevOpenai;
   }
 });
+
+test("suggestCallDeal surfaces resolvedVia + matched contacts (be clear which join matched)", () => {
+  const base: CanonicalGtmSnapshot = {
+    generatedAt: "t",
+    provider: "hubspot",
+    users: [],
+    accounts: [{ id: "acct", name: "Acme", domain: "acme.com" }],
+    contacts: [{ id: "con", accountId: "acct", email: "vp@acme.com", title: "VP" }],
+    deals: [{ id: "deal", accountId: "acct", name: "Acme Renewal", isClosed: false }],
+    activities: [],
+  };
+  // Account domain AND a contact email both match → "both".
+  const both = suggestCallDeal(base, { domain: "acme.com" });
+  assert.equal(both.dealId, "deal");
+  assert.equal(both.resolvedVia, "both");
+
+  // Account has no domain → matched only via the contact's email.
+  const noDomain = { ...base, accounts: [{ id: "acct", name: "Acme" }] };
+  const byEmail = suggestCallDeal(noDomain, { attendeeEmails: ["vp@acme.com"] });
+  assert.equal(byEmail.resolvedVia, "contact_email");
+  assert.deepEqual(byEmail.matchedContacts, [{ id: "con", email: "vp@acme.com", accountId: "acct" }]);
+});

@@ -369,6 +369,15 @@ export type CallDealSuggestion = {
   dealName?: string;
   accountId?: string;
   accountName?: string;
+  /**
+   * HOW the deal's account was matched — `account_domain` (the company-wide,
+   * reliable signal) vs `contact_email` (a specific person, possibly stale) vs
+   * `both`. An agent needs this to weight the match; the bare confidence hides it.
+   */
+  resolvedVia?: "account_domain" | "contact_email" | "both";
+  /** The attendee contacts that matched (the email path), so the contact↔account
+   *  hop is visible, not just the resolved account. */
+  matchedContacts?: { id: string; email?: string; accountId?: string }[];
   confidence: "high" | "low" | "none";
   reason: string;
 };
@@ -393,17 +402,27 @@ export function suggestCallDeal(
   }
 
   const accountIds = new Set<string>();
+  let viaDomain = false;
+  let viaEmail = false;
+  const matchedContacts: { id: string; email?: string; accountId?: string }[] = [];
   for (const account of snapshot.accounts) {
     const domain = account.domain?.trim().toLowerCase().replace(/^www\./, "");
-    if (domain && domains.has(domain)) accountIds.add(account.id);
+    if (domain && domains.has(domain)) {
+      accountIds.add(account.id);
+      viaDomain = true;
+    }
   }
   for (const contact of snapshot.contacts) {
     const email = contact.email?.trim().toLowerCase();
     const at = email ? email.indexOf("@") : -1;
     if (email && at > 0 && domains.has(email.slice(at + 1)) && contact.accountId) {
       accountIds.add(contact.accountId);
+      viaEmail = true;
+      matchedContacts.push({ id: contact.id, ...(contact.email ? { email: contact.email } : {}), accountId: contact.accountId });
     }
   }
+  const resolvedVia = viaDomain && viaEmail ? "both" : viaDomain ? "account_domain" : "contact_email";
+  const via = { resolvedVia, ...(matchedContacts.length ? { matchedContacts } : {}) } as const;
   if (accountIds.size === 0) {
     return {
       dealId: null,
@@ -432,8 +451,9 @@ export function suggestCallDeal(
       dealName: top.name,
       accountId: top.accountId,
       accountName: account?.name,
+      ...via,
       confidence: "high",
-      reason: `"${top.name}" is the only open deal on matched account "${account?.name ?? top.accountId}".`,
+      reason: `"${top.name}" is the only open deal on matched account "${account?.name ?? top.accountId}" (via ${resolvedVia}).`,
     };
   }
   return {
@@ -441,8 +461,9 @@ export function suggestCallDeal(
     dealName: top.name,
     accountId: top.accountId,
     accountName: account?.name,
+    ...via,
     confidence: "low",
-    reason: `${openDeals.length} open deals on matched account(s); "${top.name}" has the most recent activity. Confirm before writing.`,
+    reason: `${openDeals.length} open deals on matched account(s); "${top.name}" has the most recent activity (matched via ${resolvedVia}). Confirm before writing.`,
   };
 }
 

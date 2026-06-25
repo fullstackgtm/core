@@ -157,15 +157,16 @@ function costSection(entries: CellMetrics[]): string {
   <text transform="translate(16 ${(Y0 + PH / 2).toFixed(0)}) rotate(-90)" class="axtitle" text-anchor="middle">CuP — safe completion %</text>
 </svg>`;
 
-  const legend = `<div class="cost-legend">
-  <div class="cl-group">${scatterModels.map((m) => `<span><i style="background:${COLOR[m] ?? "var(--muted)"}"></i>${esc(SHORT[m] ?? shortModel(m).name)}</span>`).join("")}</div>
-  <div class="cl-group keys"><span><i class="hollow"></i>Raw — direct CRM tools</span><span><i class="filled"></i>Gated — writes via the fullstackgtm CLI</span><span><i class="ln"></i>rails effect, per model</span></div>
-</div>`;
+  const legend = `<div class="cost-legend">${scatterModels
+    .map((m) => `<span><i style="background:${COLOR[m] ?? "var(--muted)"}"></i>${esc(SHORT[m] ?? shortModel(m).name)}${dollarFrontier.has(armOf(m, "fsgtm")!) ? " ★" : ""}</span>`)
+    .join("")}</div>
+  <div class="cost-legend keys"><span><i class="hollow"></i>Raw — direct CRM tools</span><span><i class="filled"></i>Gated — audit→approve→apply</span><span><i class="ln"></i>rails effect, per model</span><span><i class="rg"></i>efficient frontier</span></div>`;
 
   return `<section>
   <h2>Cost efficiency</h2>
-  <p class="note"><strong>$/safe-completion</strong> = total spend across a cell's runs ÷ its CuP successes (amortized over successes — failures still cost). <strong>k-tok/success</strong> is the pricing-free equivalent. Each line is one model, Raw (hollow) → Gated (filled); up and to the left is better.</p>
-  <div class="cost-chart-row"><div class="svg-wrap">${svg}</div>${legend}</div>
+  <p class="note"><strong>$/safe-completion</strong> = total spend across a cell's runs ÷ its CuP successes (amortized over successes — failures still cost). <strong>k-tok/success</strong> is the pricing-free equivalent. Each line is one model, Raw (hollow) → Gated (filled); up and to the left is better. ★ = Pareto frontier (non-dominated on cost and CuP).</p>
+  <div class="svg-wrap">${svg}</div>
+  ${legend}
   <table style="margin-top:18px">
     <thead><tr><th>Entry</th><th class="num">CuP</th><th class="num">$/run</th><th class="num">$/safe completion</th><th class="num">k-tok/success</th><th>Frontier</th></tr></thead>
     <tbody>
@@ -359,17 +360,14 @@ details li{font-size:.76rem;line-height:1.6;padding:8px 0;border-bottom:1px dash
 .legend span{font-size:.64rem;border:1px solid var(--line);padding:4px 10px;color:var(--muted);background:var(--card)}
 .cost-tag{display:inline-block;font-size:.56rem;letter-spacing:.08em;padding:2px 7px;border:1.5px solid var(--green);color:var(--deep);background:rgba(74,124,89,.1);text-transform:uppercase;white-space:nowrap}
 .cost-tag.tok{border-color:var(--line);color:var(--muted);background:transparent}
-.cost-chart-row{display:flex;gap:24px;align-items:flex-start;margin-top:8px}
-.cost-chart-row .svg-wrap{flex:1;min-width:0}
-.cost-legend{flex:0 0 190px;display:flex;flex-direction:column;gap:14px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted);padding-top:10px}
-.cl-group{display:flex;flex-direction:column;gap:8px}
-.cl-group.keys{padding-top:12px;border-top:1px solid var(--line)}
-.cost-legend span{display:inline-flex;align-items:center;gap:8px;line-height:1.3}
-.cost-legend i{display:inline-block;width:12px;height:12px;border-radius:50%;flex:none}
+.cost-legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:14px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
+.cost-legend span{display:inline-flex;align-items:center;gap:7px}
+.cost-legend i{display:inline-block;width:12px;height:12px;border-radius:50%}
+.cost-legend.keys{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
 .cost-legend i.hollow{background:var(--card);border:2px solid var(--muted)}
 .cost-legend i.filled{background:var(--muted)}
 .cost-legend i.ln{width:20px;height:0;border-top:2px solid var(--muted);border-radius:0}
-@media (max-width:760px){.cost-chart-row{flex-direction:column}.cost-legend{flex:none;flex-direction:row;flex-wrap:wrap;gap:8px 16px}.cl-group{flex-direction:row;flex-wrap:wrap;gap:8px 16px}.cl-group.keys{padding-top:8px}}
+.cost-legend i.rg{background:transparent;border:2px solid #c79a3a}
 .svg-wrap{background:var(--card);border:2px solid var(--ink);margin-top:18px;padding:12px}
 .svg-wrap svg{display:block;width:100%;height:auto}
 .pricing{color:var(--muted);font-size:.66rem;margin-top:12px;line-height:1.7;max-width:54rem}

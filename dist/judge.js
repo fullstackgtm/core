@@ -223,22 +223,54 @@ export function accountRecentlyTouched(accountDomain, snapshot, now = new Date()
     return false;
 }
 /**
- * Find the best-matching contact for an account from the snapshot, for fit
- * scoring: the account's contacts, preferring one with a title (a title is what
- * fit scores on). Returns undefined when the account/contact isn't in snapshot.
+ * Resolve a signal's account domain to the CRM account record and the best
+ * contact at it (preferring one with a title). The single domain→account→contact
+ * join used by both fit scoring and target surfacing — so "who do I message at
+ * this account" is computed once and consistently.
  */
-export function bestContactForAccount(accountDomain, snapshot) {
+function findAccountAndBestContact(accountDomain, snapshot) {
     const domain = normalizeAccountDomain(accountDomain);
     if (!domain)
         return undefined;
     const account = (snapshot.accounts ?? []).find((a) => normalizeAccountDomain(a.domain ?? "") === domain);
     if (!account)
         return undefined;
-    const contacts = (snapshot.contacts ?? []).filter((c) => c.accountId === account.id);
-    const withTitle = contacts.find((c) => c.title) ?? contacts[0];
-    if (!withTitle)
+    // Titled contacts first (a title is what fit scores on); the first is primary.
+    const contacts = (snapshot.contacts ?? [])
+        .filter((c) => c.accountId === account.id)
+        .sort((a, b) => (b.title ? 1 : 0) - (a.title ? 1 : 0));
+    return { account, contact: contacts[0], contacts };
+}
+/**
+ * Best-matching contact for an account, shaped for fit scoring (the title is
+ * what `scoreProspectAgainstIcp` reads). Returns undefined when the
+ * account/contact isn't in the snapshot.
+ */
+export function bestContactForAccount(accountDomain, snapshot) {
+    const found = findAccountAndBestContact(accountDomain, snapshot);
+    if (!found?.contact)
         return undefined;
-    return { jobTitle: withTitle.title };
+    return { jobTitle: found.contact.title };
+}
+/** Cap on candidate contacts surfaced per account (the rest stay in the CRM). */
+const MAX_CANDIDATE_CONTACTS = 10;
+const toContactRef = (c) => ({
+    id: c.id,
+    ...(c.email ? { email: c.email } : {}),
+    ...(c.title ? { title: c.title } : {}),
+});
+export function resolveAccountTarget(accountDomain, snapshot) {
+    const found = findAccountAndBestContact(accountDomain, snapshot);
+    if (!found)
+        return {};
+    const { account, contact, contacts } = found;
+    return {
+        accountId: account.id,
+        ...(contact ? { contact: toContactRef(contact) } : {}),
+        // The candidate contacts at the account, so an agent can multi-thread
+        // beyond the single primary. Capped; primary is contacts[0].
+        ...(contacts.length ? { contacts: contacts.slice(0, MAX_CANDIDATE_CONTACTS).map(toContactRef) } : {}),
+    };
 }
 // ---------------------------------------------------------------------------
 // Deterministic baseline decision
@@ -406,8 +438,9 @@ export async function judgeSignals(opts) {
     }
     const decisions = [];
     for (const [domain, signals] of byAccount) {
+        // Memory + fit stay gated on --with-history (scoring semantics unchanged).
         const recentlyTouched = opts.withHistory && opts.snapshot ? accountRecentlyTouched(domain, opts.snapshot, now) : false;
-        const bestContact = opts.icp && opts.snapshot ? bestContactForAccount(domain, opts.snapshot) : undefined;
+        const bestContact = opts.withHistory && opts.icp && opts.snapshot ? bestContactForAccount(domain, opts.snapshot) : undefined;
         const score = scoreAccount({
             accountDomain: domain,
             signals,
@@ -422,7 +455,10 @@ export async function judgeSignals(opts) {
         const decision = opts.llm && opts.promptTemplate
             ? await judgeDecisionLlm(score, opts.promptTemplate, opts.llm)
             : deterministicDecision(score);
-        decisions.push(decision);
+        // Surface the CRM target (accountId + best contact) whenever a snapshot is
+        // present — independent of --with-history. This is what makes a decision
+        // actionable: draft writes against contact.id / accountId, never the domain.
+        decisions.push(opts.snapshot ? { ...decision, ...resolveAccountTarget(domain, opts.snapshot) } : decision);
     }
     return decisions.sort((a, b) => b.score - a.score || a.accountDomain.localeCompare(b.accountDomain));
 }

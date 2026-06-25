@@ -139,6 +139,14 @@ a possible dup), capped by the meter's headroom. `builtinAcquirePreset` is the
 zero-config `EnrichConfig.acquire` (budget, provider, create-mapping) so
 `enrich acquire` runs with just an `icp.json`.
 
+**Contacts or accounts.** `acquire.create` is keyed by object type, so the same
+spine acquires net-new **accounts** for ABM, not just contacts: configure
+`acquire.create.company` (match key `domain`, properties → `name`/`domain`) and
+feed company rows (`enrich ingest companies.csv --objects companies`). Each
+unmatched company becomes a `create_record` op of `objectType: account` with its
+domain stamped — so the acquired account is immediately signal-watchable
+(`signals`/`icp judge` key on account domain).
+
 - **ICP** (`icp.ts`): `Icp` type, `parseIcp`, `icpToExploriumFilters` /
   `icpToCrustdataFilters` (per-provider discovery filters), `scoreProspectAgainstIcp`
   (persona fit 0..1), `fitThreshold`, `INTERVIEW_SPEC` + `icpFromAnswers` (the

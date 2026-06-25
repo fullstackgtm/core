@@ -126,6 +126,11 @@ import {
   type AcquireRemaining,
 } from "./acquireMeter.ts";
 import {
+  scaffoldWorkspace,
+  type InitProvider,
+  type InitSource,
+} from "./init.ts";
+import {
   crmContactKeys,
   fetchExploriumProspects,
   fetchPipe0CrustdataProspects,
@@ -246,6 +251,10 @@ Usage:
   the process list and shell history. Pipe them on stdin or enter them at the
   interactive prompt:
     echo "$HUBSPOT_TOKEN" | fullstackgtm login hubspot
+  fullstackgtm init [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]
+                                               cold start: scaffold icp.json + enrich.config.json + a
+                                               PLAYBOOK wired for this workspace (the CLI ships primitives,
+                                               your agent is the orchestrator — see docs/recipes.md)
   fullstackgtm snapshot [source options] [--since <iso>] [--out <path> | --archive <dir>]
   fullstackgtm audit [source options] [audit options] [--save]
   fullstackgtm report [source options] [audit options] [report options]
@@ -466,6 +475,17 @@ type HelpEntry = {
 };
 
 const HELP: Record<string, HelpEntry> = {
+  // Get started
+  init: {
+    summary: "scaffold a workspace (icp.json + enrich.config.json + PLAYBOOK)",
+    phase: "Setup",
+    synopsis: [
+      "fullstackgtm init [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]",
+    ],
+    detail:
+      "Cold start: writes a starter ICP, an acquire-ready enrich.config.json (with a visible assign seam so leads are never ownerless), and a PLAYBOOK wired with the cold-start + outbound-loop recipes for this workspace. Pure file-writer — no network, keeps existing files unless --force. The CLI ships governed primitives; your coding agent is the orchestrator (see docs/recipes.md).",
+    seeAlso: ["icp", "enrich", "signals"],
+  },
   // Setup & health
   login: {
     summary: "connect a provider or LLM key (secrets via stdin/env, never argv)",
@@ -726,12 +746,13 @@ const HELP: Record<string, HelpEntry> = {
 
 // Verbs that print their own richer multi-subcommand help; runCli routes their
 // `--help` to themselves, so commandHelp() only renders these via `help <verb>`.
-const BESPOKE_HELP = ["call", "market", "enrich", "bulk-update", "schedule", "signals", "icp", "draft"];
+const BESPOKE_HELP = ["init", "call", "market", "enrich", "bulk-update", "schedule", "signals", "icp", "draft"];
 
 // Lifecycle-grouped front door. One line per verb, organized by the
 // Prevent→Detect→Remediate→Verify loop so a new user sees ~6 jobs, not 22 verbs.
 function shortUsage() {
   const groups: Array<[string, string[]]> = [
+    ["Get started", ["init"]],
     ["Setup & health", ["login", "logout", "doctor", "profiles", "health"]],
     ["Detect — read-only", ["audit", "report", "snapshot", "diff", "rules"]],
     ["Prevent — gate writes", ["resolve"]],
@@ -2659,7 +2680,8 @@ NEVER emits a patch plan; --save persists only the local signal ledger (used by
       throw new Error(`signals outcome: --result must be one of ${valid.join(", ")}.`);
     }
     const touchId = option(rest, "--touch") ?? undefined;
-    const outcome = makeOutcome({ accountDomain: accountArg, touchId, result: result as SignalOutcomeResult });
+    const contactId = option(rest, "--contact") ?? undefined;
+    const outcome = makeOutcome({ accountDomain: accountArg, touchId, contactId, result: result as SignalOutcomeResult });
     await createFileSignalStore().appendOutcome(outcome);
     console.error(
       `Recorded outcome "${outcome.result}" for ${outcome.accountDomain} (${outcome.id}). ` +
@@ -2841,6 +2863,63 @@ LLM key it emits a clearly-labeled stub rather than fake authored copy.`);
 }
 
 /**
+ * `init` — scaffold a GTM workspace from cold scratch: a starter icp.json, an
+ * enrich.config.json (acquire preset + a visible assign seam), and a PLAYBOOK
+ * wired with the chosen source/provider that points at the recipes. Pure
+ * file-writer: no network, never overwrites without --force.
+ */
+function initCommand(args: string[]) {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`Usage:
+  fullstackgtm init [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]
+
+Scaffolds a workspace so the first acquire/signals/judge/draft commands work:
+  icp.json            starter ICP (edit, or rebuild with \`icp interview\`)
+  enrich.config.json  acquire preset for --source + a placeholder assign policy
+  PLAYBOOK.md         the cold-start + outbound-loop recipes wired for this workspace
+
+The CLI ships governed primitives; your coding agent is the orchestrator. See
+docs/recipes.md for the full play set. Existing files are kept unless --force.`);
+    return;
+  }
+  const source = (option(args, "--source") ?? "pipe0") as InitSource;
+  if (!["pipe0", "explorium", "linkedin"].includes(source)) {
+    throw new Error(`init: --source must be pipe0|explorium|linkedin (got "${source}")`);
+  }
+  const provider = (option(args, "--provider") ?? "hubspot") as InitProvider;
+  if (!["hubspot", "salesforce"].includes(provider)) {
+    throw new Error(`init: --provider must be hubspot|salesforce (got "${provider}")`);
+  }
+  const outDir = resolve(process.cwd(), option(args, "--out") ?? ".");
+  const force = args.includes("--force");
+  const current = activeProfile();
+  const profile = current === DEFAULT_PROFILE ? undefined : current;
+
+  const files = scaffoldWorkspace({ source, provider, profile });
+  const wrote: string[] = [];
+  const kept: string[] = [];
+  for (const file of files) {
+    const path = resolve(outDir, file.path);
+    if (existsSync(path) && !force) {
+      kept.push(file.path);
+      continue;
+    }
+    writeFileSync(path, file.content);
+    wrote.push(file.path);
+  }
+
+  console.log(
+    `Scaffolded workspace (${provider}, discovery via ${source}${profile ? `, profile ${profile}` : ""}).`,
+  );
+  if (wrote.length) console.log(`  wrote: ${wrote.join(", ")}`);
+  if (kept.length) console.log(`  kept (use --force to overwrite): ${kept.join(", ")}`);
+  console.log(
+    "\nNext: edit icp.json + set acquire.assign.ownerId in enrich.config.json, then follow PLAYBOOK.md\n" +
+      "(full recipe set: docs/recipes.md).",
+  );
+}
+
+/**
  * `icp` — develop and inspect the Ideal Customer Profile that targets acquire.
  * The CLI can't run AskUserQuestion itself; `icp interview` emits the question
  * spec an agent (Claude Code / Codex) drives with its AskUserQuestion tool, then
@@ -2929,12 +3008,20 @@ ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.
     const unjudged = signalRun.signals.filter((s) => !s.judgedBy);
     if (unjudged.length === 0) throw new Error(`Signal run "${signalRun.runLabel}" has no unjudged signals.`);
 
-    // 2) Optional inputs: ICP (may be undefined), snapshot (only --with-history),
-    //    outcomes + config from the signal store / DEFAULT_SIGNALS_CONFIG.
+    // 2) Optional inputs: ICP (may be undefined), snapshot, outcomes + config.
+    //    The snapshot is loaded whenever a source is given (--provider/--input/
+    //    --demo/--sample) — it resolves each decision's CRM target (accountId +
+    //    best contact) so `draft` can write against a real record. --with-history
+    //    additionally enables the memory + fit scoring inputs.
     const icp = loadIcp(rest);
     const config: SignalsConfig = DEFAULT_SIGNALS_CONFIG;
     const outcomes = await signalStore.listOutcomes();
-    const snapshot = withHistory ? await readSnapshot(rest) : undefined;
+    const hasSnapshotSource =
+      Boolean(option(rest, "--provider")) ||
+      Boolean(option(rest, "--input")) ||
+      rest.includes("--demo") ||
+      rest.includes("--sample");
+    const snapshot = withHistory || hasSnapshotSource ? await readSnapshot(rest) : undefined;
 
     // 3) Resolve the LLM seam ONLY if a key already exists (deterministic baseline
     //    otherwise — never PROMPT here; judge must run key-free).
@@ -5204,6 +5291,10 @@ export async function runCli(argv: string[]) {
   }
   if (command === "enrich") {
     await enrichCommand(args);
+    return;
+  }
+  if (command === "init") {
+    initCommand(args);
     return;
   }
   if (command === "icp") {

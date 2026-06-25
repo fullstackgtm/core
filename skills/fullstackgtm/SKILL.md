@@ -62,7 +62,10 @@ credentials AND stored plans per client org.
 | `fix --rule <id>` | audit one rule → suggest → approve at the confidence bar → apply only with `--yes` |
 | `call parse\|score\|link\|plan` | Transcripts → evidence-quoted insights, rubric scorecards, deal linking, governed next-step writes |
 | `enrich append\|refresh\|ingest\|status` | Governed enrichment (Apollo pull / Clay ingest), fill-blanks-only plans |
-| `enrich acquire [--source explorium\|pipe0\|linkedin]` | Net-new ICP-targeted lead gen: resolve-first deduped `create_record` plans, capped by a per-profile windowed meter (records + spend); owner-stamped via `acquire.assign`/`--assign-owner` (never born ownerless); `--source linkedin --list <id>` reads a HeyReach lead list (Phase 1 discovery, read-only — never sends); never auto-writes |
+| `enrich acquire [--source explorium\|pipe0\|linkedin]` | Net-new ICP-targeted lead gen: resolve-first deduped `create_record` plans, capped by a per-profile windowed meter (records + spend); owner-stamped via `acquire.assign`/`--assign-owner` (never born ownerless); links each lead to a domain-stamped, signal-watchable account; `acquire.create.company` acquires accounts (ABM); `--source linkedin --list <id>` reads a HeyReach lead list (Phase 1 discovery, read-only — never sends); never auto-writes |
+| `signals fetch\|list\|outcome\|weights` | Detect-side timing layer: capture fresh buying triggers into a profile-scoped ledger (free Greenhouse/Lever/Ashby ATS in the box; funding/social via ingest), ranked by learned weights. Writes NOTHING to the CRM; `outcome --account <domain> --contact <id> --result …` re-weights which triggers earn a touch |
+| `icp interview\|set\|show\|judge\|eval` | Build the ICP, then `judge` ranks fresh signals into send/nurture/skip — pass a snapshot (`--provider`/`--input`) and each decision resolves its CRM target (`accountId` + the `contact`/`contacts` to reach). `eval` is the calibration gate (exit 2 below the bar) |
+| `draft [--from-judge latest] [--channel email\|linkedin\|task]` | One trigger-grounded opener per hot account → a governed `create_task` targeting the resolved `contact.id` (or `accountId`); rejects a domain-only decision ("acquire it first"). **Never sends** — the opener is a task the operator sends from their own tool |
 | `market init\|capture\|classify\|worksheet\|observe\|fronts\|axes\|overlay\|scale\|report\|refresh` | Competitive category map; evidence quotes verified verbatim against stored captures |
 | `schedule add\|list\|remove\|enable\|disable\|run\|install\|uninstall\|status` | Horizontal cron; read/plan-side allowlist only — scheduling NEVER auto-approves |
 | `report` | Client-ready audit deliverable (markdown or self-contained HTML) |
@@ -84,8 +87,20 @@ Tools over stdio: `fullstackgtm_audit` (read-only), `fullstackgtm_rules`,
 `fullstackgtm_resolve`, `fullstackgtm_market_worksheet`,
 `fullstackgtm_market_observe`.
 
+## Composing the primitives into plays
+
+This CLI ships governed **primitives** — there is no `outbound` mega-command.
+**You (the agent) are the orchestrator:** chain these verbs into the play the
+operator wants, surface the one approve gate, and bridge the last mile to the
+sender (**the package never sends**). [docs/recipes.md](https://github.com/fullstackgtm/core/blob/main/packages/fullstackgtm/docs/recipes.md)
+has five worked plays — cold-start lead-fill, the trigger→judge→draft outbound
+loop, scheduled-continuous, ABM-from-companies, and hygiene-gated outbound.
+`fullstackgtm init` scaffolds a workspace (icp.json + enrich config + a PLAYBOOK
+pointing at those recipes) to start from.
+
 ## Going deeper
 
+- [docs/recipes.md](https://github.com/fullstackgtm/core/blob/main/packages/fullstackgtm/docs/recipes.md) — five composable GTM plays over the primitives (cold-start, outbound loop, scheduled, ABM, hygiene-gated)
 - [llms.txt](https://github.com/fullstackgtm/core/blob/main/llms.txt) — the full invariant map per layer (calls, market, write verbs, enrich, schedule, engagement/health)
 - [INSTALL_FOR_AGENTS.md](https://github.com/fullstackgtm/core/blob/main/INSTALL_FOR_AGENTS.md) — deterministic install-and-verify with expected outputs
 - [docs/api.md](https://github.com/fullstackgtm/core/blob/main/docs/api.md) — semver-covered surfaces: canonical model, rule interface, plan/apply contract, connectors, config, CLI, MCP

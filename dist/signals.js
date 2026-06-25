@@ -508,6 +508,7 @@ export function makeOutcome(input) {
         id: outcomeId({ accountDomain, touchId: input.touchId, result: input.result, recordedAt }),
         accountDomain,
         ...(input.touchId !== undefined ? { touchId: input.touchId } : {}),
+        ...(input.contactId !== undefined ? { contactId: input.contactId } : {}),
         result: input.result,
         recordedAt,
         creditedSignals: input.creditedSignals ?? [],

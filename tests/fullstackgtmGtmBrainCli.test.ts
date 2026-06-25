@@ -110,12 +110,29 @@ test("nightly chain: signals fetch --save -> icp judge --save -> draft --save st
     assert.ok(run, "signal run persisted");
     assert.equal(run.signals.length, 2);
 
-    // 2) icp judge --save (deterministic — no LLM key).
+    // 2) icp judge --save (deterministic — no LLM key). Pass a CRM snapshot so
+    //    the hot account resolves to a real contact — that's what lets `draft`
+    //    write a coherent task against a record id (not the bare domain).
+    const snapPath = join(home, "crm.json");
+    writeFileSync(
+      snapPath,
+      JSON.stringify({
+        generatedAt: "2026-06-23T00:00:00.000Z",
+        provider: "hubspot",
+        users: [],
+        accounts: [{ id: "acct-apex", name: "ApexNorth", domain: "apexnorth.agency" }],
+        contacts: [{ id: "con-apex", accountId: "acct-apex", email: "vp@apexnorth.agency", title: "VP Growth" }],
+        deals: [],
+        activities: [],
+      }),
+    );
     const judgeRun = await cli([
       "icp",
       "judge",
       "--signals-from",
       "run1",
+      "--input",
+      snapPath,
       "--label",
       "judge1",
       "--save",
@@ -152,6 +169,9 @@ test("nightly chain: signals fetch --save -> icp judge --save -> draft --save st
     assert.equal(plan.dryRun, true);
     assert.equal(plan.operations.length, 1);
     assert.equal(plan.operations[0].operation, "create_task");
+    // Coherent target: the task hangs off the RESOLVED contact, not the domain.
+    assert.equal(plan.operations[0].objectType, "contact");
+    assert.equal(plan.operations[0].objectId, "con-apex");
     assert.equal(plan.operations[0].approvalRequired, true);
     // Evidence is carried verbatim and linked to the op.
     assert.ok((plan.evidence ?? []).length >= 1, "plan carries evidence");

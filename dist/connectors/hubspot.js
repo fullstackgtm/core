@@ -406,17 +406,34 @@ export function createHubspotConnector(options) {
             providerData: { companyId, ...(createdCompanyName ? { createdCompany: true } : {}) },
         };
     }
-    /** Exact-name company lookup for resolve-first creates. Returns matching ids (max 3 fetched). */
-    async function searchCompaniesByName(name) {
+    /** Exact-value company lookup (by `name` or `domain`) for resolve-first creates. */
+    async function searchCompaniesBy(property, value) {
         const data = await request(`/crm/v3/objects/companies/search`, {
             method: "POST",
             body: JSON.stringify({
-                filterGroups: [{ filters: [{ propertyName: "name", operator: "EQ", value: name }] }],
-                properties: ["name"],
+                filterGroups: [{ filters: [{ propertyName: property, operator: "EQ", value }] }],
+                properties: [property],
                 limit: 3,
             }),
         });
         return (data?.results ?? []).map((row) => String(row.id));
+    }
+    const searchCompaniesByName = (name) => searchCompaniesBy("name", name);
+    /** Stamp `domain` on a company only when it has none (fill-blank, never clobber). */
+    async function fillCompanyDomainIfEmpty(companyId, domain) {
+        try {
+            const data = await request(`/crm/v3/objects/companies/${encodeURIComponent(companyId)}?properties=domain`);
+            const current = data?.properties?.domain;
+            if (typeof current === "string" && current.trim())
+                return; // already has one — leave it
+            await request(`/crm/v3/objects/companies/${encodeURIComponent(companyId)}`, {
+                method: "PATCH",
+                body: JSON.stringify({ properties: { domain } }),
+            });
+        }
+        catch {
+            // Best-effort: a failed domain fill must not sink the contact create.
+        }
     }
     /** Exact-value contact lookup (by any searchable property) for resolve-first creates. */
     async function searchContactsBy(property, value) {
@@ -431,39 +448,55 @@ export function createHubspotConnector(options) {
         return (data?.results ?? []).map((row) => String(row.id));
     }
     /**
-     * Resolve a company by exact name, creating it on a confirmed miss. Returns
-     * the company id, or null on ambiguity (≥2 existing) so the caller skips the
-     * association rather than guessing. Same-run safe via createdCompaniesByName.
+     * Resolve a company to a real account record, creating it on a confirmed miss.
+     * Matches by DOMAIN first (the accurate key) and falls back to exact name;
+     * creates with the domain stamped, and fills the domain on a name-matched
+     * account that lacks one — so the account is signal-watchable. Returns null on
+     * ambiguity (≥2 matches) so the caller skips the association rather than
+     * guessing. Same-run safe via createdCompaniesByName.
      */
-    async function resolveOrCreateCompanyByName(name, opId) {
-        const nameKey = name.toLowerCase();
-        const already = createdCompaniesByName.get(nameKey);
+    async function resolveOrCreateCompany(name, domain, opId) {
+        const cacheKey = domain ? `d:${domain.toLowerCase()}` : `n:${name.toLowerCase()}`;
+        const already = createdCompaniesByName.get(cacheKey);
         if (already)
             return already;
-        const matches = await searchCompaniesByName(name);
-        if (matches.length > 1)
-            return null;
-        if (matches.length === 1) {
-            createdCompaniesByName.set(nameKey, matches[0]);
-            return matches[0];
+        // 1. Domain-first match (accurate; an account matched here already has it).
+        if (domain) {
+            const byDomain = await searchCompaniesBy("domain", domain);
+            if (byDomain.length > 1)
+                return null;
+            if (byDomain.length === 1) {
+                createdCompaniesByName.set(cacheKey, byDomain[0]);
+                return byDomain[0];
+            }
         }
+        // 2. Exact-name match; stamp the domain if the account has none.
+        const byName = await searchCompaniesByName(name);
+        if (byName.length > 1)
+            return null;
+        if (byName.length === 1) {
+            if (domain)
+                await fillCompanyDomainIfEmpty(byName[0], domain);
+            createdCompaniesByName.set(cacheKey, byName[0]);
+            return byName[0];
+        }
+        // 3. Create with name + domain (provenance is best-effort).
+        const props = { name, ...(domain ? { domain } : {}) };
         let created;
         try {
             created = await request(`/crm/v3/objects/companies`, {
                 method: "POST",
-                body: JSON.stringify({
-                    properties: { name, hs_object_source_detail_2: `fullstackgtm acquire (${opId})` },
-                }),
+                body: JSON.stringify({ properties: { ...props, hs_object_source_detail_2: `fullstackgtm acquire (${opId})` } }),
             });
         }
         catch {
             created = await request(`/crm/v3/objects/companies`, {
                 method: "POST",
-                body: JSON.stringify({ properties: { name } }),
+                body: JSON.stringify({ properties: props }),
             });
         }
         const id = String(created.id);
-        createdCompaniesByName.set(nameKey, id);
+        createdCompaniesByName.set(cacheKey, id);
         return id;
     }
     /**
@@ -487,7 +520,7 @@ export function createHubspotConnector(options) {
             return { operationId: operation.id, status: "skipped", detail: "create_record needs a non-empty matchValue to resolve-first." };
         }
         if (operation.objectType === "account") {
-            const id = await resolveOrCreateCompanyByName(matchValue, operation.id);
+            const id = await resolveOrCreateCompany(matchValue, stringOrUndefined(payload.properties?.domain), operation.id);
             if (id === null) {
                 return { operationId: operation.id, status: "skipped", detail: `create_record: ambiguous — multiple companies named "${matchValue}". Not creating.` };
             }
@@ -534,10 +567,11 @@ export function createHubspotConnector(options) {
         let companyNote = "";
         if (payload.associateCompanyName) {
             try {
-                const companyId = await resolveOrCreateCompanyByName(payload.associateCompanyName, operation.id);
+                const companyId = await resolveOrCreateCompany(payload.associateCompanyName, payload.associateCompanyDomain, operation.id);
                 if (companyId) {
                     await request(`/crm/v4/objects/contacts/${encodeURIComponent(contactId)}/associations/default/companies/${encodeURIComponent(companyId)}`, { method: "PUT" });
-                    companyNote = ` Linked to company "${payload.associateCompanyName}" (${companyId}).`;
+                    const domainNote = payload.associateCompanyDomain ? ` (${payload.associateCompanyDomain})` : "";
+                    companyNote = ` Linked to company "${payload.associateCompanyName}"${domainNote} (${companyId}).`;
                 }
                 else {
                     companyNote = ` Company "${payload.associateCompanyName}" was ambiguous; left unlinked.`;
