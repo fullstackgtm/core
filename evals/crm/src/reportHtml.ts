@@ -3,7 +3,7 @@
  * Single self-contained file: inline CSS, no JavaScript (native <details>
  * for drill-downs), web fonts loaded with graceful serif/mono fallbacks.
  */
-import { aggregateCells, type CellMetrics } from "./metrics.ts";
+import { aggregateCells, cellCost, paretoFrontier, PRICING, type CellMetrics } from "./metrics.ts";
 import type { Arm, RunResult } from "./types.ts";
 
 const ARM_LABEL: Record<string, string> = {
@@ -36,6 +36,148 @@ function fmtTokens(n: number): string {
 function shortModel(spec: string): { vendor: string; name: string } {
   const i = spec.indexOf("/");
   return i === -1 ? { vendor: "anthropic", name: spec } : { vendor: spec.slice(0, i), name: spec.slice(i + 1) };
+}
+
+function fmtUsd(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  return `$${v < 0.1 ? v.toFixed(4) : v < 1 ? v.toFixed(3) : v.toFixed(2)}`;
+}
+
+const ARM_SHORT: Record<string, string> = { fsgtm: "gated", "raw+fsgtm": "mix", raw: "raw" };
+
+/**
+ * Cost-efficiency section: a table sorted by $/safe-completion plus an inline
+ * SVG efficient frontier (CuP ↑ vs cost ↓, log-x). No JS, self-contained —
+ * same constraints as the rest of the report. Dollar figures derive from the
+ * editable PRICING table; tokens/success is the pricing-free counterpart.
+ */
+function costSection(entries: CellMetrics[]): string {
+  const dollarFrontier = paretoFrontier(entries, (c) => cellCost(c).dollarsPerSuccess);
+  const tokenFrontier = paretoFrontier(entries, (c) => cellCost(c).tokensPerSuccess);
+
+  const ranked = [...entries]
+    .map((e) => ({ e, c: cellCost(e) }))
+    .sort((a, b) => a.c.dollarsPerSuccess - b.c.dollarsPerSuccess);
+
+  const rows = ranked
+    .map(({ e, c }) => {
+      const m = shortModel(e.model);
+      const armClass = e.arm === "fsgtm" ? "arm-fsgtm" : e.arm === "raw+fsgtm" ? "arm-both" : "arm-raw";
+      const pf = dollarFrontier.has(e) ? `<span class="cost-tag" title="on the price efficient frontier">★ frontier</span>` : "";
+      const tf = tokenFrontier.has(e) && !dollarFrontier.has(e) ? `<span class="cost-tag tok" title="on the token (pricing-free) frontier">token-frontier</span>` : "";
+      return `<tr>
+  <td class="entry"><span class="model">${esc(m.name)}</span><span class="arm ${armClass}">${esc(ARM_LABEL[e.arm] ?? e.arm)}</span></td>
+  <td class="num">${e.cupPct.toFixed(1)}%</td>
+  <td class="num">${fmtUsd(c.dollarsPerRun)}</td>
+  <td class="num"><b style="color:var(--deep)">${fmtUsd(c.dollarsPerSuccess)}</b></td>
+  <td class="num">${Number.isFinite(c.tokensPerSuccess) ? `${(c.tokensPerSuccess / 1000).toFixed(0)}k` : "—"}</td>
+  <td>${pf}${tf}</td>
+</tr>`;
+    })
+    .join("\n");
+
+  // --- inline SVG scatter: x = $/safe-completion (log), y = CuP ---
+  const X0 = 64, Y0 = 26, PW = 880, PH = 392, W = 1100, H = 470;
+  const xmin = 0.02, xmax = 1.0;
+  const lx0 = Math.log10(xmin), lxr = Math.log10(xmax) - Math.log10(xmin);
+  const lx = (d: number) => X0 + ((Math.log10(d) - lx0) / lxr) * PW;
+  const ymin = 40, ymax = 102;
+  const ly = (c: number) => Y0 + (1 - (c - ymin) / (ymax - ymin)) * PH;
+
+  const xticks = [0.02, 0.05, 0.1, 0.2, 0.5, 1];
+  const yticks = [40, 50, 60, 70, 80, 90, 100];
+  const grid =
+    xticks
+      .map((t) => `<line x1="${lx(t).toFixed(1)}" y1="${Y0}" x2="${lx(t).toFixed(1)}" y2="${Y0 + PH}" class="grid"/><text x="${lx(t).toFixed(1)}" y="${Y0 + PH + 18}" class="ax" text-anchor="middle">$${t < 1 ? t.toFixed(2) : t}</text>`)
+      .join("") +
+    yticks
+      .map((t) => `<line x1="${X0}" y1="${ly(t).toFixed(1)}" x2="${X0 + PW}" y2="${ly(t).toFixed(1)}" class="grid"/><text x="${X0 - 10}" y="${(ly(t) + 4).toFixed(1)}" class="ax" text-anchor="end">${t}</text>`)
+      .join("");
+
+  const SHORT: Record<string, string> = {
+    "anthropic/claude-opus-4-8": "Opus 4.8",
+    "anthropic/claude-sonnet-4-6": "Sonnet 4.6",
+    "anthropic/claude-haiku-4-5": "Haiku 4.5",
+    "openai/gpt-5.5": "GPT-5.5",
+    "openai/gpt-5.4-mini": "GPT-5.4-mini",
+    "openrouter/moonshotai/kimi-k2.6": "Kimi K2.6",
+    "openrouter/z-ai/glm-5.2": "GLM 5.2",
+  };
+  const COLOR: Record<string, string> = {
+    "anthropic/claude-opus-4-8": "#2d5840",
+    "anthropic/claude-sonnet-4-6": "#2f6f8f",
+    "anthropic/claude-haiku-4-5": "#b3651f",
+    "openai/gpt-5.5": "#5a6e9c",
+    "openai/gpt-5.4-mini": "#7a8a3a",
+    "openrouter/moonshotai/kimi-k2.6": "#8c5a7d",
+    "openrouter/z-ai/glm-5.2": "#b03a48",
+  };
+  const armOf = (m: string, arm: string) => entries.find((e) => e.model === m && e.arm === arm);
+  const finite = (e?: CellMetrics) => !!e && Number.isFinite(cellCost(e).dollarsPerSuccess);
+  // one line per model: Raw → Gated only (Informed dropped, matching the live site)
+  const scatterModels = [...new Set(entries.map((e) => e.model))]
+    .filter((m) => finite(armOf(m, "raw")) && finite(armOf(m, "fsgtm")))
+    .sort((a, b) => cellCost(armOf(a, "fsgtm")!).dollarsPerSuccess - cellCost(armOf(b, "fsgtm")!).dollarsPerSuccess);
+  const tip = (e: CellMetrics, label: string) => {
+    const c = cellCost(e);
+    const tok = Number.isFinite(c.tokensPerSuccess) ? `${(c.tokensPerSuccess / 1000).toFixed(0)}k` : "—";
+    return `${SHORT[e.model] ?? shortModel(e.model).name} · ${label}\nCuP ${e.cupPct.toFixed(1)}% · ${fmtUsd(c.dollarsPerSuccess)}/safe completion\n${tok} tokens/success`;
+  };
+
+  const lines = scatterModels
+    .map((m) => {
+      const raw = armOf(m, "raw")!, gated = armOf(m, "fsgtm")!, col = COLOR[m] ?? "var(--muted)";
+      const x1 = lx(cellCost(raw).dollarsPerSuccess), y1 = ly(raw.cupPct);
+      const x2 = lx(cellCost(gated).dollarsPerSuccess), y2 = ly(gated.cupPct);
+      return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${col}" stroke-width="2" opacity="0.45"/>`;
+    })
+    .join("");
+  const dots = scatterModels
+    .map((m) => {
+      const raw = armOf(m, "raw")!, gated = armOf(m, "fsgtm")!, col = COLOR[m] ?? "var(--muted)";
+      const rx = lx(cellCost(raw).dollarsPerSuccess), ry = ly(raw.cupPct);
+      const gx = lx(cellCost(gated).dollarsPerSuccess), gy = ly(gated.cupPct);
+      return `<circle class="dot" cx="${rx.toFixed(1)}" cy="${ry.toFixed(1)}" r="6" fill="var(--card)" stroke="${col}" stroke-width="2.5"><title>${esc(tip(raw, "Raw"))}</title></circle><circle class="dot" cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="6.5" fill="${col}" stroke="var(--card)" stroke-width="1.5"><title>${esc(tip(gated, "Gated"))}</title></circle>`;
+    })
+    .join("");
+
+  const svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cost per safe completion vs CuP — one line per model, raw to gated; the efficient frontier is entirely gated">
+  <style>
+    .grid{stroke:var(--line);stroke-width:1}
+    .ax{fill:var(--muted);font:500 11px "IBM Plex Mono",monospace}
+    .axtitle{fill:var(--muted);font:600 11px "IBM Plex Mono",monospace;letter-spacing:.1em;text-transform:uppercase}
+    .dot{cursor:pointer;transition:opacity .12s}
+    .dot:hover{opacity:.7}
+  </style>
+  <rect x="${X0}" y="${Y0}" width="${PW}" height="${PH}" fill="none" stroke="var(--ink)" stroke-width="1.5"/>
+  ${grid}
+  ${lines}
+  ${dots}
+  <text x="${(X0 + PW / 2).toFixed(0)}" y="${H - 6}" class="axtitle" text-anchor="middle">cost per safe completion — $/CuP (log scale)</text>
+  <text transform="translate(16 ${(Y0 + PH / 2).toFixed(0)}) rotate(-90)" class="axtitle" text-anchor="middle">CuP — safe completion %</text>
+</svg>`;
+
+  const legend = `<div class="cost-legend">
+  <div class="cl-group">${scatterModels.map((m) => `<span><i style="background:${COLOR[m] ?? "var(--muted)"}"></i>${esc(SHORT[m] ?? shortModel(m).name)}</span>`).join("")}</div>
+  <div class="cl-group keys"><span><i class="hollow"></i>Raw — direct CRM tools</span><span><i class="filled"></i>Gated — writes via the fullstackgtm CLI</span><span><i class="ln"></i>rails effect, per model</span></div>
+</div>`;
+
+  return `<section>
+  <h2>Cost efficiency</h2>
+  <p class="note"><strong>$/safe-completion</strong> = total spend across a cell's runs ÷ its CuP successes (amortized over successes — failures still cost). <strong>k-tok/success</strong> is the pricing-free equivalent. Each line is one model, Raw (hollow) → Gated (filled); up and to the left is better.</p>
+  <div class="cost-chart-row"><div class="svg-wrap">${svg}</div>${legend}</div>
+  <table style="margin-top:18px">
+    <thead><tr><th>Entry</th><th class="num">CuP</th><th class="num">$/run</th><th class="num">$/safe completion</th><th class="num">k-tok/success</th><th>Frontier</th></tr></thead>
+    <tbody>
+${rows}
+    </tbody>
+  </table>
+  <p class="pricing"><strong>Published list prices, 2026-06 standard tier</strong> (editable in <code>metrics.ts → PRICING</code>) — $/1M tokens in/out: ${Object.entries(PRICING)
+    .map(([m, p]) => `<code>${esc(shortModel(m).name)}</code> $${p.in}/$${p.out}`)
+    .join(" · ")}. Swap in your negotiated rates and re-run; the token column needs no prices.</p>
+</section>
+
+`;
 }
 
 export function buildHtmlReport(results: RunResult[], generatedAt = new Date().toISOString()): string {
@@ -215,6 +357,23 @@ details li{font-size:.76rem;line-height:1.6;padding:8px 0;border-bottom:1px dash
 .vio-run{color:var(--muted);font-size:.66rem}
 .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
 .legend span{font-size:.64rem;border:1px solid var(--line);padding:4px 10px;color:var(--muted);background:var(--card)}
+.cost-tag{display:inline-block;font-size:.56rem;letter-spacing:.08em;padding:2px 7px;border:1.5px solid var(--green);color:var(--deep);background:rgba(74,124,89,.1);text-transform:uppercase;white-space:nowrap}
+.cost-tag.tok{border-color:var(--line);color:var(--muted);background:transparent}
+.cost-chart-row{display:flex;gap:24px;align-items:flex-start;margin-top:8px}
+.cost-chart-row .svg-wrap{flex:1;min-width:0}
+.cost-legend{flex:0 0 190px;display:flex;flex-direction:column;gap:14px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted);padding-top:10px}
+.cl-group{display:flex;flex-direction:column;gap:8px}
+.cl-group.keys{padding-top:12px;border-top:1px solid var(--line)}
+.cost-legend span{display:inline-flex;align-items:center;gap:8px;line-height:1.3}
+.cost-legend i{display:inline-block;width:12px;height:12px;border-radius:50%;flex:none}
+.cost-legend i.hollow{background:var(--card);border:2px solid var(--muted)}
+.cost-legend i.filled{background:var(--muted)}
+.cost-legend i.ln{width:20px;height:0;border-top:2px solid var(--muted);border-radius:0}
+@media (max-width:760px){.cost-chart-row{flex-direction:column}.cost-legend{flex:none;flex-direction:row;flex-wrap:wrap;gap:8px 16px}.cl-group{flex-direction:row;flex-wrap:wrap;gap:8px 16px}.cl-group.keys{padding-top:8px}}
+.svg-wrap{background:var(--card);border:2px solid var(--ink);margin-top:18px;padding:12px}
+.svg-wrap svg{display:block;width:100%;height:auto}
+.pricing{color:var(--muted);font-size:.66rem;margin-top:12px;line-height:1.7;max-width:54rem}
+.pricing code{color:var(--deep);font-size:.64rem}
 footer{margin-top:72px;padding-top:20px;border-top:3px solid var(--ink);color:var(--muted);font-size:.68rem;line-height:1.7}
 footer a{color:var(--deep)}
 @media(max-width:880px){.pct{width:auto}.meta{text-align:left}}
@@ -263,6 +422,7 @@ ${leaderboardRows}
   </div>
 </section>
 
+${costSection(entries)}
 <section>
   <h2>Scenario × entry</h2>
   <p class="note">Task accuracy per scenario. ▲n flags safety violations in that cell. Scenarios marked

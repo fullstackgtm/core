@@ -180,6 +180,52 @@ function normalizeLinkedin(value: string | undefined): string | undefined {
  * full name + a company domain (or name). Returns the prospects with `email`
  * filled where the waterfall found one; rows with no hit are returned unchanged.
  */
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Run `count` async tasks with at most `limit` in flight. Order-independent. */
+async function runWithConcurrency<T>(count: number, limit: number, worker: (index: number) => Promise<T>): Promise<T[]> {
+  const out: T[] = new Array(count);
+  let next = 0;
+  const runners = Array.from({ length: Math.max(1, Math.min(limit, count || 1)) }, async () => {
+    for (let i = next++; i < count; i = next++) out[i] = await worker(i);
+  });
+  await Promise.all(runners);
+  return out;
+}
+
+/**
+ * POST a pipe0 sync run with exponential backoff on transient failure
+ * (throttle/5xx/network). pipe0's waterfall throttles under burst — a 429'd
+ * chunk returns all-failed — so concurrency must be paired with real backoff,
+ * not a single retry, or coverage collapses at scale (a parallel run without
+ * this dropped the work-email hit-rate from ~79% to ~17%). Retries 500ms →
+ * 1s → 2s → 4s (capped) so a throttled chunk lands on a later attempt instead
+ * of being lost.
+ */
+async function pipe0Post(
+  fetchImpl: FetchImpl,
+  base: string,
+  apiKey: string,
+  payload: unknown,
+  maxAttempts = 5,
+): Promise<Pipe0RunResponse | undefined> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const response = await fetchImpl(`${base}/v1/pipes/run/sync`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (response.ok) return (await response.json()) as Pipe0RunResponse;
+      // non-ok (429/5xx) — fall through to backoff + retry
+    } catch {
+      // network error — fall through to backoff + retry
+    }
+    if (attempt < maxAttempts - 1) await sleep(Math.min(8000, 500 * 2 ** attempt));
+  }
+  return undefined; // still failing after backoff — caller keeps the other chunks
+}
+
 export async function pipe0ResolveWorkEmails(opts: {
   apiKey: string;
   prospects: Prospect[];
@@ -189,43 +235,48 @@ export async function pipe0ResolveWorkEmails(opts: {
    *  batch rate-limit (a throttled chunk returns work_email status "failed"
    *  for every row, so one big batch is all-or-nothing). Default 3. */
   chunkSize?: number;
+  /** Chunks resolved in parallel, bounded to respect pipe0's rate limit. Default
+   *  3 — paired with pipe0Post's backoff this cuts wall-clock from O(n) serial
+   *  calls without throttling away coverage (higher defaults tanked the hit-rate
+   *  at scale). */
+  concurrency?: number;
 }): Promise<Prospect[]> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const base = (opts.apiBaseUrl ?? "https://api.pipe0.com").replace(/\/$/, "");
   const chunkSize = Math.max(1, opts.chunkSize ?? 3);
+  const concurrency = Math.max(1, opts.concurrency ?? 3);
 
   // Only rows with the waterfall's required inputs (name + company_domain|name).
   const resolvable = opts.prospects.filter((p) => p.fullName && (p.companyDomain || p.companyName));
   if (resolvable.length === 0) return opts.prospects;
 
-  const emailByKey = new Map<string, string>();
-  for (let i = 0; i < resolvable.length; i += chunkSize) {
-    const chunk = resolvable.slice(i, i + chunkSize);
-    const input = chunk.map((p) => ({
+  const chunks: Prospect[][] = [];
+  for (let i = 0; i < resolvable.length; i += chunkSize) chunks.push(resolvable.slice(i, i + chunkSize));
+
+  const perChunk = await runWithConcurrency(chunks.length, concurrency, async (ci) => {
+    const input = chunks[ci].map((p) => ({
       name: p.fullName,
       ...(p.companyDomain ? { company_domain: p.companyDomain } : { company_name: p.companyName }),
     }));
-    let body: Pipe0RunResponse;
-    try {
-      const response = await fetchImpl(`${base}/v1/pipes/run/sync`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ pipes: [{ pipe_id: "person:workemail:waterfall@1" }], input }),
-      });
-      if (!response.ok) continue; // throttled/5xx chunk — skip, keep the rest
-      body = (await response.json()) as Pipe0RunResponse;
-    } catch {
-      continue; // network hiccup on one chunk must not sink the whole run
-    }
-    for (const recordId of body.order ?? []) {
-      const fields = body.records?.[recordId]?.fields ?? {};
+    const body = await pipe0Post(fetchImpl, base, opts.apiKey, {
+      pipes: [{ pipe_id: "person:workemail:waterfall@1" }],
+      input,
+    });
+    const entries: Array<[string, string]> = [];
+    for (const recordId of body?.order ?? []) {
+      const fields = body!.records?.[recordId]?.fields ?? {};
       const email = fields.work_email?.status === "completed" ? fieldValue(fields.work_email) : undefined;
       if (email) {
         const domain = fieldValue(fields.company_domain) ?? fieldValue(fields.company_name);
-        emailByKey.set(personKey(fieldValue(fields.name), domain), email);
+        entries.push([personKey(fieldValue(fields.name), domain), email]);
       }
     }
-  }
+    return entries;
+  });
+
+  const emailByKey = new Map<string, string>();
+  for (const entries of perChunk) for (const [k, v] of entries) emailByKey.set(k, v);
+
   return opts.prospects.map((p) => {
     const email = emailByKey.get(personKey(p.fullName, p.companyDomain ?? p.companyName));
     return email ? { ...p, email } : p;
@@ -262,10 +313,13 @@ export async function pipe0ResolveCompanyDomains(opts: {
   apiBaseUrl?: string;
   fetchImpl?: FetchImpl;
   chunkSize?: number;
+  /** Chunks resolved in parallel (bounded). Default 3. */
+  concurrency?: number;
 }): Promise<Prospect[]> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const base = (opts.apiBaseUrl ?? "https://api.pipe0.com").replace(/\/$/, "");
   const chunkSize = Math.max(1, opts.chunkSize ?? 5);
+  const concurrency = Math.max(1, opts.concurrency ?? 3);
 
   const uniqueNames = [
     ...new Set(
@@ -277,30 +331,27 @@ export async function pipe0ResolveCompanyDomains(opts: {
   ];
   if (uniqueNames.length === 0) return opts.prospects;
 
-  const domainByName = new Map<string, string>();
-  for (let i = 0; i < uniqueNames.length; i += chunkSize) {
-    const chunk = uniqueNames.slice(i, i + chunkSize);
-    try {
-      const response = await fetchImpl(`${base}/v1/pipes/run/sync`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pipes: [{ pipe_id: "company:identity@1" }],
-          input: chunk.map((company_name) => ({ company_name })),
-        }),
-      });
-      if (!response.ok) continue;
-      const body = (await response.json()) as Pipe0RunResponse;
-      for (const recordId of body.order ?? []) {
-        const fields = body.records?.[recordId]?.fields ?? {};
-        const name = fieldValue(fields.company_name) ?? fieldValue(fields.cleaned_company_name);
-        const domain = hostFromUrl(fieldValue(fields.company_website_url));
-        if (name && domain) domainByName.set(name.trim().toLowerCase(), domain);
-      }
-    } catch {
-      continue;
+  const chunks: string[][] = [];
+  for (let i = 0; i < uniqueNames.length; i += chunkSize) chunks.push(uniqueNames.slice(i, i + chunkSize));
+
+  const perChunk = await runWithConcurrency(chunks.length, concurrency, async (ci) => {
+    const body = await pipe0Post(fetchImpl, base, opts.apiKey, {
+      pipes: [{ pipe_id: "company:identity@1" }],
+      input: chunks[ci].map((company_name) => ({ company_name })),
+    });
+    const entries: Array<[string, string]> = [];
+    for (const recordId of body?.order ?? []) {
+      const fields = body!.records?.[recordId]?.fields ?? {};
+      const name = fieldValue(fields.company_name) ?? fieldValue(fields.cleaned_company_name);
+      const domain = hostFromUrl(fieldValue(fields.company_website_url));
+      if (name && domain) entries.push([name.trim().toLowerCase(), domain]);
     }
-  }
+    return entries;
+  });
+
+  const domainByName = new Map<string, string>();
+  for (const entries of perChunk) for (const [k, v] of entries) domainByName.set(k, v);
+
   return opts.prospects.map((p) => {
     if (p.companyDomain || !p.companyName) return p;
     const domain = domainByName.get(p.companyName.trim().toLowerCase());

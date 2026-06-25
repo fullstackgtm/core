@@ -206,6 +206,35 @@ LinkedIn is just another discovery source on the same scored → deduped → met
 
 **Leads are never born ownerless.** An `acquire.assign` policy stamps an owner onto every created lead at create time (mapped to HubSpot `hubspot_owner_id`), routed by one of four strategies — `fixed`, `round-robin` (distributed deterministically, no rotation state to drift), `territory` (by geo / industry / size / department / title), or `account-owner` (inherit the matched company's owner). With no policy and a single-owner portal, acquire defaults every lead to that owner (or pass `--assign-owner <id>`); with multiple owners and no policy it warns and leaves them unassigned rather than guess. To clear *existing* ownerless records, `reassign --assign-unowned --to <ownerId>` applies the same intent as a backfill.
 
+## Signal-based outbound: reach accounts the week something changes
+
+Cleaning and filling the CRM tells you *who* to reach; it never tells you *when*. The **signal → judge → draft** loop adds timing — and, like everything else, it stays on the dry-run → approve → apply spine and sends nothing.
+
+```bash
+# 1. Watch for movement. Free, no-auth public job boards in the box; funding/company/social via staged ingest.
+fullstackgtm signals fetch --bucket job --source greenhouse,lever,ashby --keywords "revops,growth" --save
+fullstackgtm signals list --since 7d                         # ranked triggers, each with a verbatim source quote
+
+# 2. Decide who's worth a touch — and who isn't. Scores timing × fit × memory into send/nurture/skip.
+fullstackgtm icp judge --signals-from latest --with-history --save
+fullstackgtm icp eval --golden default                       # gate: prove the judge is calibrated before any send (exits 2 if not)
+
+# 3. Draft the opener from the trigger. A create_task plan — proposed, never transmitted.
+fullstackgtm draft --from-judge latest --min-score 80 --save
+fullstackgtm plans approve <id> --operations all && fullstackgtm apply --plan-id <id> --provider hubspot
+
+# 4. Close the loop. Outcomes re-weight which signals earn a touch.
+fullstackgtm signals outcome --account acme.com --result replied
+```
+
+**`signals`** is Detect-side — it captures triggers into a local, profile-scoped ledger and writes *nothing* to your CRM. The five buckets (`demand`, `funding`, `job`, `company`, `social`) are not equal: a fresh round outweighs a lone social like, and a *reposted* role — the first hire fell through — outweighs a first-time post. Public ATS boards (Greenhouse, Lever, Ashby) are the free, no-auth source shipped in the box; funding/company/social arrive through `--from` staged ingest (an agent or a feed supplies them — the CLI scrapes no one), and `demand` (first-party intent) is reserved for a privileged source.
+
+**`icp judge`** turns raw signals into a short ranked list: it scores each account on **timing × fit × memory** — the signal's weight and recency, your ICP fit, and whether you've touched the account in the last 7 days — and returns `send` / `nurture` / `skip`. Every *why-now* it produces must quote a real trigger **verbatim** (the same evidence gate as `call` and `market`); an ungrounded why-now is never stored. With no LLM key it runs a deterministic baseline. **`icp eval`** is the gate the demos skip: it grades the judge against a labeled golden set (and, once outcomes exist, checks that accounts scored hot actually book more than cold), exiting `2` below the bar so a miscalibrated judge can't reach a live send.
+
+**`draft`** writes one opener per hot account whose first line quotes the trigger in the buyer's own words — no "Hi {{firstName}}", one ask, no manufactured urgency. It emits a `create_task` plan through the normal approval gate; it has **no send capability** and adds none — execution stays in your sender of choice. Without an LLM key it emits a clearly-labeled stub, never wooden copy passed off as a draft.
+
+**Runs on any model.** Every LLM step honors `ANTHROPIC_API_BASE_URL` / `OPENAI_API_BASE_URL`, so the same loop runs on Claude, a GLM/z.ai endpoint, or a local Ollama by pointing one env var — `--model` picks the model id.
+
 ## Schedules: declare a cadence once, keep the governance contract under automation
 
 Everything the CLI produces is accurate the moment it runs and silently stale afterward. The **schedule layer** is the horizontal fix — any read/plan-side command on a cron cadence, one component, every verb (no feature owns its own cron logic):
@@ -220,7 +249,7 @@ fullstackgtm schedule status --runs 5            # last runs, exit codes, artifa
 fullstackgtm schedule uninstall                  # remove the managed block, touch nothing else
 ```
 
-**Scheduling never auto-approves.** Schedulable commands are read/plan-side only — `audit`, `snapshot`, `enrich append|refresh`, `market capture|refresh`, `suggest`, `report`, `doctor` — so unattended runs accumulate *proposals* (plans in the queue, run records, reports), never CRM writes. `apply` is schedulable only as `apply --plan-id <id>`, and every firing re-checks the plan's status is approved: an unapproved plan records a `plan_not_approved` no-op run instead of executing, and no flag relaxes this. Arbitrary shell is not schedulable — an entry's argv must resolve to a known fullstackgtm command (validated at `add` time and re-checked at run time), and the crontab line you audit is always `fullstackgtm schedule run <id>` and nothing else.
+**Scheduling never auto-approves.** Schedulable commands are read/plan-side only — `audit`, `snapshot`, `enrich append|refresh`, `market capture|refresh`, `signals fetch`, `icp judge`, `icp eval`, `draft`, `suggest`, `report`, `doctor` — so unattended runs accumulate *proposals* (plans in the queue, run records, reports), never CRM writes. `apply` is schedulable only as `apply --plan-id <id>`, and every firing re-checks the plan's status is approved: an unapproved plan records a `plan_not_approved` no-op run instead of executing, and no flag relaxes this. Arbitrary shell is not schedulable — an entry's argv must resolve to a known fullstackgtm command (validated at `add` time and re-checked at run time), and the crontab line you audit is always `fullstackgtm schedule run <id>` and nothing else.
 
 `install` renders enabled entries into a sentinel-delimited block (`# >>> fullstackgtm <profile> >>>` … `# <<< fullstackgtm <profile> <<<`) in your user crontab; re-install replaces the block wholesale and never touches lines outside it. Honest limitation: local cron has no catch-up — a laptop asleep at firing time means a missed run. `schedule status` surfaces missed firings by comparing expected-vs-actual run history, so the gap is at least visible. Entries are provider-agnostic; cloud providers (Modal, AWS) arrive as scaffold generators that call the same `schedule run <id>` contract, and are refused as "not yet implemented" until then.
 

@@ -31,8 +31,18 @@ const SCHEDULABLE = {
     doctor: null,
     enrich: ["append", "refresh"],
     market: ["capture", "refresh"],
+    // The GTM brain. `signals fetch` is read-only re: CRM (--save persists only
+    // the local signal ledger). `icp judge`/`icp eval` are read-only/grade-only
+    // (--save writes only the local judge store, never a plan). `draft` is
+    // plan-side — it only stages a needs_approval plan, never applies — so the
+    // whole verb is safely schedulable (apply stays `apply --plan-id` only and
+    // re-checks `approved` at run time, so a scheduled draft still cannot send).
+    signals: ["fetch"],
+    icp: ["judge", "eval"],
+    draft: null,
 };
-const ALLOWLIST_SUMMARY = "audit, snapshot, enrich append|refresh, market capture|refresh, suggest, report, doctor — " +
+const ALLOWLIST_SUMMARY = "audit, snapshot, enrich append|refresh, market capture|refresh, signals fetch, " +
+    "icp judge|eval, draft (stages a plan), suggest, report, doctor — " +
     "plus apply --plan-id <id> (re-checked approved at every firing)";
 /**
  * Validate that an argv resolves to a schedulable fullstackgtm command.

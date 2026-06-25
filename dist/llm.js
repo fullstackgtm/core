@@ -6,6 +6,20 @@ export const DEFAULT_MODELS = {
 };
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+/**
+ * Resolve the effective endpoint, honoring an optional base-URL override.
+ * Mirrors the `prospectSources.ts` idiom (`(base ?? default).replace(/\/$/, "")`):
+ * trailing-slash-stripped; if the configured base already ends in the known
+ * path suffix it is used as-is, otherwise the suffix is appended so callers can
+ * pass either a bare origin (`https://glm.example`) or a full endpoint URL.
+ * Unset override → the upstream default, so behavior is unchanged.
+ */
+function resolveLlmUrl(override, defaultUrl, pathSuffix) {
+    if (!override)
+        return defaultUrl;
+    const base = override.replace(/\/$/, "");
+    return base.endsWith(pathSuffix) ? base : `${base}${pathSuffix}`;
+}
 // Bound cost and context: long calls keep the head and tail.
 const MAX_TRANSCRIPT_CHARS = 28_000;
 export function detectProviderFromKey(apiKey) {
@@ -273,7 +287,8 @@ export async function classifyCallLlm(transcript, defs, options) {
 export async function forcedToolCall(prompt, toolName, schema, model, options) {
     const fetchImpl = options.fetchImpl ?? fetch;
     if (options.provider === "anthropic") {
-        const response = await llmFetch(fetchImpl, ANTHROPIC_URL, {
+        const anthropicUrl = resolveLlmUrl(options.anthropicBaseUrl, ANTHROPIC_URL, "/v1/messages");
+        const response = await llmFetch(fetchImpl, anthropicUrl, {
             method: "POST",
             headers: {
                 "x-api-key": options.apiKey,
@@ -293,7 +308,8 @@ export async function forcedToolCall(prompt, toolName, schema, model, options) {
             throw new Error("Anthropic returned no tool call — try again or a different --model.");
         return block.input;
     }
-    const response = await llmFetch(fetchImpl, OPENAI_URL, {
+    const openaiUrl = resolveLlmUrl(options.openaiBaseUrl, OPENAI_URL, "/v1/chat/completions");
+    const response = await llmFetch(fetchImpl, openaiUrl, {
         method: "POST",
         headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
