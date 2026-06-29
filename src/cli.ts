@@ -512,6 +512,14 @@ const HELP: Record<string, HelpEntry> = {
     detail: "Verifies Node version, the credential store, MCP peers, and prints what to run next.",
     seeAlso: ["login", "audit"],
   },
+  commands: {
+    summary: "print the command catalog (human or JSON for agents)",
+    phase: "Discover",
+    synopsis: ["fullstackgtm commands [--json]", "fullstackgtm help --json", "fullstackgtm help <command> --json"],
+    detail:
+      "A stable, machine-readable map of commands, phases, synopsis lines, important flags, and chaining hints — use this instead of scraping --help output.",
+    seeAlso: ["help", "doctor", "audit"],
+  },
   profiles: {
     summary: "list credential profiles (one per client org)",
     phase: "Setup",
@@ -753,7 +761,7 @@ const BESPOKE_HELP = ["init", "call", "market", "enrich", "bulk-update", "schedu
 function shortUsage() {
   const groups: Array<[string, string[]]> = [
     ["Get started", ["init"]],
-    ["Setup & health", ["login", "logout", "doctor", "profiles", "health"]],
+    ["Setup & health", ["login", "logout", "doctor", "commands", "profiles", "health"]],
     ["Detect — read-only", ["audit", "report", "snapshot", "diff", "rules"]],
     ["Prevent — gate writes", ["resolve"]],
     ["Remediate — governed writes", ["fix", "bulk-update", "dedupe", "reassign", "enrich"]],
@@ -782,6 +790,7 @@ function shortUsage() {
   }
   lines.push(
     "Zoom in:  fullstackgtm <command> --help        focused help for one command",
+    "Machine:  fullstackgtm commands --json         command catalog for agents",
     "Full ref: fullstackgtm help --full             every flag and option",
     "Try it:   fullstackgtm audit --demo            zero-credential demo CRM",
     "",
@@ -808,6 +817,108 @@ function commandHelp(command: string) {
   if (BESPOKE_HELP.includes(command)) lines.push("", `Run \`fullstackgtm ${command} --help\` for the full subcommand reference.`);
   lines.push("", "Full reference: fullstackgtm help --full");
   return lines.join("\n");
+}
+
+function commandCatalogEntry(command: string, entry: HelpEntry) {
+  return {
+    command,
+    summary: entry.summary,
+    phase: entry.phase,
+    synopsis: entry.synopsis,
+    detail: entry.detail ?? null,
+    options: (entry.options ?? []).map(([flag, description]) => ({ flag, description })),
+    seeAlso: entry.seeAlso ?? [],
+    help: `fullstackgtm ${command} --help`,
+    jsonCapable:
+      entry.synopsis.some((line) => line.includes("--json")) ||
+      (entry.options ?? []).some(([flag]) => flag.includes("--json")),
+  };
+}
+
+function commandCatalog() {
+  return {
+    name: "fullstackgtm",
+    version: readPackageInfo().version,
+    description: "Plan/apply for GTM stacks: read-only detection, reviewable patch plans, explicit approval, guarded apply.",
+    safety: [
+      "Read verbs never write to providers.",
+      "Apply writes only explicitly approved operations.",
+      "requires_human_* placeholders are refused unless a concrete value is supplied.",
+    ],
+    agentHints: [
+      "Prefer --json for data interchange; human guidance is printed to stderr where practical.",
+      "Start with doctor, audit --demo, or the command-specific --help instead of scraping the full reference.",
+      "Use plans approve/apply rather than raw provider writes.",
+    ],
+    commands: Object.entries(HELP).map(([command, entry]) => commandCatalogEntry(command, entry)),
+  };
+}
+
+function commandCatalogFor(command: string) {
+  const entry = HELP[command];
+  return entry ? commandCatalogEntry(command, entry) : null;
+}
+
+function commandsCommand(args: string[]) {
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(commandCatalog(), null, 2));
+    return;
+  }
+  console.log(shortUsage());
+}
+
+function levenshtein(a: string, b: string) {
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const curr = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev.splice(0, prev.length, ...curr);
+  }
+  return prev[b.length];
+}
+
+function suggestCommand(command: string) {
+  const candidates = Object.keys(HELP).concat(["help", "version"]);
+  let best: { command: string; distance: number } | null = null;
+  for (const candidate of candidates) {
+    const distance = levenshtein(command, candidate);
+    if (!best || distance < best.distance) best = { command: candidate, distance };
+  }
+  if (!best) return null;
+  const threshold = command.length <= 5 ? 2 : 3;
+  return best.distance <= threshold ? best.command : null;
+}
+
+function unknownCommand(command: string, args: string[]) {
+  const suggestion = suggestCommand(command);
+  if (args.includes("--json")) {
+    console.error(
+      JSON.stringify(
+        {
+          error: {
+            code: "unknown_command",
+            message: `Unknown command: ${command}`,
+            command,
+            suggestion,
+            help: suggestion ? `fullstackgtm ${suggestion} --help` : "fullstackgtm help",
+            commandCatalog: "fullstackgtm commands --json",
+          },
+        },
+        null,
+        2,
+      ),
+    );
+  } else {
+    console.error(`Unknown command: ${command}`);
+    if (suggestion) console.error(`Did you mean: fullstackgtm ${suggestion}`);
+    console.error("");
+    console.error("Run `fullstackgtm help` for the short map or `fullstackgtm commands --json` for agent-readable discovery.");
+    console.error("Try: fullstackgtm audit --demo");
+  }
+  process.exitCode = 1;
 }
 
 function option(args: string[], name: string) {
@@ -5204,12 +5315,19 @@ export async function runCli(argv: string[]) {
     return;
   }
   if (command === "help") {
-    const [topic, ...rest] = args;
-    if (topic && topic !== "--full" && !topic.startsWith("-")) {
+    const [topic] = args;
+    if (args.includes("--json")) {
+      const catalogEntry = topic && !topic.startsWith("-") ? commandCatalogFor(topic) : null;
+      console.log(JSON.stringify(catalogEntry ?? commandCatalog(), null, 2));
+    } else if (topic && topic !== "--full" && !topic.startsWith("-")) {
       console.log(commandHelp(topic));
     } else {
       console.log(args.includes("--full") || topic === "--full" ? usage() : shortUsage());
     }
+    return;
+  }
+  if (command === "commands") {
+    commandsCommand(args);
     return;
   }
   if (command === "--version" || command === "-v" || command === "version") {
@@ -5338,8 +5456,5 @@ export async function runCli(argv: string[]) {
     return;
   }
 
-  console.error(`Unknown command: ${command}`);
-  console.error("");
-  console.error(usage());
-  process.exitCode = 1;
+  unknownCommand(command, args);
 }

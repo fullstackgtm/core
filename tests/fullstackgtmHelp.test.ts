@@ -14,6 +14,7 @@ async function captureBoth(argv: string[]): Promise<{ out: string; err: string }
   const err: string[] = [];
   const origLog = console.log;
   const origErr = console.error;
+  const origExitCode = process.exitCode;
   console.log = (msg: unknown) => out.push(String(msg));
   console.error = (msg: unknown) => err.push(String(msg));
   try {
@@ -21,6 +22,7 @@ async function captureBoth(argv: string[]): Promise<{ out: string; err: string }
   } finally {
     console.log = origLog;
     console.error = origErr;
+    process.exitCode = origExitCode;
   }
   return { out: out.join("\n"), err: err.join("\n") };
 }
@@ -69,6 +71,41 @@ test("help <verb> renders the same focused entry", async () => {
 test("unknown verb --help falls back to the short map instead of dead-ending", async () => {
   const out = await capture(["definitely-not-a-command", "--help"]);
   assert.match(out, /Setup & health:/);
+});
+
+test("commands --json exposes an agent-readable command catalog", async () => {
+  const out = await capture(["commands", "--json"]);
+  const catalog = JSON.parse(out);
+  assert.equal(catalog.name, "fullstackgtm");
+  assert.ok(Array.isArray(catalog.commands));
+  const audit = catalog.commands.find((entry: any) => entry.command === "audit");
+  assert.equal(audit.phase, "Detect");
+  assert.match(audit.synopsis.join("\n"), /fullstackgtm audit/);
+  assert.equal(audit.jsonCapable, true);
+  assert.match(catalog.agentHints.join("\n"), /Prefer --json/);
+});
+
+test("help <verb> --json returns a single catalog entry", async () => {
+  const out = await capture(["help", "resolve", "--json"]);
+  const entry = JSON.parse(out);
+  assert.equal(entry.command, "resolve");
+  assert.equal(entry.phase, "Prevent");
+  assert.match(entry.summary, /create gate/);
+});
+
+test("unknown command is concise, suggests typos, and has JSON error mode", async () => {
+  const human = await captureBoth(["auidt"]);
+  assert.equal(human.out, "");
+  assert.match(human.err, /Unknown command: auidt/);
+  assert.match(human.err, /Did you mean: fullstackgtm audit/);
+  assert.match(human.err, /commands --json/);
+  assert.doesNotMatch(human.err, /Authentication \(checked in order\)/);
+
+  const machine = await captureBoth(["auidt", "--json"]);
+  assert.equal(machine.out, "");
+  const payload = JSON.parse(machine.err);
+  assert.equal(payload.error.code, "unknown_command");
+  assert.equal(payload.error.suggestion, "audit");
 });
 
 // #2 — every read verb points forward. `audit --demo` used to end on a blank
