@@ -292,6 +292,47 @@ function withinWindow(iso, now, windowDays) {
         return false;
     return now.getTime() - t <= windowDays * DAY_MS;
 }
+/**
+ * Validate one loosely-typed staged row and turn it into a `Signal`, applying
+ * the verbatim-evidence gate (a row with no quote is rejected, never faked) and
+ * the same id/normalization logic the ATS path uses. `errorLabel` lets the
+ * caller produce a precise message ("--from f.json: row 3", "serpapi-news row 0")
+ * since both the `--from` ingest and the source-connector registry funnel here.
+ *
+ * Throws on a malformed row; returns the canonical `Signal` on success. Bucket
+ * FILTERING (skip rows outside a `--bucket` selection) stays with the caller —
+ * this function is per-row validation only.
+ */
+export function stagedRowToSignal(entry, opts) {
+    const { now, source, errorLabel } = opts;
+    const bucket = String(entry.bucket ?? "");
+    if (!SIGNAL_BUCKETS.includes(bucket)) {
+        throw new Error(`${errorLabel} has unknown bucket "${bucket}" (one of ${SIGNAL_BUCKETS.join(", ")}).`);
+    }
+    const accountDomain = normalizeAccountDomain(String(entry.accountDomain ?? entry.domain ?? ""));
+    if (!accountDomain)
+        throw new Error(`${errorLabel} is missing accountDomain.`);
+    const trigger = String(entry.trigger ?? "").trim();
+    if (!trigger)
+        throw new Error(`${errorLabel} is missing trigger.`);
+    const quote = String(entry.quote ?? "").trim();
+    if (!quote)
+        throw new Error(`${errorLabel} is missing the verbatim quote (the evidence anchor).`);
+    const base = { accountDomain, bucket: bucket, trigger };
+    const firstSeen = typeof entry.firstSeen === "string" && entry.firstSeen ? entry.firstSeen : now.toISOString();
+    return {
+        id: signalId(base),
+        accountDomain,
+        bucket: bucket,
+        trigger,
+        quote,
+        sourceUrl: String(entry.sourceUrl ?? ""),
+        firstSeen,
+        weight: typeof entry.weight === "number" ? entry.weight : DEFAULT_SIGNALS_CONFIG.buckets[bucket].weight,
+        source,
+        judgedBy: null,
+    };
+}
 // ---------------------------------------------------------------------------
 // Dedup
 /**
@@ -391,6 +432,29 @@ function blankCounts() {
 // Store: per-label JSON runs + append-only outcomes.jsonl, profile-scoped.
 export function signalsDir(baseDir) {
     return join(baseDir ?? credentialsDir(), "signals");
+}
+/**
+ * Conventional webhook landing zone: `<signals>/spool`, profile-scoped. A
+ * webhook receiver (hosted, or the operator's own glue) appends one JSONL row
+ * per event to a `*.jsonl` file here; `signals fetch --connector file` reads the
+ * whole directory when given no explicit path. The CLI never writes here — the
+ * receiver does — so this is just the agreed-upon location, not a managed store.
+ * Per-source files (`rb2b.jsonl`, `hubspot.jsonl`, …) coexist. See
+ * docs/signal-spool-format.md.
+ */
+export function signalsSpoolDir(baseDir) {
+    return join(signalsDir(baseDir), "spool");
+}
+/**
+ * Conventional outbox: `<signals>/outbox`, profile-scoped — the SEND-side mirror
+ * of the spool. `apply --channel outbox` renders each APPROVED drafted opener to
+ * a `<channel>.jsonl` file here (one row per touch); a downstream sender (hosted,
+ * or the operator's own) drains it. The CLI WRITES governed, approved send
+ * intents here but TRANSMITS NOTHING — the "drafts everything, transmits nothing"
+ * invariant holds. See docs/outbox-format.md.
+ */
+export function signalsOutboxDir(baseDir) {
+    return join(signalsDir(baseDir), "outbox");
 }
 export function signalRunId(runLabel) {
     return `sigr_${fnv1a(runLabel)}`;

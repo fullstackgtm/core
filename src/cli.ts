@@ -13,6 +13,7 @@ import {
 } from "./connectors/hubspotAuth.ts";
 import { createSalesforceConnector } from "./connectors/salesforce.ts";
 import { createStripeConnector } from "./connectors/stripe.ts";
+import { createChannelConnector } from "./connectors/outboxChannel.ts";
 import {
   pollSalesforceDeviceLogin,
   startSalesforceDeviceLogin,
@@ -131,23 +132,48 @@ import {
   type InitSource,
 } from "./init.ts";
 import {
+  appendCoverage,
+  computeCoverage,
+  coverageCountsFromSnapshot,
+  classifyCoverage,
+  coverageToText,
+  deriveAcvFromClosedWon,
+  deriveBuyersPerAccount,
+  estimateTam,
+  loadTamModel,
+  projectEta,
+  readCoverageTimeline,
+  saveTamModel,
+  tamReportToMarkdown,
+  type AcvBasis,
+  type TamCrossCheck,
+} from "./tam.ts";
+import {
   crmContactKeys,
   fetchExploriumProspects,
   fetchPipe0CrustdataProspects,
   partitionFreshProspects,
   pipe0ResolveCompanyDomains,
   pipe0ResolveWorkEmails,
+  probeExploriumBusinessCount,
   prospectIdentityKeys,
   type Prospect,
 } from "./connectors/prospectSources.ts";
+import {
+  theirStackCountCompanies,
+  theirStackPullCost,
+  theirStackSearchCompanies,
+} from "./connectors/theirstack.ts";
 import { loadSeen, recordSeen } from "./acquireSeen.ts";
-import { reportCounts, reportEvent } from "./runReport.ts";
+import { reportCounts, reportCrm, reportEvent, reportFindings } from "./runReport.ts";
 import { createLinkedInProvider, discoverLinkedInProspects } from "./acquireLinkedIn.ts";
 import {
   fitThreshold,
   icpFromAnswers,
   icpToCrustdataFilters,
+  icpToExploriumBusinessFilters,
   icpToExploriumFilters,
+  icpToTheirStackFilters,
   parseIcp,
   scoreProspectAgainstIcp,
   INTERVIEW_SPEC,
@@ -164,13 +190,15 @@ import {
   normalizeAccountDomain,
   SIGNAL_BUCKETS,
   signalRunId,
-  signalId,
+  signalsSpoolDir,
+  stagedRowToSignal,
   type Signal,
   type SignalBucket,
   type SignalOutcomeResult,
   type SignalsConfig,
 } from "./signals.ts";
 import { fetchAtsJobs, type AtsBoardSource, type AtsJob } from "./connectors/atsBoards.ts";
+import { getSignalSource, listSignalSources, type SignalSourceContext } from "./connectors/signalSources.ts";
 import {
   createFileJudgeStore,
   DEFAULT_JUDGE_PROMPT,
@@ -185,6 +213,7 @@ import {
   type DraftChannel,
 } from "./draft.ts";
 import {
+  DEFAULT_GOLDEN_NOW_ISO,
   DEFAULT_GOLDEN_SET,
   DEFAULT_MIN_ACCURACY,
   defaultJudgeFn,
@@ -245,7 +274,7 @@ Usage:
   fullstackgtm login salesforce --instance-url <url> [--no-validate]
   fullstackgtm login stripe [--no-validate]
   fullstackgtm login anthropic | openai        store an LLM API key for call parse/score
-  fullstackgtm login apollo                    store an Apollo API key for enrich pulls\n  fullstackgtm login pipe0 | explorium         store a discovery-provider key for enrich acquire\n  fullstackgtm login heyreach                  store a HeyReach key for enrich acquire --source linkedin\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|pipe0|explorium|heyreach|broker>
+  fullstackgtm login apollo                    store an Apollo API key for enrich pulls\n  fullstackgtm login pipe0 | explorium | theirstack  store a discovery-provider key (theirstack = technographic TAM)\n  fullstackgtm login heyreach                  store a HeyReach key for enrich acquire --source linkedin\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|pipe0|explorium|heyreach|broker>
 
   Secrets (tokens, client secrets) are NEVER passed as flags — they leak via
   the process list and shell history. Pipe them on stdin or enter them at the
@@ -290,6 +319,16 @@ Usage:
                                                against the stored capture it cites before it's accepted — then
                                                compute deterministic front states and drift, render the field
                                                report. refresh = capture → classify → drift → report in one step
+  fullstackgtm tam estimate [--name <n>] [--icp <path>] (--accounts <n> | --source theirstack|explorium) (--acv <annual-usd> | --acv-from-crm --deal-period monthly|quarterly|annual) [--acv-basis account|buyer] [--buyers-per-account <n>] [--cross-checks <file.json>] [source options] [--json]
+  fullstackgtm tam status [--name <n>] <source options> [--save] [--json]
+  fullstackgtm tam report [--name <n>] [--out <path>]
+  fullstackgtm tam populate [--name <n>] --cron "<expr>" [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--label <l>]
+                                               size the reachable market FROM the ICP (a real account count ×
+                                               ACV; buyers/account = the contact population target), then fill
+                                               it: populate schedules plan-only enrich acquire --save (apply
+                                               stays gated), status --save stamps a coverage timeline, report
+                                               projects a burn-up + ETA. estimate --source probes the provider's
+                                               ICP-match count (else --accounts), always labeled provider-vs-assumption
   fullstackgtm enrich append [--source apollo] [--objects companies,contacts] [--save] [--config <path>] [source options]
   fullstackgtm enrich refresh [--source apollo] [--stale-days <n>] [--save] [--config <path>] [source options]
   fullstackgtm enrich ingest <file.csv|payload.json> --source clay [--run-label <label>]
@@ -381,6 +420,7 @@ Usage:
   fullstackgtm plans approve <id> --operations <ids|all> [--value <opId>=<v>]
   fullstackgtm plans approve <id> --values-from <suggestions.json> [--min-confidence high|low] [--include-creates]
   fullstackgtm apply --plan-id <id> --provider <name>
+  fullstackgtm apply --plan-id <id> --channel outbox          (render approved openers; transmits nothing)
   fullstackgtm apply --plan <path> --provider <name> --approve <ids|all> [options]
   fullstackgtm audit-log export [--out <path>] | verify --in <path>   tamper-evident apply-run record
   fullstackgtm rules [--json]
@@ -666,6 +706,7 @@ const HELP: Record<string, HelpEntry> = {
     phase: "Govern / Verify",
     synopsis: [
       "fullstackgtm apply --plan-id <id> --provider <name>",
+      "fullstackgtm apply --plan-id <id> --channel outbox   (render approved drafted openers to the outbox; transmits nothing)",
       "fullstackgtm apply --plan <path> --provider <name> --approve <ids|all> [--value <opId>=<v>]",
     ],
     detail:
@@ -703,21 +744,29 @@ const HELP: Record<string, HelpEntry> = {
     synopsis: ["fullstackgtm market init|capture|classify|worksheet|observe|fronts|axes|overlay|scale|report|refresh …  (run `market --help` for full options)"],
     detail:
       "Capture vendor pages (content-addressed), classify intensity per claim (LLM bring-your-own-key, or fill the worksheet with any agent), then compute deterministic front states and drift. Every quoted span is verified verbatim against the stored capture before it's accepted.",
-    seeAlso: [],
+    seeAlso: ["tam"],
+  },
+  tam: {
+    summary: "size the reachable market from your ICP, then populate + track coverage",
+    phase: "Intelligence",
+    synopsis: ["fullstackgtm tam estimate|status|report|populate …  (run `tam --help` for full options)"],
+    detail:
+      "Estimate a defensible TAM from the ICP: a real account count (Explorium company count or --accounts) × a confirmed ANNUAL ACV (explicit --acv, or --acv-from-crm --deal-period to derive+annualize from closed-won — no band defaults, a bare --provider does NOT set ACV, refuses without one); buyers/account (explicit or CRM-derived) gives the contact target. Then iteratively fill it with scheduled `enrich acquire --save` runs (plan-only; apply stays gated). `status --save` stamps a coverage timeline so `report` projects how long full coverage will take.",
+    seeAlso: ["icp", "enrich", "schedule", "market"],
   },
 
   // Outbound intelligence — signals → judge → draft (the GTM brain)
   signals: {
-    summary: "detect fresh buying triggers (ATS hiring + staged ingest), ranked",
+    summary: "detect fresh buying triggers (ATS hiring + source connectors), ranked",
     phase: "Detect",
     synopsis: [
-      "fullstackgtm signals fetch [--bucket job,…] [--source greenhouse,lever,ashby] [--watchlist <path|crm:seg>] [--keywords …] [--from <file.json>] [--save]",
+      "fullstackgtm signals fetch [--bucket job,…] [--source greenhouse,lever,ashby] [--connector file,serpapi-news,hubspot-forms] [--connector-opt k=v] [--watchlist <path|crm:seg>] [--keywords …] [--from <file.json>] [--save]",
       "fullstackgtm signals list [--since 7d] [--bucket b] [--account d] [--unjudged]",
       "fullstackgtm signals outcome --account <d> [--touch <id>] --result replied|meeting|bounced|no_reply",
       "fullstackgtm signals weights [--explain]",
     ],
     detail:
-      "Read-only re: CRM — `fetch` NEVER emits a patch plan; `--save` persists only the local signal ledger. ATS adapters are no-auth. `outcome` feeds the learned per-bucket `weights`.",
+      "Read-only re: CRM — `fetch` NEVER emits a patch plan; `--save` persists only the local signal ledger. ATS adapters are no-auth; source connectors (`--connector`) pull from connected platforms with secrets via the credential ladder, never argv. `outcome` feeds the learned per-bucket `weights`.",
     seeAlso: ["icp", "draft"],
   },
   icp: {
@@ -746,7 +795,7 @@ const HELP: Record<string, HelpEntry> = {
 
 // Verbs that print their own richer multi-subcommand help; runCli routes their
 // `--help` to themselves, so commandHelp() only renders these via `help <verb>`.
-const BESPOKE_HELP = ["init", "call", "market", "enrich", "bulk-update", "schedule", "signals", "icp", "draft"];
+const BESPOKE_HELP = ["init", "call", "market", "tam", "enrich", "bulk-update", "schedule", "signals", "icp", "draft"];
 
 // Lifecycle-grouped front door. One line per verb, organized by the
 // Prevent→Detect→Remediate→Verify loop so a new user sees ~6 jobs, not 22 verbs.
@@ -759,7 +808,7 @@ function shortUsage() {
     ["Remediate — governed writes", ["fix", "bulk-update", "dedupe", "reassign", "enrich"]],
     ["Calls → evidence", ["call"]],
     ["Govern — the plan/apply spine", ["suggest", "plans", "apply", "audit-log", "merge"]],
-    ["Market intelligence", ["market"]],
+    ["Market intelligence", ["market", "tam"]],
     ["Outbound — signals → judge → draft", ["signals", "icp", "draft"]],
     ["Schedule — make it continuous", ["schedule"]],
   ];
@@ -1042,6 +1091,63 @@ function auditNextStep(args: string[], plan: PatchPlan): string {
   ].join("\n");
 }
 
+/**
+ * Resolve the live HubSpot account's record-URL base (e.g.
+ * `https://app-na2.hubspot.com/contacts/<portalId>/record`) and report it on the
+ * run so the dashboard can deep-link findings. Best-effort: any failure is
+ * swallowed — deep-links are a nicety, never a reason to fail the audit.
+ */
+async function reportHubspotDeepLinkBase(): Promise<void> {
+  try {
+    const connection = await resolveHubspotConnection();
+    if (!connection?.accessToken) return;
+    const response = await fetch("https://api.hubapi.com/account-info/v3/details", {
+      headers: { Authorization: `Bearer ${connection.accessToken}` },
+    });
+    if (!response.ok) return;
+    const info = (await response.json()) as { portalId?: number; uiDomain?: string };
+    if (!info.portalId || !info.uiDomain) return;
+    reportCrm({
+      provider: "hubspot",
+      recordUrlBase: `https://${info.uiDomain}/contacts/${info.portalId}/record`,
+    });
+  } catch {
+    // deep-link base is best-effort
+  }
+}
+
+/**
+ * When paired (a broker credential exists), hand the local HubSpot token to the
+ * hosted deployment so its Integrations page shows HubSpot connected and the
+ * backend can sync on its own. The token lands in the same place a manual
+ * in-app connect would (encrypted on the org's integration). Best-effort:
+ * never blocks or fails the audit.
+ */
+async function registerHubspotWithBroker(): Promise<void> {
+  try {
+    const broker = getCredential("broker");
+    if (!broker?.baseUrl || !broker.accessToken) return; // only when paired
+    const connection = await resolveHubspotConnection();
+    if (!connection?.accessToken) return;
+    const response = await fetch(`${broker.baseUrl.replace(/\/+$/, "")}/api/cli/integration`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${broker.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ provider: "hubspot", token: connection.accessToken }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (response.ok) {
+      console.error(
+        `Registered HubSpot with ${broker.baseUrl} — it now shows on the dashboard's Integrations page.`,
+      );
+    }
+  } catch {
+    // registering the connection is best-effort; never affect the audit
+  }
+}
+
 async function audit(args: string[]) {
   const threshold = failOnThreshold(args);
   const loaded = loadConfig(option(args, "--config") ?? undefined);
@@ -1060,6 +1166,33 @@ async function audit(args: string[]) {
     critical: plan.findings.filter((f) => f.severity === "critical").length,
     warning: plan.findings.filter((f) => f.severity === "warning").length,
   });
+  // Row-level detail for the hosted dashboard: IDs + issue type only (no field
+  // values). Enrich each finding with its proposed op's field/operation when one
+  // is linked, so the dashboard can show "what" and "where" without "the value".
+  const opByFinding = new Map<string, { field?: string; operation?: string }>();
+  for (const op of plan.operations ?? []) {
+    for (const findingId of op.findingIds ?? []) {
+      if (!opByFinding.has(findingId)) {
+        opByFinding.set(findingId, { field: op.field, operation: op.operation });
+      }
+    }
+  }
+  reportFindings(
+    plan.findings.map((f) => ({
+      objectType: f.objectType,
+      objectId: f.objectId,
+      severity: f.severity,
+      ruleId: f.ruleId,
+      ...opByFinding.get(f.id),
+    })),
+  );
+  // When auditing a live HubSpot, emit the account's record-URL base so the
+  // hosted dashboard can deep-link each finding to the real CRM record. Best
+  // effort and HubSpot-only for now; never blocks or fails the audit.
+  if (option(args, "--provider") === "hubspot") {
+    await reportHubspotDeepLinkBase();
+    await registerHubspotWithBroker();
+  }
   const out = option(args, "--out");
   if (out) {
     writeFileSync(resolve(process.cwd(), out), `${JSON.stringify(plan, null, 2)}\n`);
@@ -2440,9 +2573,15 @@ function formatEnrichCounts(counts: EnrichCounts, ambiguities: number) {
 
 /** Best-effort enrich-config load for apply-time acquire-budget enforcement. */
 /** Provider API key: env override first, then the credential store (`login`). */
-function providerKey(provider: "explorium" | "pipe0" | "heyreach"): string {
+function providerKey(provider: "explorium" | "pipe0" | "heyreach" | "theirstack"): string {
   const envName =
-    provider === "explorium" ? "EXPLORIUM_API_KEY" : provider === "pipe0" ? "PIPE0_API_KEY" : "HEYREACH_API_KEY";
+    provider === "explorium"
+      ? "EXPLORIUM_API_KEY"
+      : provider === "pipe0"
+        ? "PIPE0_API_KEY"
+        : provider === "theirstack"
+          ? "THEIRSTACK_API_KEY"
+          : "HEYREACH_API_KEY";
   if (process.env[envName]) return process.env[envName] as string;
   const stored = getCredential(provider);
   if (stored) return stored.accessToken;
@@ -2545,14 +2684,22 @@ async function signalsCommand(args: string[]) {
   // anywhere in argv (`signals --help` and `signals fetch --help` both land here).
   if (!sub || args.includes("--help") || args.includes("-h")) {
     console.log(`Usage:
-  fullstackgtm signals fetch [--bucket job,funding,...] [--source greenhouse,lever,ashby] [--watchlist <path|crm:segment>] [--keywords "growth,revops"] [--from <file.json>] [--config <path>] [--save]
+  fullstackgtm signals fetch [--bucket job,funding,...] [--source greenhouse,lever,ashby] [--connector file,serpapi-news,hubspot-forms] [--connector-opt k=v ...] [--watchlist <path|crm:segment>] [--keywords "growth,revops"] [--from <file.json>] [--config <path>] [--save]
   fullstackgtm signals list [--since 7d] [--bucket b] [--account d] [--unjudged]
   fullstackgtm signals outcome --account <domain> [--touch <id>] --result replied|meeting|bounced|no_reply
   fullstackgtm signals weights [--explain]
 
 Detect fresh buying triggers and rank them. \`fetch\` is read-only re: CRM — it
 NEVER emits a patch plan; --save persists only the local signal ledger (used by
-\`icp judge\`). ATS adapters are no-auth, so no credential flags exist.`);
+\`icp judge\`). ATS adapters are no-auth. Source connectors (--connector) pull
+from connected platforms: file (local JSON/JSONL spool, no auth), serpapi-news
+(API key via env/login), hubspot-forms (reuses the HubSpot login). Secrets come
+from the credential ladder, never argv; --connector-opt carries non-secret knobs
+(e.g. path=… for file, bucket=company for serpapi-news).
+
+\`--connector file\` with no path reads the conventional webhook landing zone
+(${signalsSpoolDir()}) — every *.jsonl in it. Point a webhook receiver there
+(one row per event); see docs/signal-spool-format.md.`);
     return;
   }
 
@@ -2565,12 +2712,21 @@ NEVER emits a patch plan; --save persists only the local signal ledger (used by
       config.buckets.job = { ...config.buckets.job, keywords: merged };
     }
     const bucketFilter = option(rest, "--bucket");
-    const buckets: SignalBucket[] = bucketFilter
+    // Explicit --bucket narrows EVERYTHING (job scan, --from, connectors). With
+    // no --bucket, the JOB SCAN defaults to buckets that have configured sources
+    // (its legacy behavior), but staged/connector rows are NOT narrowed — they
+    // carry their own bucket and must flow even for buckets with no `sources`
+    // (e.g. `demand`, which `hubspot-forms` and form-spool rows produce).
+    const explicitBuckets: SignalBucket[] | null = bucketFilter
       ? (bucketFilter.split(",").map((b) => b.trim()).filter(Boolean) as SignalBucket[])
-      : SIGNAL_BUCKETS.filter((b) => (config.buckets[b]?.sources.length ?? 0) > 0);
+      : null;
+    const buckets: SignalBucket[] =
+      explicitBuckets ?? SIGNAL_BUCKETS.filter((b) => (config.buckets[b]?.sources.length ?? 0) > 0);
     for (const b of buckets) {
       if (!SIGNAL_BUCKETS.includes(b)) throw new Error(`Unknown bucket: ${b} (one of ${SIGNAL_BUCKETS.join(", ")})`);
     }
+    // Bucket filter for explicitly-provided rows: the --bucket list, else none.
+    const rowBuckets: SignalBucket[] = explicitBuckets ?? [];
     const sourceFilter = option(rest, "--source");
     const allJobSources: AtsBoardSource[] = ["greenhouse", "lever", "ashby"];
     const jobSources = sourceFilter
@@ -2607,11 +2763,39 @@ NEVER emits a patch plan; --save persists only the local signal ledger (used by
       }
     }
 
-    // Staged ingest (funding/company/social): --from <file.json>.
+    // Staged ingest (any bucket): --from <file.json>. Narrowed only by --bucket.
     const fromFile = option(rest, "--from");
     if (fromFile) {
-      const ingested = readStagedSignals(resolve(process.cwd(), fromFile), buckets, now);
+      const ingested = readStagedSignals(resolve(process.cwd(), fromFile), rowBuckets, now);
       candidates.push(...ingested);
+    }
+
+    // Source connectors (opt-in, additive): --connector id[,id] [--connector-opt k=v ...].
+    // Default behavior is unchanged when no --connector is passed.
+    const connectorArg = option(rest, "--connector");
+    if (connectorArg) {
+      const ids = connectorArg.split(",").map((s) => s.trim()).filter(Boolean);
+      const options: Record<string, string> = {};
+      for (const pair of repeatedOption(rest, "--connector-opt")) {
+        const eq = pair.indexOf("=");
+        if (eq === -1) throw new Error(`--connector-opt "${pair}" must be key=value.`);
+        options[pair.slice(0, eq).trim()] = pair.slice(eq + 1);
+      }
+      // The `file` connector defaults to the conventional spool dir (the webhook
+      // landing zone) when no explicit path is given, so `--connector file`
+      // works with zero args against `<profile home>/signals/spool`.
+      if (ids.includes("file") && !options.path && !options.file) {
+        options.path = signalsSpoolDir();
+      }
+      const watchlist = await resolveWatchlist(rest, config);
+      const ctx: SignalSourceContext = {
+        watchlist: watchlist.map((a) => ({ domain: a.domain })),
+        keywords: config.buckets.job.keywords ?? [],
+        now,
+        getApiKey: resolveSignalSourceKey,
+        options,
+      };
+      candidates.push(...(await runSignalConnectors(ids, ctx, rowBuckets)));
     }
 
     const fetched = candidates.length;
@@ -2741,38 +2925,75 @@ function parseSinceWindowMs(value: string): number {
 function readStagedSignals(path: string, buckets: SignalBucket[], now: Date): Signal[] {
   const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
   if (!Array.isArray(raw)) throw new Error(`--from ${path}: expected a JSON array of staged signals.`);
-  const nowIso = now.toISOString();
   const out: Signal[] = [];
   raw.forEach((entry, index) => {
     if (!entry || typeof entry !== "object") throw new Error(`--from ${path}: row ${index} is not an object.`);
     const e = entry as Record<string, unknown>;
+    // Filter a --bucket-excluded row out BEFORE validation so it never errors;
+    // an unknown bucket falls through to stagedRowToSignal, which rejects it.
     const bucket = String(e.bucket ?? "");
-    if (!SIGNAL_BUCKETS.includes(bucket as SignalBucket)) {
-      throw new Error(`--from ${path}: row ${index} has unknown bucket "${bucket}" (one of ${SIGNAL_BUCKETS.join(", ")}).`);
+    if (buckets.length && SIGNAL_BUCKETS.includes(bucket as SignalBucket) && !buckets.includes(bucket as SignalBucket)) {
+      return;
     }
-    if (buckets.length && !buckets.includes(bucket as SignalBucket)) return; // filtered out by --bucket
-    const accountDomain = normalizeAccountDomain(String(e.accountDomain ?? e.domain ?? ""));
-    if (!accountDomain) throw new Error(`--from ${path}: row ${index} is missing accountDomain.`);
-    const trigger = String(e.trigger ?? "").trim();
-    if (!trigger) throw new Error(`--from ${path}: row ${index} is missing trigger.`);
-    const quote = String(e.quote ?? "").trim();
-    if (!quote) throw new Error(`--from ${path}: row ${index} is missing the verbatim quote (the evidence anchor).`);
-    const base = { accountDomain, bucket: bucket as SignalBucket, trigger };
-    const firstSeen = typeof e.firstSeen === "string" && e.firstSeen ? e.firstSeen : nowIso;
-    out.push({
-      id: signalId(base),
-      accountDomain,
-      bucket: bucket as SignalBucket,
-      trigger,
-      quote,
-      sourceUrl: String(e.sourceUrl ?? ""),
-      firstSeen,
-      weight: typeof e.weight === "number" ? e.weight : DEFAULT_SIGNALS_CONFIG.buckets[bucket as SignalBucket].weight,
-      source: "ingest",
-      judgedBy: null,
-    });
+    out.push(stagedRowToSignal(e, { now, source: "ingest", errorLabel: `--from ${path}: row ${index}` }));
   });
   return out;
+}
+
+/**
+ * Run the selected source connectors and return their candidate signals,
+ * funneled through the SAME staged-row gate as `--from` (so evidence-gating,
+ * dedup, and weighting are identical regardless of intake). Connectors are
+ * resilient by contract; a connector that still throws (e.g. a malformed file
+ * it was explicitly pointed at) surfaces with its id for context. `--bucket`
+ * filtering is applied after the row is validated.
+ */
+async function runSignalConnectors(
+  ids: string[],
+  ctx: SignalSourceContext,
+  buckets: SignalBucket[],
+): Promise<Signal[]> {
+  const out: Signal[] = [];
+  for (const id of ids) {
+    const connector = getSignalSource(id);
+    if (!connector) {
+      const known = listSignalSources().map((c) => c.id).join(", ");
+      throw new Error(`Unknown --connector "${id}" (one of: ${known}).`);
+    }
+    let rows;
+    try {
+      rows = await connector.fetch(ctx);
+    } catch (error) {
+      throw new Error(`signals source "${id}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+    rows.forEach((row, index) => {
+      const e = row as unknown as Record<string, unknown>;
+      const bucket = String(e.bucket ?? "");
+      if (buckets.length && SIGNAL_BUCKETS.includes(bucket as SignalBucket) && !buckets.includes(bucket as SignalBucket)) {
+        return;
+      }
+      out.push(stagedRowToSignal(e, { now: ctx.now, source: id, errorLabel: `signals source "${id}": row ${index}` }));
+    });
+  }
+  return out;
+}
+
+/**
+ * Credential-ladder lookup for source connectors. Env wins (CI / agent
+ * sandboxes never touch the filesystem), then the stored login. HubSpot reuses
+ * the existing connection resolver (private-app / OAuth-refresh / broker) so a
+ * forms source needs no separate login. Returns null when nothing is configured
+ * — the connector then treats itself as inactive (returns []), never argv.
+ */
+async function resolveSignalSourceKey(provider: string): Promise<string | null> {
+  const envKey = `FSGTM_${provider.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
+  const fromEnv = process.env[envKey] ?? process.env[`${provider.toUpperCase()}_API_KEY`];
+  if (fromEnv) return fromEnv;
+  if (provider === "hubspot") {
+    const connection = await resolveHubspotConnection();
+    return connection?.accessToken ?? null;
+  }
+  return getCredential(provider)?.accessToken ?? null;
 }
 
 /**
@@ -2855,11 +3076,418 @@ LLM key it emits a clearly-labeled stub rather than fake authored copy.`);
     await createFilePlanStore().save(plan);
     console.error(
       `Saved plan ${plan.id} (status ${plan.status}). Review: \`fullstackgtm plans show ${plan.id}\`, ` +
-        `then \`fullstackgtm plans approve ${plan.id} --operations all\` and \`fullstackgtm apply --plan-id ${plan.id} --provider <name>\`.`,
+        `then \`fullstackgtm plans approve ${plan.id} --operations all\` and either ` +
+        `\`fullstackgtm apply --plan-id ${plan.id} --provider <name>\` (log the touch as a CRM task) or ` +
+        `\`fullstackgtm apply --plan-id ${plan.id} --channel outbox\` (render to the outbox for a sender — transmits nothing).`,
     );
   } else {
     console.error("(not saved — re-run with --save to stage the plan for plans approve -> apply)");
   }
+}
+
+/**
+ * `tam` — Total Addressable Market mapping. Estimate a defensible universe from
+ * the ICP, then iteratively populate it via scheduled governed acquire runs and
+ * track coverage over time. Subcommands: estimate, status, report, populate.
+ */
+async function tamCommand(args: string[]) {
+  const [sub, ...rest] = args;
+  if (!sub || args.includes("--help") || args.includes("-h")) {
+    console.log(`Usage:
+  fullstackgtm tam estimate [--name <n>] [--icp <path>] (--accounts <n> | --source theirstack|explorium)
+                            (--acv <annual-usd> | --acv-from-crm --deal-period monthly|quarterly|annual) [--acv-basis account|buyer]
+                            [--buyers-per-account <n>] [--cross-checks <file.json>] [source options for a baseline] [--json]
+  fullstackgtm tam accounts [--name <n>] [--icp <path>] --source theirstack [--max <n>] [--dry-run | --confirm] [--max-credits <n>] [--usd-per-credit <r>] [--out <file.csv> | --json]
+  fullstackgtm tam status   [--name <n>] <source options> [--save] [--json]
+  fullstackgtm tam report   [--name <n>] [--out <path>]
+  fullstackgtm tam populate [--name <n>] --cron "<expr>" [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--label <l>]
+
+Estimate the reachable market FROM your ICP: a real account count × a confirmed
+ANNUAL ACV (--acv <annual-usd>, or --acv-from-crm --deal-period monthly|quarterly|
+annual to derive+annualize from closed-won — no band defaults, a bare --provider
+does NOT set ACV, refuses without one); buyers/account (explicit or CRM-derived).
+Then populate it with scheduled \`enrich acquire --save\` runs (plan-only — apply
+stays a separate human gate) and watch coverage close. \`status --save\` stamps the
+timeline so \`report\`/ETA can project how long full coverage will take.
+
+--source theirstack counts (and \`tam accounts\` LISTS) companies that actually USE a
+CRM/MAP (set firmographics.technologies, e.g. ["salesforce","hubspot"]) — the real
+RevOps universe, with real names. --source explorium is a firmographic count only
+(NAICS/size/geo, no list). See docs/tam.md.`);
+    return;
+  }
+  const name = option(rest, "--name") ?? "default";
+
+  if (sub === "estimate") {
+    const icp = loadIcp(rest);
+    if (!icp) {
+      throw new Error(
+        "tam estimate derives the universe from your ICP — none found (icp.json in cwd, or --icp <path>). " +
+          "Build one: `fullstackgtm icp interview`, or scaffold a workspace with `fullstackgtm init`.",
+      );
+    }
+    // The account universe: an explicit --accounts assumption, or a live count of
+    // matching COMPANIES. `theirstack` is technographic — it counts companies that
+    // actually USE a CRM/MAP (the real RevOps buying signal) and can return the
+    // list. `explorium` is a firmographic count only (NAICS/size/geo, no list).
+    let accounts = numericOption(rest, "--accounts");
+    let accountsSource = "assumption";
+    let capped = false;
+    const probeSource = option(rest, "--source");
+    if (accounts === undefined && probeSource) {
+      if (probeSource === "theirstack") {
+        const total = await theirStackCountCompanies({
+          apiKey: providerKey("theirstack"),
+          filters: icpToTheirStackFilters(icp),
+        });
+        if (total === null) {
+          throw new Error(
+            "TheirStack returned no total for the ICP — check firmographics.technologies (e.g. [\"salesforce\",\"hubspot\"]) " +
+              "and geos/employeeBands, or pass --accounts <n>.",
+          );
+        }
+        accounts = total;
+        accountsSource = "provider:theirstack (uses-CRM)";
+      } else if (probeSource === "explorium") {
+        const probe = await probeExploriumBusinessCount({
+          apiKey: providerKey("explorium"),
+          filters: icpToExploriumBusinessFilters(icp),
+        });
+        if (probe === null) {
+          throw new Error(
+            "Explorium /v1/businesses returned no total for the ICP firmographic — pass --accounts <n>. See docs/tam.md.",
+          );
+        }
+        accounts = probe.total;
+        capped = probe.capped;
+        accountsSource = capped ? "provider:explorium (≥60k cap — floor)" : "provider:explorium";
+      } else {
+        throw new Error(
+          `tam estimate --source must be theirstack (technographic, uses-CRM + a real list) or explorium ` +
+            `(firmographic count only) — got "${probeSource}". pipe0 is a population source, not a count.`,
+        );
+      }
+    }
+    if (accounts === undefined) {
+      throw new Error(
+        "tam estimate needs the account universe size: --source theirstack (count companies that use a CRM), " +
+          "--source explorium (firmographic count), or --accounts <n>.",
+      );
+    }
+    const basis = (option(rest, "--acv-basis") ?? "account") as AcvBasis;
+    if (basis !== "account" && basis !== "buyer") {
+      throw new Error(`tam: --acv-basis must be account|buyer (got "${basis}")`);
+    }
+    const ccPath = option(rest, "--cross-checks");
+    const crossChecks: TamCrossCheck[] = ccPath
+      ? (JSON.parse(readFileSync(resolve(process.cwd(), ccPath), "utf8")) as TamCrossCheck[])
+      : [];
+    // Load the CRM snapshot ONCE if a source is given — reused for the coverage
+    // baseline AND for deriving real ACV / buyers-per-account from the CRM.
+    const hasSource =
+      Boolean(option(rest, "--provider")) ||
+      Boolean(option(rest, "--input")) ||
+      rest.includes("--demo") ||
+      rest.includes("--sample");
+    const snapshot = hasSource ? await readSnapshot(rest) : undefined;
+    const baseline = snapshot ? coverageCountsFromSnapshot(snapshot) : { accounts: 0, contacts: 0 };
+
+    // ACV must be a REAL, ANNUAL figure that the operator confirms — never a band
+    // default, and never silently lifted from the CRM. `--provider` is the
+    // COVERAGE source, not the ACV: the TAM's economics aren't HubSpot's job.
+    // Two confirmed paths: an explicit annual `--acv`, or an opt-in
+    // `--acv-from-crm` that derives the median closed-won amount AND annualizes it
+    // per a REQUIRED `--deal-period` (a monthly MRR deal × 12 = annual ACV).
+    const acvExplicit = numericOption(rest, "--acv");
+    const acvFromCrm = rest.includes("--acv-from-crm");
+    let acvValue: number;
+    let acvSource: string;
+    if (acvExplicit !== undefined) {
+      acvValue = acvExplicit;
+      acvSource = "explicit (annual)";
+    } else if (acvFromCrm) {
+      if (!snapshot) {
+        throw new Error("--acv-from-crm needs a CRM source — add --provider <crm> or --input <snapshot>.");
+      }
+      const period = option(rest, "--deal-period");
+      const factor = period === "monthly" ? 12 : period === "quarterly" ? 4 : period === "annual" ? 1 : undefined;
+      if (factor === undefined) {
+        throw new Error(
+          "--acv-from-crm requires --deal-period monthly|quarterly|annual — deal amounts can be MRR or annual " +
+            "or one-time, and we won't guess (guessing the period is a 4–12× error). e.g. a $15k/mo deal needs " +
+            "`--deal-period monthly` → $180k annual ACV.",
+        );
+      }
+      const derived = deriveAcvFromClosedWon(snapshot);
+      if (!derived) {
+        throw new Error(
+          "--acv-from-crm found no closed-won deals with amounts in the snapshot — pass --acv <annual-usd> instead.",
+        );
+      }
+      acvValue = derived.valueUsd * factor;
+      acvSource =
+        `crm:closed-won (${derived.dealCount} deal${derived.dealCount === 1 ? "" : "s"}, ` +
+        `median $${derived.valueUsd.toLocaleString()}/${period}${factor > 1 ? ` ×${factor}` : ""} = annual)`;
+    } else {
+      throw new Error(
+        "tam estimate needs a real ANNUAL ACV — and it won't guess one. Pass --acv <annual-usd> (your " +
+          "confirmed annualized ACV), or --acv-from-crm --deal-period monthly|quarterly|annual to derive it " +
+          "from closed-won deals. (--provider is your coverage source, not your ACV — it no longer auto-sets it.)",
+      );
+    }
+
+    // Buyers/account — real signal (avg CRM contacts/account) or an explicit
+    // value; never a silent guess. With neither, a clearly-labeled minimal
+    // assumption of 1 (so the contact target = accounts, not an inflated number).
+    let buyersPerAccount = numericOption(rest, "--buyers-per-account");
+    let buyersSource = "explicit";
+    if (buyersPerAccount === undefined) {
+      const db = snapshot ? deriveBuyersPerAccount(snapshot) : null;
+      if (db) {
+        buyersPerAccount = db.value;
+        buyersSource = `crm:avg-contacts/account (${db.accountsSampled} accounts)`;
+      } else {
+        buyersPerAccount = 1;
+        buyersSource = "assumption:1-buyer (no CRM signal)";
+        console.error(
+          "tam: buyers/account not given and no CRM contacts to derive from — assuming 1 buyer/account. " +
+            "Set --buyers-per-account <n> or pass --provider for a real contacts-per-account average.",
+        );
+      }
+    }
+    const createdAt = option(rest, "--today") ?? new Date().toISOString();
+
+    const model = estimateTam({
+      name,
+      icpName: icp.name,
+      accounts,
+      accountsSource,
+      buyersPerAccount,
+      buyersSource,
+      // Capture the ICP filter so `tam status` can classify CRM accounts as
+      // in/out of THIS TAM (not just count everything).
+      targeting: {
+        geos: icp.firmographics?.geos,
+        employeeBands: icp.firmographics?.employeeBands,
+        industries: icp.firmographics?.industries,
+        technologies: icp.firmographics?.technologies,
+      },
+      acv: { basis, valueUsd: acvValue, source: acvSource },
+      crossChecks,
+      baseline,
+      createdAt,
+    });
+    saveTamModel(model);
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify(model, null, 2));
+      return;
+    }
+    const coverage = computeCoverage(model, baseline, createdAt);
+    console.log(coverageToText(model, coverage, null));
+    if (capped) {
+      console.log(
+        `\n⚠ The account count hit Explorium's 60,000 ceiling — the true universe is LARGER. ` +
+          "Treat this TAM as a floor, or narrow the ICP (tighter industry/geo/size) for an exact count.",
+      );
+    }
+    console.log(
+      `\nSaved TAM "${name}". Next: schedule population with ` +
+        `\`fullstackgtm tam populate --name ${name} --cron "0 7 * * 1-5"\`, ` +
+        `then track with \`fullstackgtm tam status --name ${name} --provider hubspot --save\`.`,
+    );
+    return;
+  }
+
+  if (sub === "status") {
+    const model = loadTamModel(name);
+    if (!model) throw new Error(`No TAM "${name}" — run \`fullstackgtm tam estimate\` first.`);
+    const snapshot = await readSnapshot(rest);
+    const at = option(rest, "--today") ?? new Date().toISOString();
+    // Classify CRM accounts against THIS TAM's ICP — only in-TAM accounts count
+    // toward coverage; off-ICP junk lands in out-of-TAM/unknown. Reconciles
+    // bottom-up vs top-down (the in-TAM count is a floor on the real universe).
+    const coverage = classifyCoverage(model, snapshot, at);
+    const save = rest.includes("--save");
+    if (save) appendCoverage(name, coverage);
+    // Include the current reading in the ETA basis whether or not we persisted it.
+    const timeline = save ? readCoverageTimeline(name) : [...readCoverageTimeline(name), coverage];
+    const eta = projectEta(model, timeline);
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify({ model, coverage, eta, saved: save }, null, 2));
+      return;
+    }
+    console.log(coverageToText(model, coverage, eta));
+    if (!save) console.log(`\n(reading not saved — add --save to stamp the timeline for ETA tracking)`);
+    return;
+  }
+
+  if (sub === "report") {
+    const model = loadTamModel(name);
+    if (!model) throw new Error(`No TAM "${name}" — run \`fullstackgtm tam estimate\` first.`);
+    const timeline = readCoverageTimeline(name);
+    const eta = projectEta(model, timeline);
+    const md = tamReportToMarkdown(model, timeline, eta);
+    const out = option(rest, "--out");
+    if (out) {
+      writeFileSync(resolve(process.cwd(), out), md);
+      console.log(`Wrote ${out}.`);
+    } else {
+      console.log(md);
+    }
+    return;
+  }
+
+  if (sub === "populate") {
+    await tamPopulate(name, rest);
+    return;
+  }
+
+  if (sub === "accounts") {
+    await tamAccounts(rest);
+    return;
+  }
+
+  throw new Error(`Unknown tam subcommand "${sub}". Try: estimate | status | report | populate | accounts`);
+}
+
+/**
+ * `tam accounts` — pull the REAL target-account list from a technographic source
+ * (companies that actually use a CRM, matched to the ICP). This is the
+ * materialized list the count can't give you: real names + domains you can
+ * review, save, and acquire into the CRM. Read-only (no CRM write); each pulled
+ * company costs provider credits, so `--max` caps the page.
+ */
+async function tamAccounts(rest: string[]) {
+  const source = option(rest, "--source") ?? "theirstack";
+  if (source !== "theirstack") {
+    throw new Error(`tam accounts --source supports theirstack (only technographic list source wired) — got "${source}".`);
+  }
+  const icp = loadIcp(rest);
+  if (!icp) {
+    throw new Error("tam accounts needs an ICP (icp.json in cwd, or --icp <path>) — its technologies/firmographics are the filter.");
+  }
+  const max = Math.min(numericOption(rest, "--max") ?? 25, 100);
+
+  // Pulling the list costs TheirStack credits (~3/company) — never spend by
+  // surprise. Show the cost up front; --dry-run prices it without spending; a
+  // pull above --max-credits (default 150 ≈ 50 companies) needs --confirm.
+  const usdPerCredit = numericOption(rest, "--usd-per-credit") ?? undefined;
+  const thisCost = theirStackPullCost(max, usdPerCredit);
+  const usdStr = (c: { usd?: number }): string => (c.usd !== undefined ? ` (~$${c.usd.toLocaleString()})` : "");
+  const model = loadTamModel(option(rest, "--name") ?? "default");
+  const fullUniverse = model?.universe.accounts;
+  const fullCost = fullUniverse ? theirStackPullCost(fullUniverse, usdPerCredit) : undefined;
+  const costLine =
+    `Pull cost: up to ${max} companies ≈ ${thisCost.credits.toLocaleString()} TheirStack credits${usdStr(thisCost)}` +
+    (fullCost
+      ? `. Full TAM (~${fullUniverse!.toLocaleString()} accounts) ≈ ${fullCost.credits.toLocaleString()} credits${usdStr(fullCost)} to materialize.`
+      : ".");
+
+  if (rest.includes("--dry-run")) {
+    console.log(`${costLine}\n(dry run — nothing pulled, 0 credits spent. Add --usd-per-credit <rate> for a $ estimate.)`);
+    return;
+  }
+  const maxCredits = numericOption(rest, "--max-credits") ?? 150;
+  if (thisCost.credits > maxCredits && !rest.includes("--confirm")) {
+    console.error(
+      `${costLine}\nThis pull (${thisCost.credits.toLocaleString()} credits) exceeds the --max-credits guard (${maxCredits}). ` +
+        "Re-run with --confirm to spend it, lower --max, or --dry-run to just price it.",
+    );
+    process.exitCode = 2;
+    return;
+  }
+  console.error(costLine);
+
+  const { companies: raw, total } = await theirStackSearchCompanies({
+    apiKey: providerKey("theirstack"),
+    filters: icpToTheirStackFilters(icp),
+    limit: max,
+  });
+  // A company carries its WHOLE tech stack (often 200+ slugs) — noise. Keep only
+  // the ICP-targeted technologies (the CRMs/MAPs that put it in the list).
+  const targeted = new Set((icp.firmographics.technologies ?? []).map((t) => t.trim().toLowerCase()));
+  const companies = raw.map((c) => ({
+    ...c,
+    technologies: (c.technologies ?? []).filter((t) => targeted.has(t.toLowerCase())),
+  }));
+  const out = option(rest, "--out");
+  if (rest.includes("--json")) {
+    console.log(JSON.stringify({ total, returned: companies.length, companies }, null, 2));
+    return;
+  }
+  if (out) {
+    const header = "name,domain,employee_count,country,linkedin_url,matched_technologies";
+    const esc = (v: string | number | undefined): string => {
+      const s = v === undefined ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = companies.map((c) =>
+      [c.name, c.domain, c.employeeCount, c.countryCode, c.linkedinUrl, (c.technologies ?? []).join("|")]
+        .map(esc)
+        .join(","),
+    );
+    writeFileSync(resolve(process.cwd(), out), `${[header, ...rows].join("\n")}\n`);
+    console.log(`Wrote ${companies.length} companies to ${out}${total !== null ? ` (of ${total.toLocaleString()} matching)` : ""}.`);
+    return;
+  }
+  console.log(
+    `${companies.length} companies${total !== null ? ` of ${total.toLocaleString()} matching the ICP` : ""} ` +
+      `(uses ${[...targeted].join("/")}):\n`,
+  );
+  for (const c of companies) {
+    console.log(
+      `  ${(c.name ?? "?").padEnd(32)} ${(c.domain ?? "").padEnd(28)} ${String(c.employeeCount ?? "?").padStart(6)} emp  ` +
+        `[${(c.technologies ?? []).join(",")}]`,
+    );
+  }
+  console.log(
+    `\nNext: stage them with \`fullstackgtm enrich ingest <file.csv> --source clay --objects companies\` ` +
+      "→ `enrich acquire` to create governed account records (or re-run with --out <file.csv>).",
+  );
+}
+
+/**
+ * `tam populate` — wire the scheduled population of a TAM: a recurring
+ * `enrich acquire --source <s> --save` that queues a needs_approval lead plan
+ * each firing (apply stays a separate human gate; the meter is charged only at
+ * apply). Delegates to the scheduler so the cron + allowlist (incl. the --save
+ * guard) are validated the same way as any `schedule add`.
+ */
+async function tamPopulate(name: string, rest: string[]) {
+  const model = loadTamModel(name);
+  if (!model) throw new Error(`No TAM "${name}" — run \`fullstackgtm tam estimate\` first.`);
+  const cron = option(rest, "--cron");
+  if (!cron) {
+    throw new Error('tam populate requires --cron "<expr>" (e.g. "0 7 * * 1-5" = 7am on weekdays)');
+  }
+  const source = option(rest, "--source") ?? "pipe0";
+  const provider = option(rest, "--provider") ?? "hubspot";
+  const label = option(rest, "--label") ?? `tam-${name}`;
+
+  const acquireCmd = `enrich acquire --source ${source} --provider ${provider} --save`;
+  // Reuse the scheduler: validates the cron, the allowlist, and the --save guard.
+  await scheduleCommand(["add", acquireCmd, "--cron", cron, "--label", label]);
+
+  const remainingAccounts = Math.max(0, model.universe.accounts - model.baseline.accounts);
+  console.log(
+    `\nPopulating TAM "${name}": each firing queues a needs_approval lead plan — apply stays gated, the ` +
+      `acquire meter is charged only at apply. ~${remainingAccounts.toLocaleString()} of ` +
+      `${model.universe.accounts.toLocaleString()} accounts remain to reach the universe ` +
+      `($${model.tamUsd.toLocaleString()} TAM).`,
+  );
+  console.log(
+    "Next: `fullstackgtm schedule install` to activate, then each cycle " +
+      "`fullstackgtm plans list` → `plans approve` → `apply`. Track progress with " +
+      `\`fullstackgtm tam status --name ${name} --provider ${provider} --save\`.`,
+  );
+  // Cost lives in two separate places — be explicit so neither surprises.
+  const ts = theirStackPullCost(model.universe.accounts);
+  console.log(
+    `\nCost: population spend is the acquire provider's (${source}), governed by the per-profile acquire meter ` +
+      "(records + $/day caps in enrich.config.json) — not TheirStack. Separately, materializing the account LIST " +
+      `from TheirStack (\`tam accounts\`) is ~${ts.credits.toLocaleString()} credits for the full ${model.universe.accounts.toLocaleString()}-account ` +
+      "universe; `tam accounts --dry-run [--usd-per-credit <r>]` prices any pull without spending.",
+  );
 }
 
 /**
@@ -3124,11 +3752,15 @@ ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.
     }
 
     // The golden-set gate (default). Resolve "default" BEFORE any file read.
+    // The default set is graded on its own pinned clock (its firstSeen stamps
+    // are relative to DEFAULT_GOLDEN_NOW_ISO) — wall time would let freshness
+    // decay flip the "fresh → send" rows as the calendar advances.
     const rows =
       goldenArg === "default"
         ? DEFAULT_GOLDEN_SET
         : parseGoldenSet(readFileSync(resolve(process.cwd(), goldenArg), "utf8"));
-    const result = await gradeJudge(rows, defaultJudgeFn({ icp: loadIcp(rest), now: new Date() }));
+    const gradeNow = goldenArg === "default" ? new Date(DEFAULT_GOLDEN_NOW_ISO) : new Date();
+    const result = await gradeJudge(rows, defaultJudgeFn({ icp: loadIcp(rest), now: gradeNow }));
     if (asJson) {
       console.log(JSON.stringify(result, null, 2));
     } else {
@@ -3203,6 +3835,19 @@ async function acquireFromApi(
     throw new Error(`enrich acquire: unknown discovery provider "${disc.provider}" (explorium | pipe0 | linkedin).`);
   }
 
+  // Surface a zero-discovery result LOUDLY rather than emit a silent empty plan.
+  // A provider that returns 0 with no error usually means an over-narrow ICP
+  // filter (most often the industry/seniority vocab) — not "no market exists".
+  const discoveredCount = prospects.length;
+  if (discoveredCount === 0) {
+    console.error(
+      `enrich acquire: ${disc.provider} discovered 0 prospects for this ICP — the plan will be empty. ` +
+        "This is usually an over-narrow filter, not an empty market: check the ICP's industry and seniority " +
+        "(provider vocab is finicky), widen one constraint, or run `fullstackgtm icp show` to inspect the " +
+        "generated discovery filters. (Distinct from dedup: nothing was returned to filter.)",
+    );
+  }
+
   // 2. ICP fit scoring BEFORE paying for emails — only above-threshold prospects
   //    proceed to (credit-spending) email resolution.
   if (icp) {
@@ -3210,6 +3855,12 @@ async function acquireFromApi(
     prospects = prospects
       .map((p) => ({ ...p, fitScore: scoreProspectAgainstIcp(p, icp).score }))
       .filter((p) => (p.fitScore ?? 0) >= threshold);
+    if (discoveredCount > 0 && prospects.length === 0) {
+      console.error(
+        `enrich acquire: all ${discoveredCount} discovered prospect(s) scored below the ICP fit threshold ` +
+          `(${fitThreshold(icp)}) — none qualified. Loosen the ICP persona or lower scoring.threshold.`,
+      );
+    }
   }
 
   // 2.5 Pre-email dedup — drop prospects already in the CRM (name+domain match
@@ -4341,7 +4992,13 @@ and (if the signing key is present) the signature.`);
 
 async function apply(args: string[]) {
   const provider = option(args, "--provider");
-  if (!provider) throw new Error("apply requires --provider <name>");
+  const channel = option(args, "--channel");
+  if (!provider && !channel) {
+    throw new Error("apply requires --provider <name> (CRM) or --channel <id> (e.g. outbox)");
+  }
+  if (provider && channel) {
+    throw new Error("apply takes --provider OR --channel, not both — a plan applies to one target.");
+  }
 
   const planId = option(args, "--plan-id");
   const planPath = option(args, "--plan");
@@ -4443,7 +5100,9 @@ async function apply(args: string[]) {
     }
   }
 
-  const connector = await connectorFor(provider, args);
+  // A channel (e.g. outbox) renders approved ops to a local artifact and
+  // transmits nothing; a CRM provider writes records. Same governed apply path.
+  const connector = channel ? createChannelConnector(channel) : await connectorFor(provider!, args);
   const run = await applyPatchPlan(connector, plan, {
     approvedOperationIds,
     valueOverrides,
@@ -4965,17 +5624,17 @@ async function login(args: string[]) {
     console.log(`Stored Apollo API key in ${credentialsPath()}. \`fullstackgtm enrich append|refresh\` use it automatically.`);
     return;
   }
-  if (provider === "pipe0" || provider === "explorium" || provider === "heyreach") {
+  if (provider === "pipe0" || provider === "explorium" || provider === "heyreach" || provider === "theirstack") {
     rejectArgvSecret(args, "--token", "--key", "--api-key");
     const key = await readSecret(`${provider} API key`);
     if (!key) throw new Error(`No ${provider} key provided.`);
     // No free auth-health endpoint; validating would spend credits, so the key
-    // is stored as-is and validated on the first `enrich acquire` pull.
+    // is stored as-is and validated on the first pull.
     const stamp = new Date().toISOString();
     storeCredential(provider, { kind: "api_key", accessToken: key, createdAt: stamp, updatedAt: stamp });
-    console.log(
-      `Stored ${provider} API key in ${credentialsPath()}. \`fullstackgtm enrich acquire\` uses it automatically (validated on first pull).`,
-    );
+    const usedBy =
+      provider === "theirstack" ? "`fullstackgtm tam estimate --source theirstack`" : "`fullstackgtm enrich acquire`";
+    console.log(`Stored ${provider} API key in ${credentialsPath()}. ${usedBy} uses it automatically (validated on first pull).`);
     return;
   }
   if (provider !== "hubspot") {
@@ -5295,6 +5954,10 @@ export async function runCli(argv: string[]) {
   }
   if (command === "init") {
     initCommand(args);
+    return;
+  }
+  if (command === "tam") {
+    await tamCommand(args);
     return;
   }
   if (command === "icp") {

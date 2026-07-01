@@ -14,6 +14,7 @@ export { activeProfile, credentialsDir, credentialsPath, DEFAULT_PROFILE, delete
 export { generateDemoSnapshot } from "./demo.js";
 export { buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, enrichRunId, inferIngestObjectType, ingestKeyValue, latestStamps, loadEnrichConfig, matchSourceRecord, parseCsv, parseEnrichConfig, resolveCrmField, selectStaleWork, sourceValueAt, stagedSourceRecords, staleDaysFor, } from "./enrich.js";
 export { scaffoldWorkspace, starterEnrichConfig, starterIcp, starterPlaybook, } from "./init.js";
+export { appendCoverage, classifyAccount, classifyCoverage, computeCoverage, coverageCountsFromSnapshot, coveredAccounts, coverageToText, crmCheckableCriteria, deriveAcvFromClosedWon, deriveBuyersPerAccount, estimateTam, loadTamModel, projectEta, readCoverageTimeline, saveTamModel, tamDir, tamReportToMarkdown, } from "./tam.js";
 export { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, } from "./enrichApollo.js";
 export { diffFindings, diffSnapshots, diffToMarkdown, } from "./diff.js";
 export { mergeSnapshots, } from "./merge.js";

@@ -29,7 +29,13 @@ const SCHEDULABLE = {
     suggest: null,
     report: null,
     doctor: null,
-    enrich: ["append", "refresh"],
+    // `enrich append|refresh` fill blanks; `enrich acquire` creates net-new
+    // leads — but ONLY as a needs_approval `create_record` plan (`--save`,
+    // required below), never a write. This is what lets `tam populate` chip away
+    // at a TAM unattended: each firing queues a fresh lead plan, the meter is
+    // charged only at apply, and apply stays `apply --plan-id` (re-checked
+    // approved). So scheduled acquire accumulates proposals, never surprise leads.
+    enrich: ["append", "refresh", "acquire"],
     market: ["capture", "refresh"],
     // The GTM brain. `signals fetch` is read-only re: CRM (--save persists only
     // the local signal ledger). `icp judge`/`icp eval` are read-only/grade-only
@@ -41,9 +47,9 @@ const SCHEDULABLE = {
     icp: ["judge", "eval"],
     draft: null,
 };
-const ALLOWLIST_SUMMARY = "audit, snapshot, enrich append|refresh, market capture|refresh, signals fetch, " +
-    "icp judge|eval, draft (stages a plan), suggest, report, doctor — " +
-    "plus apply --plan-id <id> (re-checked approved at every firing)";
+const ALLOWLIST_SUMMARY = "audit, snapshot, enrich append|refresh, enrich acquire --save (stages a lead plan), " +
+    "market capture|refresh, signals fetch, icp judge|eval, draft (stages a plan), " +
+    "suggest, report, doctor — plus apply --plan-id <id> (re-checked approved at every firing)";
 /**
  * Validate that an argv resolves to a schedulable fullstackgtm command.
  * Enforced at `schedule add` time AND re-checked at `schedule run` time (the
@@ -88,6 +94,14 @@ export function validateSchedulableArgv(argv) {
             throw new Error(`"${head}${sub ? ` ${sub}` : ""}" is not schedulable — only: ${subcommands
                 .map((name) => `${head} ${name}`)
                 .join(", ")}.`);
+        }
+        // `enrich acquire` is schedulable ONLY in its plan-producing form: without
+        // --save it's a dry-run that writes nothing AND queues nothing, so an
+        // unattended firing would silently no-op. Require --save so a scheduled
+        // acquire always leaves a needs_approval plan behind (apply stays gated).
+        if (head === "enrich" && sub === "acquire" && !argv.includes("--save")) {
+            throw new Error("Scheduled `enrich acquire` must include --save so each firing queues a needs_approval lead plan " +
+                "(without it the run produces nothing). Apply stays a separate human gate (`apply --plan-id <id>`).");
         }
     }
 }

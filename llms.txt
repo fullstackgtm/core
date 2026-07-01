@@ -20,6 +20,7 @@ at/above `--fail-on`.
 - [Contributing](https://github.com/fullstackgtm/core/blob/main/CONTRIBUTING.md): dev setup, the open-core mirror model, the release ritual
 - [API reference](https://github.com/fullstackgtm/core/blob/main/docs/api.md): semver-covered surfaces — canonical model, rule interface, plan/apply contract, connector contract, config, CLI, MCP tools
 - [CRM-health lifecycle](https://github.com/fullstackgtm/core/blob/main/docs/crm-health-lifecycle.md): the Prevent → Detect → Remediate → Verify/Attribute model; no-new-dupes design
+- [TAM mapping](https://github.com/fullstackgtm/core/blob/main/docs/tam.md): size the reachable market from the ICP, then populate it with scheduled governed acquire and track coverage to an ETA
 - [CHANGELOG](https://github.com/fullstackgtm/core/blob/main/CHANGELOG.md): release history
 
 `fullstackgtm resolve <type>` is the create gate: exit 0 = safe to create,
@@ -57,6 +58,60 @@ each) → revenue-space estimates calibrated within-set by acvBand, disclosed
 uncertainty; report bubbles ∝ estimated share only when signals exist.
 Storage is profile-scoped under `<home>/market/<category>`. MCP:
 `fullstackgtm_market_worksheet`, `fullstackgtm_market_observe`.
+
+## Key invariants (TAM mapping)
+
+`fullstackgtm tam` sizes the reachable market FROM the ICP and then iteratively
+fills it — not a one-shot headline. `tam estimate` computes a transparent model:
+account universe × ACV = TAM (account/per-logo basis by default; `--acv-basis
+buyer` for per-seat = contacts × ACV), where contacts = accounts ×
+buyers/account is the population target. The account count is `--accounts <n>`
+(assumption), OR `--source theirstack` — the TECHNOGRAPHIC universe: counts
+companies that USE a CRM/MAP (`firmographics.technologies` → TheirStack
+`company_technology_slug_or`) + geo + employee bounds; the real RevOps buying signal
+AND the only source that returns a LIST (`tam accounts --source theirstack` pulls
+real companies name/domain, `--out csv`/`--json`, `--max` caps credit spend; a
+count is cheap but NOT free — limit:0 is rejected so a count returns 1 row ≈ 3
+credits, a list pull ≈ 3/company; `login theirstack`). OR `--source explorium` — a firmographic
+count via `/v1/businesses` (`total_results`), a count ONLY (Explorium 403s on
+list-pull, can't target by CRM-usage; must OMIT `size` or it caps the total; capped
+at 60,000 `EXPLORIUM_BUSINESS_COUNT_CAP` → `provider:explorium (≥60k cap — floor)` +
+⚠). Verified live: people endpoints can't size a market (Explorium `/v1/prospects`
+total == page size; pipe0/Crustdata returns only a cursor — `--source pipe0` for
+estimate is REJECTED, it's a population source). The model always LABELS
+`accountsSource` (provider:theirstack/explorium vs assumption). ACV must be a
+real ANNUAL figure the operator CONFIRMS — `--acv <annual-usd>`, OR `--acv-from-crm
+--deal-period monthly|quarterly|annual` which takes the median closed-won amount and
+ANNUALIZES it (the period is required — a deal can be MRR/quarterly/annual and
+guessing is a 4–12× error; $15k/mo → $180k). NO band defaults, and a bare
+`--provider` does NOT auto-set ACV (HubSpot is the COVERAGE source, not the ACV) —
+`estimate` REFUSES without a confirmed ACV. Buyers/account is `--buyers-per-account`
+OR the CRM's avg-contacts-per-account OR a labeled `assumption:1-buyer`. Both
+`acv.source` and `universe.buyersSource` are labeled (incl. deal count + the
+period×factor, so a thin signal like "1 deal" is visible). Optional
+citable cross-checks (`{claim,valueUsd?,sourceUrl,quote}`) sit beside the
+bottom-up number as a top-down sanity check. `estimate`
+records a coverage BASELINE (CRM counts now) so `status` attributes what the
+campaign added. `tam populate --cron` schedules `enrich acquire --source <s>
+--save` — the ONE create-side verb the schedule allowlist permits, and only in
+its plan-producing `--save` form: each firing queues a needs_approval lead plan,
+the acquire meter is charged only at apply, and apply stays `apply --plan-id`
+(re-checked approved). `tam status` measures coverage on the INTERSECTION of CRM ×
+TAM-ICP, not a raw count: `tam estimate` stores the ICP filter (`model.targeting`),
+and status CLASSIFIES each domain-bearing account into in-TAM / out-of-TAM / unknown
+(checked on size+industry — geo + "uses-CRM" aren't on a CanonicalAccount, so a
+`--reverify` re-enrich is future; the classifier labels what it checked). ONLY
+in-TAM counts toward coverage, so off-ICP accounts loaded from elsewhere can't
+inflate it. Bottom-up vs top-down reconciliation: the in-TAM count is a FLOOR on the
+real universe (those are verified members), so when in-TAM ≥ the estimate, status
+stops reporting a fake 100% and flips to "estimate was a floor — real market is at
+least N (`reconciledUniverse = max(estimate, inTam)`); re-estimate for the headroom".
+`--save` stamps an append-only timeline. `tam report` (markdown) and `status` project
+an ETA on the IN-TAM accounts/day burn across the timeline → days-remaining → fill
+date — and REFUSE to project (honest "not enough history") below two readings, a flat
+rate, or zero elapsed time.
+Coverage + ETA are deterministic (no LLM, byte-stable). Storage profile-scoped
+under `<home>/tam/<name>/` (`model.json` + `coverage.jsonl`, 0600).
 
 ## Key invariants (governed write verbs)
 
@@ -123,8 +178,12 @@ and no webhook ingestion (Phase 2). Never auto-writes.
 The timing/outbound layer turns "who changed" into one grounded, governed
 opener — and **never sends**. `signals fetch` captures fresh buying triggers
 into a profile-scoped ledger (free Greenhouse/Lever/Ashby ATS scrapers in the
-box; funding/social via `ingest`/`--from`), keyed by **account domain**, ranked
-by learned `weights`; it writes NOTHING to the CRM. `icp interview|set|show`
+box; funding/social via `--from`; connected platforms via `--connector`
+file/serpapi-news/hubspot-forms with secrets through the credential ladder; and
+push platforms via the webhook spool — `--connector file` reads the conventional
+landing zone `<home>/signals/spool/*.jsonl`, see docs/signal-spool-format.md),
+keyed by **account domain**, ranked by learned `weights`; it writes NOTHING to
+the CRM. `icp interview|set|show`
 builds `icp.json`; `icp judge` ranks fresh signals into send/nurture/skip — pass
 a snapshot (`--provider`/`--input`/`--demo`) and each decision resolves its CRM
 target: `accountId`, the best `contact {id,email,title}`, and `contacts[]` (all
@@ -135,8 +194,11 @@ bar). `draft` emits ONE trigger-grounded opener per hot account as a governed
 `create_task` targeting the resolved `contact.id` (or `accountId`) — a
 domain-only decision (account not yet in the CRM) is REJECTED with "acquire it
 first" (run `enrich acquire`, re-judge with the snapshot). `--channel
-email|linkedin|task` shapes the opener; it is a task the operator sends from
-their own tool, never an automated send. `signals outcome --account <domain>
+email|linkedin|task` shapes the opener. After `plans approve`, applying the draft
+plan logs the touch as a CRM task (`apply --provider <crm>`) OR renders it to the
+governed outbox (`apply --channel outbox` → `<home>/signals/outbox/<channel>.jsonl`
+for a downstream sender to drain). Either way the CLI **transmits nothing** — the
+outbox is the send-side mirror of the spool; the always-on sender is hosted/opt-in. `signals outcome --account <domain>
 --contact <id> --result replied|...` credits the contact reached so weights
 re-learn. The contact↔account join (`contact.accountId` + `account.domain`) is
 surfaced at every hop, so the loop is contact-coherent end to end — see the
@@ -147,7 +209,8 @@ surfaced at every hop, so the loop is contact-coherent end to end — see the
 `fullstackgtm schedule` is the horizontal scheduler — no feature namespace
 owns cron logic. `add "<command>" --cron "<expr>"` validates the command
 against the read/plan-side allowlist (audit, snapshot, enrich append|refresh,
-market capture|refresh, suggest, report, doctor) and the 5-field cron
+enrich acquire --save, market capture|refresh, signals fetch, icp judge|eval,
+draft, suggest, report, doctor) and the 5-field cron
 expression, but touches no crontab; `install` materializes enabled entries
 into a sentinel-delimited managed block (`# >>> fullstackgtm <profile> >>>`)
 replaced wholesale on re-install, lines outside it untouched; `uninstall`

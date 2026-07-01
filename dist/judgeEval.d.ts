@@ -111,6 +111,13 @@ export declare function defaultJudgeFn(opts?: {
     now?: Date;
 }): EvalJudgeFn;
 /**
+ * The default golden set's clock. Every `firstSeen` below is relative to this
+ * instant, so grading MUST pin `now: new Date(DEFAULT_GOLDEN_NOW_ISO)` —
+ * grading against wall time lets freshness decay rot the "fresh → send" rows,
+ * and the gate starts failing on a calendar date instead of a code change.
+ */
+export declare const DEFAULT_GOLDEN_NOW_ISO = "2026-06-23T12:00:00.000Z";
+/**
  * A starter labeled set covering the four rubric corners, so `icp eval --golden
  * default` runs offline and the deterministic baseline passes it (>= the default
  * min-accuracy). Each row is a single account.

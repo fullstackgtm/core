@@ -48,12 +48,20 @@ test("icpToCrustdataFilters Title-Cases titles, maps geo, seniority + industry v
   assert.deepEqual(f.locations, ["United States"]);
   // jobLevels ["vp","director","manager","cxo"] → Crustdata vocab
   assert.deepEqual(f.current_seniority_levels.include, ["Vice President", "Director", "Manager", "CXO"]);
-  // industries ["software","saas"] → LinkedIn industry cluster (deduped)
+  // industries ["software","saas"] → LinkedIn industry cluster (deduped), sending
+  // BOTH taxonomy generations so a v1-vs-v2 vendor mismatch can't zero the match.
   assert.deepEqual(f.current_employers_linkedin_industries, [
     "Software Development",
+    "Computer Software",
+    "IT Services and IT Consulting",
+    "Information Technology & Services",
     "Information Technology and Services",
+    "Technology, Information and Internet",
     "Internet",
   ]);
+  // The fix's intent: a v2 name AND its v1 equivalent both present.
+  assert.ok(f.current_employers_linkedin_industries.includes("Software Development"), "v2 name");
+  assert.ok(f.current_employers_linkedin_industries.includes("Computer Software"), "v1 name");
 });
 
 test("scoreProspectAgainstIcp: title match clears threshold; off-persona does not", () => {

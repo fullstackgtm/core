@@ -23,6 +23,10 @@ export type Icp = {
         employeeBands?: string[];
         /** ISO country codes, lowercased, e.g. ["us"] */
         geos?: string[];
+        /** technographic targeting: technology slugs the account must use, e.g.
+         *  ["salesforce","hubspot","pipedrive"] — the real CRM/MAP buying signal,
+         *  consumed by TheirStack company search. OR-matched. */
+        technologies?: string[];
     };
     persona: {
         /** seniority: "cxo","vp","director","manager","owner","senior" */
@@ -48,12 +52,52 @@ export declare function icpToExploriumFilters(icp: Icp): Record<string, {
     value?: boolean;
 }>;
 /**
+ * Explorium /v1/businesses filters from the ICP — the COMPANY (account) side, for
+ * sizing the account universe (TAM). Firmographics only, no persona: the count is
+ * of matching companies. Field names differ from /v1/prospects (verified live):
+ * `country_code` (not company_country_code), `company_size` (same employee bands),
+ * `naics_category`. `/v1/businesses` total_results is a real count, capped at
+ * 60,000 (see EXPLORIUM_BUSINESS_COUNT_CAP in the connector).
+ */
+export declare function icpToExploriumBusinessFilters(icp: Icp): Record<string, {
+    values?: string[];
+}>;
+/**
+ * Collapse provider-agnostic employee bands ("51-200","10001+") into a single
+ * {min,max} envelope for APIs that take integer bounds (TheirStack). An open
+ * top band ("10001+") leaves max undefined.
+ */
+export declare function employeeBandsToRange(bands: string[] | undefined): {
+    min?: number;
+    max?: number;
+};
+/**
+ * TheirStack company-search filter from the ICP: the technographic targeting that
+ * Explorium can't do. `company_technology_slug_or` is the CRM/MAP buying signal
+ * (firmographics.technologies); employee bands become min/max bounds; geos become
+ * ISO2 codes (uppercased).
+ */
+export declare function icpToTheirStackFilters(icp: Icp): {
+    company_technology_slug_or?: string[];
+    min_employee_count?: number;
+    max_employee_count?: number;
+    company_country_code_or?: string[];
+};
+/**
  * pipe0 Crustdata people-search config.filters from the ICP. `current_job_titles`
  * matches real LinkedIn title strings (case-sensitive), so keywords are Title
  * Cased. Seniority + industry are mapped to Crustdata's controlled vocab via the
- * tables above. NOTE: the exact pipe0→Crustdata value set could not be re-run
- * live (pipe0 credits were exhausted) — validate when credits refill; fit
- * scoring is the safety net for persona precision regardless.
+ * tables above.
+ *
+ * LIVE FINDINGS (2026-06-26): `current_job_titles` is confirmed working (a
+ * titles-only RevOps search returns results); `current_title` is rejected (422).
+ * The full ICP filter returned 0 — the prime suspect is the industry vocab
+ * (LinkedIn v1/v2 taxonomy mismatch), now hedged by sending BOTH generations in
+ * CRUSTDATA_INDUSTRY above. NOT yet re-confirmed end-to-end (pipe0 credits were
+ * exhausted mid-investigation) — re-run `enrich acquire --source pipe0` once
+ * credits refill; if it still returns 0, the next suspects are the
+ * `current_seniority_levels` shape/values and `locations`. Note fit-scoring backs
+ * up PERSONA precision but NOT industry, so the industry filter is load-bearing.
  */
 export declare function icpToCrustdataFilters(icp: Icp): Record<string, unknown>;
 export type IcpFit = {

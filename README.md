@@ -211,8 +211,11 @@ LinkedIn is just another discovery source on the same scored → deduped → met
 Cleaning and filling the CRM tells you *who* to reach; it never tells you *when*. The **signal → judge → draft** loop adds timing — and, like everything else, it stays on the dry-run → approve → apply spine and sends nothing.
 
 ```bash
-# 1. Watch for movement. Free, no-auth public job boards in the box; funding/company/social via staged ingest.
+# 1. Watch for movement. Free, no-auth public job boards in the box; pull from
+#    connected platforms via source connectors; webhook platforms via the spool.
 fullstackgtm signals fetch --bucket job --source greenhouse,lever,ashby --keywords "revops,growth" --save
+fullstackgtm signals fetch --connector serpapi-news,hubspot-forms --save   # news + first-party form demand
+fullstackgtm signals fetch --connector file --save                         # webhook landing zone (see docs/signal-spool-format.md)
 fullstackgtm signals list --since 7d                         # ranked triggers, each with a verbatim source quote
 
 # 2. Decide who's worth a touch — and who isn't. Scores timing × fit × memory into send/nurture/skip.
@@ -220,8 +223,10 @@ fullstackgtm icp judge --signals-from latest --with-history --save
 fullstackgtm icp eval --golden default                       # gate: prove the judge is calibrated before any send (exits 2 if not)
 
 # 3. Draft the opener from the trigger. A create_task plan — proposed, never transmitted.
-fullstackgtm draft --from-judge latest --min-score 80 --save
-fullstackgtm plans approve <id> --operations all && fullstackgtm apply --plan-id <id> --provider hubspot
+fullstackgtm draft --from-judge latest --min-score 80 --channel email --save
+fullstackgtm plans approve <id> --operations all
+fullstackgtm apply --plan-id <id> --provider hubspot          # log the touch as a CRM task
+fullstackgtm apply --plan-id <id> --channel outbox            # OR render to the outbox for a sender — transmits nothing (docs/outbox-format.md)
 
 # 4. Close the loop. Outcomes re-weight which signals earn a touch.
 fullstackgtm signals outcome --account acme.com --result replied
@@ -289,7 +294,7 @@ fullstackgtm diff --before old.json --after new.json --fail-on-new-findings
 - `--demo` (with `--seed`) generates a realistic mid-market CRM with injected real-world failure modes — departed owners, unlinked deals, orphan accounts, stale pipeline — so agents and CI can exercise the full snapshot → audit → apply pipeline with zero credentials.
 - Exit codes: `0` success, `1` error, `2` findings at/above `--fail-on`.
 
-"Built for agents" is measured, not asserted: a 1,088-run benchmark (17 scenarios = 14 synthetic + 3 seeded from an anonymized real portal, × 3 tool-surface arms × 4 trials, across six models from three vendors, deterministic graders over final CRM state, τ-bench-style pass^k) shows the gated CLI surface beating raw CRM-API access on completion-under-policy for every model tested — and the tool-surface effect is monotonic and vendor-independent. Full matrix and methodology: [the leaderboard](./evals/crm/leaderboard/RESULTS.md).
+"Built for agents" is measured, not asserted: a 1,892-run benchmark (20 scenarios = 17 synthetic + 3 seeded from an anonymized real portal, × 3 tool-surface arms × up to 4 trials, across nine models from six vendors, deterministic graders over final CRM state, τ-bench-style pass^k) shows the gated CLI surface beating raw CRM-API access on completion-under-policy for every model tested — and the tool-surface effect is monotonic and vendor-independent. Full matrix and methodology: [the leaderboard](./evals/crm/leaderboard/RESULTS.md).
 
 The design is **deterministic apply, governed suggest**: the parts that touch your CRM — the audit rules, the plan/apply contract, compare-and-set, the survivor/merge logic — are deterministic and replayable; the parts that read free text (`call parse`/`score`, `market classify`) are LLM-powered but bounded, with every quoted span mechanically verified against the source before it can drive a writeback. Nondeterministic suggestion, deterministic governance.
 

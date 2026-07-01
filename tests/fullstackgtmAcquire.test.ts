@@ -433,3 +433,41 @@ test("acquire creates ACCOUNTS too: a company source row becomes an account crea
   assert.equal(payload.properties.domain, "acme.io");
   assert.equal(payload.properties.name, "Acme");
 });
+
+test("enrich acquire surfaces a zero-discovery result instead of a silent empty plan", async () => {
+  const { runCli } = await import("../src/cli.ts");
+  const { writeFileSync } = await import("node:fs");
+  const home = mkdtempSync(join(tmpdir(), "fsgtm-acq0-"));
+  const icpPath = join(home, "icp.json");
+  // firmographics present so icpToCrustdataFilters doesn't trip on undefined.
+  writeFileSync(icpPath, JSON.stringify({ name: "ICP", firmographics: { geos: ["us"], industries: ["software"] }, persona: { titleKeywords: ["revops"], jobLevels: ["director"] } }));
+  const prevHome = process.env.FSGTM_HOME;
+  const prevKey = process.env.PIPE0_API_KEY;
+  const origFetch = globalThis.fetch;
+  const origErr = console.error;
+  const origLog = console.log;
+  const errs: string[] = [];
+  process.env.FSGTM_HOME = home;
+  process.env.PIPE0_API_KEY = "test-key";
+  // pipe0 returns a clean, empty result (an over-narrow filter, not an error).
+  globalThis.fetch = (async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ results: [], status: "completed", search_statuses: [{ errors: [] }] }),
+  })) as unknown as typeof fetch;
+  console.error = (m: unknown) => errs.push(String(m));
+  console.log = () => {};
+  try {
+    await runCli(["enrich", "acquire", "--source", "pipe0", "--icp", icpPath, "--demo", "--seed", "7", "--today", "2026-06-01"]);
+    assert.match(errs.join("\n"), /discovered 0 prospects/, "the empty discovery is surfaced loudly");
+  } finally {
+    console.error = origErr;
+    console.log = origLog;
+    globalThis.fetch = origFetch;
+    if (prevHome === undefined) delete process.env.FSGTM_HOME;
+    else process.env.FSGTM_HOME = prevHome;
+    if (prevKey === undefined) delete process.env.PIPE0_API_KEY;
+    else process.env.PIPE0_API_KEY = prevKey;
+    rmSync(home, { recursive: true, force: true });
+  }
+});

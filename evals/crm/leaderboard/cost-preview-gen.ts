@@ -7,7 +7,7 @@
  *   node --experimental-strip-types leaderboard/cost-preview-gen.ts
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { aggregateCells, cellCost, paretoFrontier, type CellMetrics } from "../src/metrics.ts";
+import { aggregateCells, cellCost, paretoFrontier, PRICING, type CellMetrics } from "../src/metrics.ts";
 
 const rows = readFileSync("leaderboard/runs.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 // Raw + Gated only — drop the Informed (raw+fsgtm) arm.
@@ -22,6 +22,8 @@ const SHORT: Record<string, string> = {
   "openai/gpt-5.4-mini": "GPT-5.4-mini",
   "openrouter/moonshotai/kimi-k2.6": "Kimi K2.6",
   "openrouter/z-ai/glm-5.2": "GLM 5.2",
+  "openrouter/deepseek/deepseek-v4-pro": "DeepSeek V4 Pro",
+  "openrouter/qwen/qwen3.5-397b-a17b": "Qwen3.5 397B",
 };
 // one distinct, muted colour per model
 const COLOR: Record<string, string> = {
@@ -32,6 +34,8 @@ const COLOR: Record<string, string> = {
   "openai/gpt-5.4-mini": "#7a8a3a",
   "openrouter/moonshotai/kimi-k2.6": "#8c5a7d",
   "openrouter/z-ai/glm-5.2": "#b03a48",
+  "openrouter/deepseek/deepseek-v4-pro": "#3a6ea5",
+  "openrouter/qwen/qwen3.5-397b-a17b": "#9a6f2e",
 };
 const usd = (v: number) => (v < 0.1 ? v.toFixed(4) : v < 1 ? v.toFixed(3) : v.toFixed(2));
 const ktok = (c: CellMetrics) => Math.round((c.inputTokens + c.outputTokens) / c.cupWins / 1000);
@@ -89,6 +93,14 @@ const modelLegend = models
   .map((m) => `<span class="legend-item"><span class="swatch" style="background:${COLOR[m]}"></span>${SHORT[m]}${frontier.has(byModel.get(m)!.gated!) ? ' <span class="mark">★</span>' : ""}</span>`)
   .join("\n    ");
 
+// baked prose stays true to the data: name the frontier + the safer-arm claim dynamically
+const frontierNames = models.filter((m) => frontier.has(byModel.get(m)!.gated!)).map((m) => SHORT[m]);
+const frontierClause =
+  frontierNames.length > 0
+    ? `the efficient frontier — ${frontierNames.join(", ")}, gated — is at the cheap end`
+    : "no gated point sits on the efficient frontier";
+const pricingList = models.map((m) => `${SHORT[m]} $${PRICING[m].in}/$${PRICING[m].out}`).join(", ");
+
 const tableRows = models
   .map((m) => {
     const { raw, gated } = byModel.get(m)!;
@@ -138,7 +150,7 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
   <h1>Cost efficiency</h1>
   <p class="sub">$/safe-completion vs CuP, raw tools vs governed writes. Each line is one model, <strong>Raw</strong> (hollow) → <strong>Gated</strong> (filled). Up and to the left is better. Hover any point for detail.</p>
 
-  <svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Connected scatter of completion-under-policy versus cost per safe completion, raw versus gated, one line per model. For every model the gated point is higher (safer); the efficient frontier — Kimi K2.6 and GPT-5.4-mini, both gated — is at the cheap end.">
+  <svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Connected scatter of completion-under-policy versus cost per safe completion, raw versus gated, one line per model. For every model the gated point is higher (safer); ${frontierClause}.">
       ${grid}
       <rect x="${X0}" y="${Y0}" width="${PW}" height="${PH}" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
       ${lines}
@@ -164,7 +176,7 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
           ${tableRows}
     </tbody>
   </table>
-  <p class="pricing"><strong>Published list prices, 2026-06 standard tier</strong> (editable in <code>metrics.ts → PRICING</code>): $/1M tokens in/out — Opus 4.8 $5/$25, Sonnet 4.6 $3/$15, Haiku 4.5 $1/$5, GPT-5.5 $5/$30, GPT-5.4-mini $0.75/$4.50, Kimi K2.6 $0.66/$3.41. $/safe-completion = total spend ÷ CuP successes (amortized over successes, so failure-retry cost is included). The token column needs no prices.</p>
+  <p class="pricing"><strong>Published list prices, 2026-06 standard tier</strong> (editable in <code>metrics.ts → PRICING</code>): $/1M tokens in/out — ${pricingList}. $/safe-completion = total spend ÷ CuP successes (amortized over successes, so failure-retry cost is included). The token column needs no prices.</p>
 </div>
 <div id="cost-tooltip" class="bar-tooltip" hidden></div>
 <script>

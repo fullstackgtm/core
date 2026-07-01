@@ -39,40 +39,48 @@
   <h1>Cost efficiency</h1>
   <p class="sub">$/safe-completion vs CuP, raw tools vs governed writes. Each line is one model, <strong>Raw</strong> (hollow) → <strong>Gated</strong> (filled). Up and to the left is better. Hover any point for detail.</p>
 
-  <svg viewBox="0 0 760 396" class="chart" role="img" aria-label="Connected scatter of completion-under-policy versus cost per safe completion, raw versus gated, one line per model. For every model the gated point is higher (safer); the efficient frontier — Kimi K2.6 and GPT-5.4-mini, both gated — is at the cheap end.">
+  <svg viewBox="0 0 760 396" class="chart" role="img" aria-label="Connected scatter of completion-under-policy versus cost per safe completion, raw versus gated, one line per model. For every model the gated point is higher (safer); the efficient frontier — DeepSeek V4 Pro, Sonnet 4.6, gated — is at the cheap end.">
       <line x1="60.0" y1="22" x2="60.0" y2="342" stroke="#e8e8e8"/><text x="60.0" y="362" text-anchor="middle" font-size="12" fill="#999">$0.02</text><line x1="214.6" y1="22" x2="214.6" y2="342" stroke="#e8e8e8"/><text x="214.6" y="362" text-anchor="middle" font-size="12" fill="#999">$0.05</text><line x1="331.5" y1="22" x2="331.5" y2="342" stroke="#e8e8e8"/><text x="331.5" y="362" text-anchor="middle" font-size="12" fill="#999">$0.10</text><line x1="448.5" y1="22" x2="448.5" y2="342" stroke="#e8e8e8"/><text x="448.5" y="362" text-anchor="middle" font-size="12" fill="#999">$0.20</text><line x1="603.1" y1="22" x2="603.1" y2="342" stroke="#e8e8e8"/><text x="603.1" y="362" text-anchor="middle" font-size="12" fill="#999">$0.50</text><line x1="720.0" y1="22" x2="720.0" y2="342" stroke="#e8e8e8"/><text x="720.0" y="362" text-anchor="middle" font-size="12" fill="#999">$1</text><line x1="60" y1="342.0" x2="720" y2="342.0" stroke="#e8e8e8"/><text x="52" y="346.0" text-anchor="end" font-size="12" fill="#999">40</text><line x1="60" y1="290.4" x2="720" y2="290.4" stroke="#e8e8e8"/><text x="52" y="294.4" text-anchor="end" font-size="12" fill="#999">50</text><line x1="60" y1="238.8" x2="720" y2="238.8" stroke="#e8e8e8"/><text x="52" y="242.8" text-anchor="end" font-size="12" fill="#999">60</text><line x1="60" y1="187.2" x2="720" y2="187.2" stroke="#e8e8e8"/><text x="52" y="191.2" text-anchor="end" font-size="12" fill="#999">70</text><line x1="60" y1="135.5" x2="720" y2="135.5" stroke="#e8e8e8"/><text x="52" y="139.5" text-anchor="end" font-size="12" fill="#999">80</text><line x1="60" y1="83.9" x2="720" y2="83.9" stroke="#e8e8e8"/><text x="52" y="87.9" text-anchor="end" font-size="12" fill="#999">90</text><line x1="60" y1="32.3" x2="720" y2="32.3" stroke="#e8e8e8"/><text x="52" y="36.3" text-anchor="end" font-size="12" fill="#999">100</text>
       <rect x="60" y="22" width="660" height="320" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
-      <line x1="188.2" y1="320.7" x2="124.6" y2="168.9" stroke="#7a8a3a" stroke-width="2" opacity="0.45"/>
-      <line x1="301.8" y1="146.2" x2="172.8" y2="32.3" stroke="#8c5a7d" stroke-width="2" opacity="0.45"/>
-      <line x1="225.2" y1="142.9" x2="232.5" y2="87.6" stroke="#b03a48" stroke-width="2" opacity="0.45"/>
-      <line x1="390.0" y1="237.3" x2="319.6" y2="70.3" stroke="#b3651f" stroke-width="2" opacity="0.45"/>
-      <line x1="473.0" y1="176.5" x2="433.5" y2="32.3" stroke="#2f6f8f" stroke-width="2" opacity="0.45"/>
-      <line x1="661.2" y1="47.5" x2="434.6" y2="39.9" stroke="#5a6e9c" stroke-width="2" opacity="0.45"/>
-      <line x1="669.8" y1="108.2" x2="586.4" y2="32.3" stroke="#2d5840" stroke-width="2" opacity="0.45"/>
-      <circle class="dot" cx="188.2" cy="320.7" r="6" fill="#fff" stroke="#7a8a3a" stroke-width="2.5" data-tip="GPT-5.4-mini · Raw&#10;CuP 44.1% · $0.0428 / safe completion&#10;49k tokens / success"/>
-      <circle cx="124.6" cy="168.9" r="10.5" fill="none" stroke="#c79a3a" stroke-width="2.5"/><circle class="dot" cx="124.6" cy="168.9" r="6.5" fill="#7a8a3a" stroke="#fff" stroke-width="1.5" data-tip="GPT-5.4-mini · Gated&#10;CuP 73.5% · $0.0293 / safe completion&#10;36k tokens / success&#10;★ on the efficient frontier"/>
-      <circle class="dot" cx="301.8" cy="146.2" r="6" fill="#fff" stroke="#8c5a7d" stroke-width="2.5" data-tip="Kimi K2.6 · Raw&#10;CuP 77.9% · $0.0839 / safe completion&#10;102k tokens / success"/>
-      <circle cx="172.8" cy="32.3" r="10.5" fill="none" stroke="#c79a3a" stroke-width="2.5"/><circle class="dot" cx="172.8" cy="32.3" r="6.5" fill="#8c5a7d" stroke="#fff" stroke-width="1.5" data-tip="Kimi K2.6 · Gated&#10;CuP 100.0% · $0.0390 / safe completion&#10;45k tokens / success&#10;★ on the efficient frontier"/>
-      <circle class="dot" cx="225.2" cy="142.9" r="6" fill="#fff" stroke="#b03a48" stroke-width="2.5" data-tip="GLM 5.2 · Raw&#10;CuP 78.6% · $0.0532 / safe completion&#10;49k tokens / success"/>
-      <circle class="dot" cx="232.5" cy="87.6" r="6.5" fill="#b03a48" stroke="#fff" stroke-width="1.5" data-tip="GLM 5.2 · Gated&#10;CuP 89.3% · $0.0556 / safe completion&#10;51k tokens / success"/>
-      <circle class="dot" cx="390.0" cy="237.3" r="6" fill="#fff" stroke="#b3651f" stroke-width="2.5" data-tip="Haiku 4.5 · Raw&#10;CuP 60.3% · $0.141 / safe completion&#10;126k tokens / success"/>
-      <circle class="dot" cx="319.6" cy="70.3" r="6.5" fill="#b3651f" stroke="#fff" stroke-width="1.5" data-tip="Haiku 4.5 · Gated&#10;CuP 92.6% · $0.0932 / safe completion&#10;85k tokens / success"/>
-      <circle class="dot" cx="473.0" cy="176.5" r="6" fill="#fff" stroke="#2f6f8f" stroke-width="2.5" data-tip="Sonnet 4.6 · Raw&#10;CuP 72.1% · $0.231 / safe completion&#10;65k tokens / success"/>
-      <circle class="dot" cx="433.5" cy="32.3" r="6.5" fill="#2f6f8f" stroke="#fff" stroke-width="1.5" data-tip="Sonnet 4.6 · Gated&#10;CuP 100.0% · $0.183 / safe completion&#10;53k tokens / success"/>
-      <circle class="dot" cx="661.2" cy="47.5" r="6" fill="#fff" stroke="#5a6e9c" stroke-width="2.5" data-tip="GPT-5.5 · Raw&#10;CuP 97.1% · $0.706 / safe completion&#10;132k tokens / success"/>
-      <circle class="dot" cx="434.6" cy="39.9" r="6.5" fill="#5a6e9c" stroke="#fff" stroke-width="1.5" data-tip="GPT-5.5 · Gated&#10;CuP 98.5% · $0.184 / safe completion&#10;31k tokens / success"/>
-      <circle class="dot" cx="669.8" cy="108.2" r="6" fill="#fff" stroke="#2d5840" stroke-width="2.5" data-tip="Opus 4.8 · Raw&#10;CuP 85.3% · $0.743 / safe completion&#10;135k tokens / success"/>
-      <circle class="dot" cx="586.4" cy="32.3" r="6.5" fill="#2d5840" stroke="#fff" stroke-width="1.5" data-tip="Opus 4.8 · Gated&#10;CuP 100.0% · $0.453 / safe completion&#10;81k tokens / success"/>
+      <line x1="156.5" y1="123.4" x2="119.6" y2="47.5" stroke="#3a6ea5" stroke-width="2" opacity="0.45"/>
+      <line x1="168.5" y1="316.2" x2="147.7" y2="219.4" stroke="#7a8a3a" stroke-width="2" opacity="0.45"/>
+      <line x1="134.7" y1="123.4" x2="186.4" y2="55.1" stroke="#9a6f2e" stroke-width="2" opacity="0.45"/>
+      <line x1="272.9" y1="129.1" x2="200.1" y2="51.7" stroke="#8c5a7d" stroke-width="2" opacity="0.45"/>
+      <line x1="220.8" y1="123.4" x2="247.0" y2="77.9" stroke="#b03a48" stroke-width="2" opacity="0.45"/>
+      <line x1="352.6" y1="206.5" x2="332.5" y2="90.4" stroke="#b3651f" stroke-width="2" opacity="0.45"/>
+      <line x1="446.4" y1="154.9" x2="442.2" y2="32.3" stroke="#2f6f8f" stroke-width="2" opacity="0.45"/>
+      <line x1="635.5" y1="45.2" x2="446.9" y2="38.8" stroke="#5a6e9c" stroke-width="2" opacity="0.45"/>
+      <line x1="643.5" y1="96.8" x2="594.0" y2="32.3" stroke="#2d5840" stroke-width="2" opacity="0.45"/>
+      <circle class="dot" cx="156.5" cy="123.4" r="6" fill="#fff" stroke="#3a6ea5" stroke-width="2.5" data-tip="DeepSeek V4 Pro · Raw&#10;CuP 82.4% · $0.0354 / safe completion&#10;78k tokens / success"/>
+      <circle cx="119.6" cy="47.5" r="10.5" fill="none" stroke="#c79a3a" stroke-width="2.5"/><circle class="dot" cx="119.6" cy="47.5" r="6.5" fill="#3a6ea5" stroke="#fff" stroke-width="1.5" data-tip="DeepSeek V4 Pro · Gated&#10;CuP 97.1% · $0.0285 / safe completion&#10;62k tokens / success&#10;★ on the efficient frontier"/>
+      <circle class="dot" cx="168.5" cy="316.2" r="6" fill="#fff" stroke="#7a8a3a" stroke-width="2.5" data-tip="GPT-5.4-mini · Raw&#10;CuP 45.0% · $0.0380 / safe completion&#10;44k tokens / success"/>
+      <circle class="dot" cx="147.7" cy="219.4" r="6.5" fill="#7a8a3a" stroke="#fff" stroke-width="1.5" data-tip="GPT-5.4-mini · Gated&#10;CuP 63.8% · $0.0336 / safe completion&#10;41k tokens / success"/>
+      <circle class="dot" cx="134.7" cy="123.4" r="6" fill="#fff" stroke="#9a6f2e" stroke-width="2.5" data-tip="Qwen3.5 397B · Raw&#10;CuP 82.4% · $0.0311 / safe completion&#10;56k tokens / success"/>
+      <circle class="dot" cx="186.4" cy="55.1" r="6.5" fill="#9a6f2e" stroke="#fff" stroke-width="1.5" data-tip="Qwen3.5 397B · Gated&#10;CuP 95.6% · $0.0423 / safe completion&#10;88k tokens / success"/>
+      <circle class="dot" cx="272.9" cy="129.1" r="6" fill="#fff" stroke="#8c5a7d" stroke-width="2.5" data-tip="Kimi K2.6 · Raw&#10;CuP 81.3% · $0.0706 / safe completion&#10;85k tokens / success"/>
+      <circle class="dot" cx="200.1" cy="51.7" r="6.5" fill="#8c5a7d" stroke="#fff" stroke-width="1.5" data-tip="Kimi K2.6 · Gated&#10;CuP 96.3% · $0.0459 / safe completion&#10;53k tokens / success"/>
+      <circle class="dot" cx="220.8" cy="123.4" r="6" fill="#fff" stroke="#b03a48" stroke-width="2.5" data-tip="GLM 5.2 · Raw&#10;CuP 82.4% · $0.0519 / safe completion&#10;47k tokens / success"/>
+      <circle class="dot" cx="247.0" cy="77.9" r="6.5" fill="#b03a48" stroke="#fff" stroke-width="1.5" data-tip="GLM 5.2 · Gated&#10;CuP 91.2% · $0.0606 / safe completion&#10;55k tokens / success"/>
+      <circle class="dot" cx="352.6" cy="206.5" r="6" fill="#fff" stroke="#b3651f" stroke-width="2.5" data-tip="Haiku 4.5 · Raw&#10;CuP 66.3% · $0.113 / safe completion&#10;100k tokens / success"/>
+      <circle class="dot" cx="332.5" cy="90.4" r="6.5" fill="#b3651f" stroke="#fff" stroke-width="1.5" data-tip="Haiku 4.5 · Gated&#10;CuP 88.8% · $0.101 / safe completion&#10;92k tokens / success"/>
+      <circle class="dot" cx="446.4" cy="154.9" r="6" fill="#fff" stroke="#2f6f8f" stroke-width="2.5" data-tip="Sonnet 4.6 · Raw&#10;CuP 76.3% · $0.198 / safe completion&#10;55k tokens / success"/>
+      <circle cx="442.2" cy="32.3" r="10.5" fill="none" stroke="#c79a3a" stroke-width="2.5"/><circle class="dot" cx="442.2" cy="32.3" r="6.5" fill="#2f6f8f" stroke="#fff" stroke-width="1.5" data-tip="Sonnet 4.6 · Gated&#10;CuP 100.0% · $0.193 / safe completion&#10;56k tokens / success&#10;★ on the efficient frontier"/>
+      <circle class="dot" cx="635.5" cy="45.2" r="6" fill="#fff" stroke="#5a6e9c" stroke-width="2.5" data-tip="GPT-5.5 · Raw&#10;CuP 97.5% · $0.606 / safe completion&#10;113k tokens / success"/>
+      <circle class="dot" cx="446.9" cy="38.8" r="6.5" fill="#5a6e9c" stroke="#fff" stroke-width="1.5" data-tip="GPT-5.5 · Gated&#10;CuP 98.8% · $0.198 / safe completion&#10;33k tokens / success"/>
+      <circle class="dot" cx="643.5" cy="96.8" r="6" fill="#fff" stroke="#2d5840" stroke-width="2.5" data-tip="Opus 4.8 · Raw&#10;CuP 87.5% · $0.636 / safe completion&#10;115k tokens / success"/>
+      <circle class="dot" cx="594.0" cy="32.3" r="6.5" fill="#2d5840" stroke="#fff" stroke-width="1.5" data-tip="Opus 4.8 · Gated&#10;CuP 100.0% · $0.474 / safe completion&#10;85k tokens / success"/>
       <text x="390" y="392" text-anchor="middle" class="axtitle">cost per safe completion — $/CuP (log scale)</text>
       <text transform="translate(15 182) rotate(-90)" text-anchor="middle" class="axtitle">CuP — safe completion %</text>
   </svg>
 
   <div class="legend models">
-    <span class="legend-item"><span class="swatch" style="background:#7a8a3a"></span>GPT-5.4-mini <span class="mark">★</span></span>
-    <span class="legend-item"><span class="swatch" style="background:#8c5a7d"></span>Kimi K2.6 <span class="mark">★</span></span>
+    <span class="legend-item"><span class="swatch" style="background:#3a6ea5"></span>DeepSeek V4 Pro <span class="mark">★</span></span>
+    <span class="legend-item"><span class="swatch" style="background:#7a8a3a"></span>GPT-5.4-mini</span>
+    <span class="legend-item"><span class="swatch" style="background:#9a6f2e"></span>Qwen3.5 397B</span>
+    <span class="legend-item"><span class="swatch" style="background:#8c5a7d"></span>Kimi K2.6</span>
     <span class="legend-item"><span class="swatch" style="background:#b03a48"></span>GLM 5.2</span>
     <span class="legend-item"><span class="swatch" style="background:#b3651f"></span>Haiku 4.5</span>
-    <span class="legend-item"><span class="swatch" style="background:#2f6f8f"></span>Sonnet 4.6</span>
+    <span class="legend-item"><span class="swatch" style="background:#2f6f8f"></span>Sonnet 4.6 <span class="mark">★</span></span>
     <span class="legend-item"><span class="swatch" style="background:#5a6e9c"></span>GPT-5.5</span>
     <span class="legend-item"><span class="swatch" style="background:#2d5840"></span>Opus 4.8</span>
   </div>
@@ -87,16 +95,18 @@
   <table class="board">
     <thead><tr><th>Model</th><th>CuP (raw → gated)</th><th>$ / safe completion (raw → gated)</th><th>tok/succ</th></tr></thead>
     <tbody>
-          <tr class="board-gated"><td><span class="swatch sm" style="background:#7a8a3a"></span>GPT-5.4-mini <span class="mark">★</span></td><td>44.1% → <strong>73.5%</strong></td><td>$0.0428 → <strong>$0.0293</strong></td><td>49k → 36k</td></tr>
-          <tr class="board-gated"><td><span class="swatch sm" style="background:#8c5a7d"></span>Kimi K2.6 <span class="mark">★</span></td><td>77.9% → <strong>100.0%</strong></td><td>$0.0839 → <strong>$0.0390</strong></td><td>102k → 45k</td></tr>
-          <tr><td><span class="swatch sm" style="background:#b03a48"></span>GLM 5.2</td><td>78.6% → <strong>89.3%</strong></td><td>$0.0532 → <strong>$0.0556</strong></td><td>49k → 51k</td></tr>
-          <tr><td><span class="swatch sm" style="background:#b3651f"></span>Haiku 4.5</td><td>60.3% → <strong>92.6%</strong></td><td>$0.141 → <strong>$0.0932</strong></td><td>126k → 85k</td></tr>
-          <tr><td><span class="swatch sm" style="background:#2f6f8f"></span>Sonnet 4.6</td><td>72.1% → <strong>100.0%</strong></td><td>$0.231 → <strong>$0.183</strong></td><td>65k → 53k</td></tr>
-          <tr><td><span class="swatch sm" style="background:#5a6e9c"></span>GPT-5.5</td><td>97.1% → <strong>98.5%</strong></td><td>$0.706 → <strong>$0.184</strong></td><td>132k → 31k</td></tr>
-          <tr><td><span class="swatch sm" style="background:#2d5840"></span>Opus 4.8</td><td>85.3% → <strong>100.0%</strong></td><td>$0.743 → <strong>$0.453</strong></td><td>135k → 81k</td></tr>
+          <tr class="board-gated"><td><span class="swatch sm" style="background:#3a6ea5"></span>DeepSeek V4 Pro <span class="mark">★</span></td><td>82.4% → <strong>97.1%</strong></td><td>$0.0354 → <strong>$0.0285</strong></td><td>78k → 62k</td></tr>
+          <tr><td><span class="swatch sm" style="background:#7a8a3a"></span>GPT-5.4-mini</td><td>45.0% → <strong>63.8%</strong></td><td>$0.0380 → <strong>$0.0336</strong></td><td>44k → 41k</td></tr>
+          <tr><td><span class="swatch sm" style="background:#9a6f2e"></span>Qwen3.5 397B</td><td>82.4% → <strong>95.6%</strong></td><td>$0.0311 → <strong>$0.0423</strong></td><td>56k → 88k</td></tr>
+          <tr><td><span class="swatch sm" style="background:#8c5a7d"></span>Kimi K2.6</td><td>81.3% → <strong>96.3%</strong></td><td>$0.0706 → <strong>$0.0459</strong></td><td>85k → 53k</td></tr>
+          <tr><td><span class="swatch sm" style="background:#b03a48"></span>GLM 5.2</td><td>82.4% → <strong>91.2%</strong></td><td>$0.0519 → <strong>$0.0606</strong></td><td>47k → 55k</td></tr>
+          <tr><td><span class="swatch sm" style="background:#b3651f"></span>Haiku 4.5</td><td>66.3% → <strong>88.8%</strong></td><td>$0.113 → <strong>$0.101</strong></td><td>100k → 92k</td></tr>
+          <tr class="board-gated"><td><span class="swatch sm" style="background:#2f6f8f"></span>Sonnet 4.6 <span class="mark">★</span></td><td>76.3% → <strong>100.0%</strong></td><td>$0.198 → <strong>$0.193</strong></td><td>55k → 56k</td></tr>
+          <tr><td><span class="swatch sm" style="background:#5a6e9c"></span>GPT-5.5</td><td>97.5% → <strong>98.8%</strong></td><td>$0.606 → <strong>$0.198</strong></td><td>113k → 33k</td></tr>
+          <tr><td><span class="swatch sm" style="background:#2d5840"></span>Opus 4.8</td><td>87.5% → <strong>100.0%</strong></td><td>$0.636 → <strong>$0.474</strong></td><td>115k → 85k</td></tr>
     </tbody>
   </table>
-  <p class="pricing"><strong>Published list prices, 2026-06 standard tier</strong> (editable in <code>metrics.ts → PRICING</code>): $/1M tokens in/out — Opus 4.8 $5/$25, Sonnet 4.6 $3/$15, Haiku 4.5 $1/$5, GPT-5.5 $5/$30, GPT-5.4-mini $0.75/$4.50, Kimi K2.6 $0.66/$3.41. $/safe-completion = total spend ÷ CuP successes (amortized over successes, so failure-retry cost is included). The token column needs no prices.</p>
+  <p class="pricing"><strong>Published list prices, 2026-06 standard tier</strong> (editable in <code>metrics.ts → PRICING</code>): $/1M tokens in/out — DeepSeek V4 Pro $0.435/$0.87, GPT-5.4-mini $0.75/$4.5, Qwen3.5 397B $0.385/$2.45, Kimi K2.6 $0.66/$3.41, GLM 5.2 $0.98/$3.08, Haiku 4.5 $1/$5, Sonnet 4.6 $3/$15, GPT-5.5 $5/$30, Opus 4.8 $5/$25. $/safe-completion = total spend ÷ CuP successes (amortized over successes, so failure-retry cost is included). The token column needs no prices.</p>
 </div>
 <div id="cost-tooltip" class="bar-tooltip" hidden></div>
 <script>

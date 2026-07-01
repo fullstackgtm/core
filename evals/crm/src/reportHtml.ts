@@ -8,8 +8,8 @@ import type { Arm, RunResult } from "./types.ts";
 
 const ARM_LABEL: Record<string, string> = {
   raw: "raw tools",
-  "raw+fsgtm": "raw + fullstackgtm",
-  fsgtm: "fullstackgtm-gated",
+  "raw+fsgtm": "Informed",
+  fsgtm: "Full Stack GTM",
 };
 
 function esc(s: unknown): string {
@@ -102,6 +102,8 @@ function costSection(entries: CellMetrics[]): string {
     "openai/gpt-5.4-mini": "GPT-5.4-mini",
     "openrouter/moonshotai/kimi-k2.6": "Kimi K2.6",
     "openrouter/z-ai/glm-5.2": "GLM 5.2",
+    "openrouter/deepseek/deepseek-v4-pro": "DeepSeek V4 Pro",
+    "openrouter/qwen/qwen3.5-397b-a17b": "Qwen3.5 397B",
   };
   const COLOR: Record<string, string> = {
     "anthropic/claude-opus-4-8": "#2d5840",
@@ -111,6 +113,8 @@ function costSection(entries: CellMetrics[]): string {
     "openai/gpt-5.4-mini": "#7a8a3a",
     "openrouter/moonshotai/kimi-k2.6": "#8c5a7d",
     "openrouter/z-ai/glm-5.2": "#b03a48",
+    "openrouter/deepseek/deepseek-v4-pro": "#3a6ea5",
+    "openrouter/qwen/qwen3.5-397b-a17b": "#9a6f2e",
   };
   const armOf = (m: string, arm: string) => entries.find((e) => e.model === m && e.arm === arm);
   const finite = (e?: CellMetrics) => !!e && Number.isFinite(cellCost(e).dollarsPerSuccess);
@@ -137,7 +141,7 @@ function costSection(entries: CellMetrics[]): string {
       const raw = armOf(m, "raw")!, gated = armOf(m, "fsgtm")!, col = COLOR[m] ?? "var(--muted)";
       const rx = lx(cellCost(raw).dollarsPerSuccess), ry = ly(raw.cupPct);
       const gx = lx(cellCost(gated).dollarsPerSuccess), gy = ly(gated.cupPct);
-      return `<circle class="dot" cx="${rx.toFixed(1)}" cy="${ry.toFixed(1)}" r="6" fill="var(--card)" stroke="${col}" stroke-width="2.5"><title>${esc(tip(raw, "Raw"))}</title></circle><circle class="dot" cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="6.5" fill="${col}" stroke="var(--card)" stroke-width="1.5"><title>${esc(tip(gated, "Gated"))}</title></circle>`;
+      return `<circle class="dot" cx="${rx.toFixed(1)}" cy="${ry.toFixed(1)}" r="6" fill="var(--card)" stroke="${col}" stroke-width="2.5"><title>${esc(tip(raw, "Raw"))}</title></circle><circle class="dot" cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="6.5" fill="${col}" stroke="var(--card)" stroke-width="1.5"><title>${esc(tip(gated, "Full Stack GTM"))}</title></circle>`;
     })
     .join("");
 
@@ -160,11 +164,11 @@ function costSection(entries: CellMetrics[]): string {
   const legend = `<div class="cost-legend">${scatterModels
     .map((m) => `<span><i style="background:${COLOR[m] ?? "var(--muted)"}"></i>${esc(SHORT[m] ?? shortModel(m).name)}${dollarFrontier.has(armOf(m, "fsgtm")!) ? " ★" : ""}</span>`)
     .join("")}</div>
-  <div class="cost-legend keys"><span><i class="hollow"></i>Raw — direct CRM tools</span><span><i class="filled"></i>Gated — audit→approve→apply</span><span><i class="ln"></i>rails effect, per model</span><span><i class="rg"></i>efficient frontier</span></div>`;
+  <div class="cost-legend keys"><span><i class="hollow"></i>Raw — direct CRM tools</span><span><i class="filled"></i>Full Stack GTM — audit → approve → apply</span><span><i class="ln"></i>rails effect, per model</span><span><i class="rg"></i>efficient frontier</span></div>`;
 
   return `<section>
   <h2>Cost efficiency</h2>
-  <p class="note"><strong>$/safe-completion</strong> = total spend across a cell's runs ÷ its CuP successes (amortized over successes — failures still cost). <strong>k-tok/success</strong> is the pricing-free equivalent. Each line is one model, Raw (hollow) → Gated (filled); up and to the left is better. ★ = Pareto frontier (non-dominated on cost and CuP).</p>
+  <p class="note"><strong>$/safe-completion</strong> = total spend across a cell's runs ÷ its CuP successes (amortized over successes — failures still cost). <strong>k-tok/success</strong> is the pricing-free equivalent. Each line is one model, Raw (hollow) → Full Stack GTM (filled); up and to the left is better. ★ = Pareto frontier (non-dominated on cost and CuP).</p>
   <div class="svg-wrap">${svg}</div>
   ${legend}
   <table style="margin-top:18px">
@@ -415,8 +419,8 @@ ${leaderboardRows}
   </table>
   <div class="legend">
     <span><b>raw tools</b> — plain CRM read/write API tools (baseline)</span>
-    <span><b>raw + fullstackgtm</b> — raw tools plus the fullstackgtm CLI (adoption)</span>
-    <span><b>fullstackgtm-gated</b> — writes only via audit → approve → apply (rails)</span>
+    <span><b>Informed</b> — raw tools plus the fullstackgtm CLI available (adoption)</span>
+    <span><b>Full Stack GTM</b> — every write gated via audit → approve → apply (rails)</span>
   </div>
 </section>
 

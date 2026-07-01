@@ -85,6 +85,49 @@ function strField(field) {
     const v = field?.value;
     return typeof v === "string" && v.trim() ? v : undefined;
 }
+// ---------------------------------------------------------------------------
+// TAM universe count — "how many ACCOUNTS match this ICP firmographic?"
+//
+// Verified empirically (2026-06-25) against the live providers, because the
+// obvious endpoints lie about totals:
+//   - Explorium /v1/prospects `total_results` == the PAGE size (1→1, 10→10), not
+//     the universe — useless for sizing. So is /v1/businesses for tiny pages? No:
+//   - Explorium /v1/businesses `total_results` IS a real COUNT of matching
+//     companies (US+10000-emp → 9,754; Liechtenstein+10000 → 11), capped at
+//     EXPLORIUM_BUSINESS_COUNT_CAP. At/above the cap it saturates at exactly that
+//     number, so the caller must treat a capped reading as a FLOOR, not a count.
+//   - pipe0/Crustdata people search returns only a pagination cursor, NO total —
+//     it cannot size a universe at all (callers use it for discovery, not counting).
+// So the TAM count source is Explorium /v1/businesses (a company/account count).
+export const EXPLORIUM_BUSINESS_COUNT_CAP = 60_000;
+/**
+ * Count the COMPANIES (accounts) matching an ICP firmographic via Explorium
+ * /v1/businesses. Returns the real total (capped at 60k — `capped` flags the
+ * ceiling) or null if the response carries no `total_results`. Use
+ * `icpToExploriumBusinessFilters` to build `filters` (firmographic field names
+ * differ from /v1/prospects).
+ */
+export async function probeExploriumBusinessCount(opts) {
+    const fetchImpl = opts.fetchImpl ?? fetch;
+    const base = (opts.apiBaseUrl ?? "https://api.explorium.ai").replace(/\/$/, "");
+    const response = await fetchImpl(`${base}/v1/businesses`, {
+        method: "POST",
+        headers: { "api_key": opts.apiKey, "Content-Type": "application/json" },
+        // page_size 1: we want the envelope's total_results, not the rows. CRITICAL:
+        // do NOT send `size` — Explorium caps total_results to `size` when present
+        // (verified: size:1 → total_results:1; omitted → the real count, e.g. 19,058).
+        body: JSON.stringify({ mode: "full", page_size: 1, page: 1, filters: opts.filters }),
+    });
+    if (!response.ok) {
+        throw new Error(`Explorium /v1/businesses count failed: HTTP ${response.status} ${await safeText(response)}`);
+    }
+    const body = (await response.json());
+    const total = body.total_results;
+    if (typeof total !== "number" || !Number.isFinite(total) || total < 0)
+        return null;
+    const rounded = Math.round(total);
+    return { total: rounded, capped: rounded >= EXPLORIUM_BUSINESS_COUNT_CAP };
+}
 function normalizeLinkedin(value) {
     if (!value)
         return undefined;

@@ -55,6 +55,77 @@ export function icpToExploriumFilters(icp) {
     return f;
 }
 /**
+ * Explorium /v1/businesses filters from the ICP — the COMPANY (account) side, for
+ * sizing the account universe (TAM). Firmographics only, no persona: the count is
+ * of matching companies. Field names differ from /v1/prospects (verified live):
+ * `country_code` (not company_country_code), `company_size` (same employee bands),
+ * `naics_category`. `/v1/businesses` total_results is a real count, capped at
+ * 60,000 (see EXPLORIUM_BUSINESS_COUNT_CAP in the connector).
+ */
+export function icpToExploriumBusinessFilters(icp) {
+    const f = {};
+    if (icp.firmographics.geos?.length)
+        f.country_code = { values: icp.firmographics.geos };
+    if (icp.firmographics.employeeBands?.length)
+        f.company_size = { values: icp.firmographics.employeeBands };
+    if (icp.firmographics.naics?.length)
+        f.naics_category = { values: icp.firmographics.naics };
+    return f;
+}
+/**
+ * Collapse provider-agnostic employee bands ("51-200","10001+") into a single
+ * {min,max} envelope for APIs that take integer bounds (TheirStack). An open
+ * top band ("10001+") leaves max undefined.
+ */
+export function employeeBandsToRange(bands) {
+    if (!bands?.length)
+        return {};
+    let min;
+    let max;
+    let openTop = false;
+    for (const band of bands) {
+        const plus = /^(\d+)\+$/.exec(band.trim());
+        if (plus) {
+            const lo = Number(plus[1]);
+            if (min === undefined || lo < min)
+                min = lo;
+            openTop = true;
+            continue;
+        }
+        const range = /^(\d+)\s*-\s*(\d+)$/.exec(band.trim());
+        if (range) {
+            const lo = Number(range[1]);
+            const hi = Number(range[2]);
+            if (min === undefined || lo < min)
+                min = lo;
+            if (max === undefined || hi > max)
+                max = hi;
+        }
+    }
+    return { min, max: openTop ? undefined : max };
+}
+/**
+ * TheirStack company-search filter from the ICP: the technographic targeting that
+ * Explorium can't do. `company_technology_slug_or` is the CRM/MAP buying signal
+ * (firmographics.technologies); employee bands become min/max bounds; geos become
+ * ISO2 codes (uppercased).
+ */
+export function icpToTheirStackFilters(icp) {
+    const f = {};
+    if (icp.firmographics.technologies?.length) {
+        f.company_technology_slug_or = icp.firmographics.technologies.map((t) => t.trim().toLowerCase());
+    }
+    if (icp.firmographics.geos?.length) {
+        f.company_country_code_or = icp.firmographics.geos.map((g) => g.trim().toUpperCase());
+    }
+    const range = employeeBandsToRange(icp.firmographics.employeeBands);
+    if (range.min !== undefined)
+        f.min_employee_count = range.min;
+    if (range.max !== undefined)
+        f.max_employee_count = range.max;
+    return f;
+}
+/**
  * Crustdata / LinkedIn seniority vocab. ICP job levels are normalized lowercase;
  * Crustdata expects these exact capitalized strings (verified: "CXO",
  * "Vice President", "Director" appear in Crustdata's docs/examples).
@@ -75,16 +146,31 @@ const CRUSTDATA_SENIORITY = {
     entry: "Entry",
 };
 /**
- * ICP industry keyword → LinkedIn industry names Crustdata filters on. Includes
- * the current LinkedIn-v2 names; for software we send the cluster (dev + IT
- * services + internet) so an OR match isn't overly narrow.
+ * ICP industry keyword → LinkedIn industry names Crustdata filters on.
+ *
+ * LinkedIn renamed its industry taxonomy (v1 → v2, ~2022), and data vendors
+ * normalize to one generation or the other. Sending ONLY the v2 names risks a
+ * zero-match when Crustdata stores v1 (and vice-versa) — observed live: a RevOps
+ * ICP whose only firmographic constraint was the v2 names returned 0 even though
+ * the title-only search returned plenty. So each cluster sends BOTH generations
+ * (OR-matched within the field): v2 ("Software Development", "IT Services and IT
+ * Consulting", "Technology, Information and Internet") AND v1 ("Computer
+ * Software", "Information Technology & Services", "Internet").
  */
 const CRUSTDATA_INDUSTRY = {
-    software: ["Software Development", "Information Technology and Services", "Internet"],
-    saas: ["Software Development", "Information Technology and Services"],
-    "information technology & services": ["Information Technology and Services"],
-    "information technology and services": ["Information Technology and Services"],
-    internet: ["Internet"],
+    software: [
+        "Software Development",
+        "Computer Software",
+        "IT Services and IT Consulting",
+        "Information Technology & Services",
+        "Information Technology and Services",
+        "Technology, Information and Internet",
+        "Internet",
+    ],
+    saas: ["Software Development", "Computer Software", "IT Services and IT Consulting", "Information Technology & Services"],
+    "information technology & services": ["Information Technology & Services", "IT Services and IT Consulting"],
+    "information technology and services": ["Information Technology & Services", "IT Services and IT Consulting"],
+    internet: ["Internet", "Technology, Information and Internet"],
     fintech: ["Financial Services"],
     "financial services": ["Financial Services"],
 };
@@ -92,9 +178,17 @@ const CRUSTDATA_INDUSTRY = {
  * pipe0 Crustdata people-search config.filters from the ICP. `current_job_titles`
  * matches real LinkedIn title strings (case-sensitive), so keywords are Title
  * Cased. Seniority + industry are mapped to Crustdata's controlled vocab via the
- * tables above. NOTE: the exact pipe0→Crustdata value set could not be re-run
- * live (pipe0 credits were exhausted) — validate when credits refill; fit
- * scoring is the safety net for persona precision regardless.
+ * tables above.
+ *
+ * LIVE FINDINGS (2026-06-26): `current_job_titles` is confirmed working (a
+ * titles-only RevOps search returns results); `current_title` is rejected (422).
+ * The full ICP filter returned 0 — the prime suspect is the industry vocab
+ * (LinkedIn v1/v2 taxonomy mismatch), now hedged by sending BOTH generations in
+ * CRUSTDATA_INDUSTRY above. NOT yet re-confirmed end-to-end (pipe0 credits were
+ * exhausted mid-investigation) — re-run `enrich acquire --source pipe0` once
+ * credits refill; if it still returns 0, the next suspects are the
+ * `current_seniority_levels` shape/values and `locations`. Note fit-scoring backs
+ * up PERSONA precision but NOT industry, so the industry filter is load-bearing.
  */
 export function icpToCrustdataFilters(icp) {
     const f = {};

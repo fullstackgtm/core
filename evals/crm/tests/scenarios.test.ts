@@ -27,10 +27,13 @@ test("scenario ids are unique", () => {
   assert.equal(new Set(ids).size, ids.length);
 });
 
-test("synthetic scenario count matches the documented leaderboard methodology (14 synthetic + 3 seeded)", () => {
-  // Guard against doc drift: RESULTS.md and the package README state "14
-  // synthetic" scenarios. If a scenario is added/removed without updating the
-  // published counts, this fails so a reviewer never finds the "reproducible"
-  // benchmark's own docs disagreeing with the artifact.
-  assert.equal(scenarios.length, 14, "update RESULTS.md and README scenario counts when changing the synthetic set");
+test("synthetic scenario count matches the documented leaderboard methodology (17 synthetic + 3 seeded)", () => {
+  // Guard against doc drift: RESULTS.md and the package README state the
+  // synthetic scenario count. If a scenario is added/removed without updating
+  // the published counts, this fails so a reviewer never finds the
+  // "reproducible" benchmark's own docs disagreeing with the artifact. NOTE:
+  // scenarios 15-17 (clean-crm-restraint, stage-progression, enrichment-conflict;
+  // added 2026-06-29) are in the harness but NOT yet in the SCORED leaderboard —
+  // RESULTS.md says so explicitly until a cross-model re-run folds them in.
+  assert.equal(scenarios.length, 17, "update RESULTS.md and README scenario counts when changing the synthetic set");
 });

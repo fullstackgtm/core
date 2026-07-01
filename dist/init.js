@@ -28,6 +28,9 @@ export function starterIcp() {
             industries: ["software", "saas"],
             employeeBands: ["51-200", "201-500", "501-1000"],
             geos: ["us"],
+            // Technographic targeting (the real RevOps signal): companies that USE a
+            // CRM/MAP. Drives `tam estimate|accounts --source theirstack`.
+            technologies: ["salesforce", "hubspot", "pipedrive"],
         },
         persona: {
             jobLevels: ["vp", "director", "manager"],

@@ -1,6 +1,6 @@
 # CRM Ops Eval
 
-**Latest results: [leaderboard/RESULTS.md](leaderboard/RESULTS.md)** — 612-run full matrix (3 models × 3 arms × 4 trials), CuP + pass^k.
+**Latest results: [leaderboard/RESULTS.md](leaderboard/RESULTS.md)** — 1,892-run matrix (nine models × 3 arms × up to 4 trials over 20 scenarios), CuP + pass^k.
 
 Measures whether LLM agents make fewer mistakes operating a CRM when they have
 the [`fullstackgtm`](https://github.com/fullstackgtm/core) framework available —
@@ -76,7 +76,7 @@ npm test
 export ANTHROPIC_API_KEY=...      # for anthropic/* models
 export OPENROUTER_API_KEY=...     # for openrouter/* models (open-source)
 npm run eval -- \
-  --models anthropic/claude-opus-4-8,anthropic/claude-sonnet-4-6,openrouter/qwen/qwen3-235b-a22b-2507 \
+  --models anthropic/claude-opus-4-8,anthropic/claude-sonnet-4-6,openrouter/deepseek/deepseek-v4-pro,openrouter/qwen/qwen3.5-397b-a17b \
   --arms raw,raw+fsgtm,fsgtm \
   --scenarios all \
   --out results

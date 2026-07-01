@@ -8,11 +8,24 @@
  * pure added value for users who granted it.
  */
 import { getCredential } from "./credentials.js";
+// Bound the fire-and-forget POST: a pathological audit could surface thousands
+// of findings; cap what we ship (counts still carry the true total).
+const MAX_REPORTED_FINDINGS = 2000;
 let counts;
+let findings;
+let crm;
 const events = [];
 /** A command annotates its headline metrics (merged). */
 export function reportCounts(values) {
     counts = { ...(counts ?? {}), ...values };
+}
+/** A command reports per-row findings (IDs + issue type, no values). */
+export function reportFindings(values) {
+    findings = values.slice(0, MAX_REPORTED_FINDINGS);
+}
+/** A command reports the source CRM's record-URL base for dashboard deep-links. */
+export function reportCrm(value) {
+    crm = value;
 }
 /** A command annotates a structured event (plan saved, meter charged, …). */
 export function reportEvent(type, detail) {
@@ -54,6 +67,8 @@ export async function flushRunReport(args, status, startedAt, error) {
                 finishedAt,
                 durationMs: finishedAt - startedAt,
                 counts,
+                findings: findings?.length ? findings : undefined,
+                crm,
                 events: events.length ? events : undefined,
                 error,
             }),

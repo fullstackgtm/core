@@ -7,6 +7,188 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
 
 ## [Unreleased]
 
+### Added
+
+- **`tam accounts` credit-cost preview + spend guard.** Pulling the list costs ~3
+  TheirStack credits/company, so `tam accounts` now prints the cost up front and
+  never spends by surprise: `--dry-run [--usd-per-credit <rate>]` prices the pull
+  AND the full TAM (e.g. "up to 100 ≈ 300 credits; full TAM ~43,517 ≈ 130,551
+  credits (~$5,483)") for **0 credits**, and a pull above `--max-credits` (default
+  150 ≈ 50 companies) requires `--confirm`. The dollar figure appears only with an
+  explicit rate (no fabricated default; TheirStack is ~$0.04–$0.11/credit by tier).
+  `tam populate` also notes where spend lives — the acquire meter governs
+  population, separate from the TheirStack list pull. Library:
+  `theirStackPullCost` + `THEIRSTACK_CREDITS_PER_COMPANY`.
+
+### Changed
+
+- **`tam status` coverage is now classified against the TAM ICP — not a raw
+  account count.** Previously it counted *every* domain-bearing CRM account over
+  the universe, so accounts loaded from any source (off-ICP or not) inflated
+  coverage and could read >100%. Now `tam estimate` stores the ICP filter
+  (`model.targeting`), and `status` classifies each account into **in-TAM /
+  out-of-TAM / unknown** (checked on size + industry; geo and "uses-CRM" aren't on
+  a `CanonicalAccount`, so they need re-enrichment — a `--reverify` pass is
+  planned, and the classifier labels what it checked). Only in-TAM counts toward
+  coverage; off-ICP junk is bucketed out. **Bottom-up vs top-down reconciliation:**
+  the in-TAM count is a floor on the real universe, so when it meets/exceeds the
+  estimate, `status` stops reporting a fake 100% and flips to "the estimate was a
+  floor — your real market is at least N (`reconciledUniverse`); re-estimate for
+  the headroom." ETA now burns on in-TAM accounts/day. New library:
+  `classifyAccount`, `classifyCoverage`, `crmCheckableCriteria`, `coveredAccounts`,
+  `TamTargeting`/`TamClassified` (and `TamModel.targeting`). Legacy models without
+  targeting fall back to counting all accounts, with a "re-estimate to classify"
+  note.
+
+### Added
+
+- **`tam` technographic sourcing via TheirStack — target by CRM-usage, get a real
+  list.** The Explorium firmographic count (NAICS/size/geo) is a weak proxy for a
+  RevOps/CRM-hygiene tool and can't return the list (it 403s on pull). New
+  `--source theirstack` counts companies that actually **use** a CRM/MAP — set
+  `icp.firmographics.technologies` (e.g. `["salesforce","hubspot","pipedrive"]`),
+  mapped to TheirStack `company_technology_slug_or` + employee bounds + country —
+  which is the real buying signal, labeled `provider:theirstack (uses-CRM)`. And a
+  new **`tam accounts --source theirstack`** pulls the actual company list (real
+  names + domains, `--out <csv>` or `--json`, `--max` caps the credit spend), so the
+  TAM is a list you can review and acquire, not just a number. Counting is cheap
+  but not free (TheirStack rejects `limit:0`, so a count returns 1 row ≈ 3 credits;
+  a list pull is ~3 credits/company). New connector
+  `connectors/theirstack.ts` (`theirStackCountCompanies` / `theirStackSearchCompanies`),
+  `icpToTheirStackFilters` + `employeeBandsToRange`, and `login theirstack`.
+  (Verified live: filters + `metadata.total_results`; `limit` must be ≥ 1.)
+
+### Changed
+
+- **`tam estimate` requires a confirmed ANNUAL ACV — no fabricated defaults, and
+  the CRM is not silently the ACV source.** A TAM dollar figure built on a guessed
+  ACV is a false signal, so the `--acv-band smb|mid|enterprise` presets (hardcoded
+  $6k/$24k/$90k) are removed and `estimate` refuses to run without a real ACV. Two
+  confirmed paths, always labeled on the model (`acv.source`): `--acv <annual-usd>`
+  (`"explicit (annual)"`), or `--acv-from-crm --deal-period monthly|quarterly|annual`
+  — the median closed-won deal amount **annualized** by the stated period
+  (`"crm:closed-won (N deals, median $X/monthly ×12 = annual)"`). The period is
+  **required**: a deal amount can be MRR/quarterly/annual and guessing it is a
+  4–12× error (a $15k/mo deal is a $180k ACV). A bare `--provider` is the COVERAGE
+  source and **no longer auto-sets ACV**. **Buyers/account** likewise:
+  `--buyers-per-account <n>`, else the CRM's **average contacts per account**
+  (`"crm:avg-contacts/account (N)"`), else a labeled `"assumption:1-buyer"` — never
+  a silent default of 3. New library helpers `deriveAcvFromClosedWon` /
+  `deriveBuyersPerAccount`; `TamModel.acv.source` and `universe.buyersSource` are
+  new fields (and `acv.band` is gone).
+
+### Fixed
+
+- **`icp eval --golden default` no longer rots with the calendar.** The default
+  golden set's `firstSeen` stamps are relative to a pinned instant
+  (`DEFAULT_GOLDEN_NOW_ISO`, exported), but grading used wall-clock `new Date()`
+  — so freshness decay silently degraded the "fresh → send" rows until the gate
+  started failing (~8 days after the set was authored) on every fresh install
+  and in CI, with no code change. The default set is now graded on its own
+  pinned clock; file-based golden sets still grade against wall time (their
+  timestamps are the caller's).
+
+- **`enrich acquire` (pipe0/Crustdata) over-narrow ICP filter → zero discovery.**
+  Live testing surfaced that a RevOps ICP returned 0 prospects from pipe0/Crustdata
+  even though a title-only search returned plenty — the prime suspect is the
+  industry vocabulary: LinkedIn renamed its industry taxonomy (v1→v2) and the map
+  sent only one generation, so a vendor on the other generation matches nothing.
+  `CRUSTDATA_INDUSTRY` now sends BOTH generations per cluster (e.g. "Software
+  Development" *and* "Computer Software"), OR-matched within the field. (pipe0
+  credits were exhausted mid-investigation, so this is a reasoned fix not yet
+  re-confirmed end-to-end — re-run `enrich acquire --source pipe0` once credits
+  refill; if still zero, the next suspects are the `current_seniority_levels`
+  shape and `locations`. Note `scoreProspectAgainstIcp` backstops persona but NOT
+  industry, so the industry filter is load-bearing.)
+- **`enrich acquire` now surfaces a zero-discovery result** instead of emitting a
+  silent empty plan: when a provider returns 0 prospects it warns that this is
+  usually an over-narrow filter (not an empty market) and points at `icp show`;
+  and when all discovered prospects score below the fit threshold it says so.
+
+### Added
+
+- **`tam` — Total Addressable Market mapping.** Size the reachable market FROM
+  the ICP, then iteratively fill it and track coverage to an ETA. `tam estimate`
+  computes a transparent model (account universe × ACV = TAM, account/per-logo
+  basis by default or `--acv-basis buyer`; contacts = accounts × buyers/account
+  is the population target). The account count is `--accounts <n>` (assumption)
+  or `--source explorium` — a live count of matching **companies** via Explorium
+  `/v1/businesses`, which is the account universe directly. (Verified against the
+  live APIs: people/lead endpoints can't size a market — Explorium `/v1/prospects`
+  `total_results` equals the page size and pipe0/Crustdata returns only a cursor —
+  so `--source pipe0` for estimate is rejected; pipe0 remains a discovery/
+  population source. The businesses count omits `size`, which otherwise caps the
+  total.) Explorium caps the count at 60,000; a saturated reading is surfaced as a
+  floor (`provider:explorium (≥60k cap — floor)` + a warning to narrow the ICP).
+  The model always labels `accountsSource` provider-vs-assumption. Optional citable
+  cross-checks sit beside the bottom-up number. `tam populate --cron` schedules
+  governed `enrich acquire --save` (plan-only; see below). `tam status --save`
+  stamps a coverage timeline (CRM accounts-with-domain + contacts vs. the
+  universe, `$ covered` proportional, what the campaign added since baseline);
+  `tam report` renders a markdown burn-up. `status`/`report` project a linear
+  accounts/day ETA and refuse to project (honest "not enough history") below two
+  readings or a flat rate. Coverage + ETA are deterministic (no LLM). Library:
+  `estimateTam`, `computeCoverage`, `projectEta`, `tamReportToMarkdown`, the
+  store, and the count probe (`probeExploriumBusinessCount` +
+  `EXPLORIUM_BUSINESS_COUNT_CAP`). See [docs/tam.md](./docs/tam.md).
+- **Source connectors for `signals` (Phase 1).** `signals fetch` gains an
+  additive, opt-in `--connector <id>[,<id>] [--connector-opt k=v …]` that pulls
+  signals from connected platforms instead of only ATS boards and hand-staged
+  `--from` files. Three connectors ship: `file` (local JSON/JSONL — also the
+  webhook landing-zone spool, no auth), `serpapi-news` (funding/company news via
+  a news REST API, key through the credential ladder), and `hubspot-forms`
+  (first-party `demand` from recent form submissions, reusing the existing
+  HubSpot login). Secrets resolve through the env → login → broker ladder, never
+  argv; `--connector-opt` carries non-secret knobs only. **Default behavior is
+  unchanged** when no `--connector` is passed. Connectors are read-only re: the
+  CRM and run through the same evidence-gate/dedup/weight pipeline as `--from`
+  (the `readStagedSignals` row validator is now the shared `stagedRowToSignal`).
+  Library: `connectors/signalSources.ts` (`listSignalSources`, `getSignalSource`,
+  `fileSource`, `serpapiNewsSource`, `hubspotFormsSource`), `stagedRowToSignal` +
+  `StagedSignalRow` from `signals.ts`. Design:
+  [docs/spec-connectors-signals-outbound.md](../../docs/spec-connectors-signals-outbound.md)
+  (the connector taxonomy + the Phase 2/3 webhook-spool and governed-channel plan).
+- **Webhook spool format + conventional landing zone (signals Phase 2).**
+  `--connector file` with no path now reads the conventional spool directory
+  (`<profile home>/signals/spool`, via `signalsSpoolDir`) — every `*.jsonl` in
+  it, name-sorted, so a webhook receiver can append one row per event (per
+  source: `rb2b.jsonl`, `hubspot.jsonl`, …) and they all land in one fetch. The
+  `file` connector reads a directory as well as a single file. New
+  [docs/signal-spool-format.md](./docs/signal-spool-format.md) documents the row
+  format, the landing zone, re-read/retention semantics, and per-platform
+  payload mappings (RB2B, Trigify, HubSpot form webhook). Per the open-core
+  boundary the format + reader are open; the always-on receiver is a hosted
+  concern — the package ships no receiver. Also fixes a latent filter bug:
+  explicitly-provided rows (`--from`, connectors) whose bucket has no configured
+  `sources` (notably `demand`) were silently dropped unless `--bucket` was given;
+  now only an explicit `--bucket` narrows them, so spool/`hubspot-forms` `demand`
+  signals flow by default.
+- **Outbox channel — governed send terminus (signals Phase 3).** `apply
+  --channel outbox` renders each APPROVED drafted opener to a local outbox
+  (`<profile home>/signals/outbox/<channel>.jsonl`, via `signalsOutboxDir`) for a
+  downstream sender to drain — and **transmits nothing**, preserving the "drafts
+  everything, transmits nothing" invariant (the send-side mirror of the spool).
+  The outbox channel is a `GtmConnector` whose `applyOperation` renders instead
+  of writing a CRM, so it reuses the entire governed apply path (approval set,
+  integrity verification, idempotency, run recording) with no change to the apply
+  engine; `apply` now takes `--provider <crm>` OR `--channel <id>`. It only
+  renders `draft:`-policy `create_task` ops (any other op is skipped) and is
+  idempotent on the operation id. New
+  [docs/outbox-format.md](./docs/outbox-format.md). Per the open-core boundary the
+  governed artifact + format are open; the always-on sender that actually
+  transmits (ESP/LinkedIn) is a hosted concern — no sender ships in the package.
+  Library: `connectors/outboxChannel.ts` (`createOutboxChannelConnector`,
+  `createChannelConnector`, `listOutbox`, `OutboxEntry`), `signalsOutboxDir`.
+
+### Changed
+
+- **`enrich acquire --save` is now schedulable** (for `tam populate`). It joins
+  the read/plan-side schedule allowlist in its plan-producing form ONLY — a
+  scheduled `enrich acquire` must include `--save` (rejected otherwise), so each
+  firing queues a `needs_approval` lead plan and writes nothing. The acquire
+  meter is still charged only at apply, and apply stays a separate human gate
+  (`apply --plan-id`, re-checked approved). Scheduling never auto-approves.
+
 ## [0.43.0] — 2026-06-25
 
 ### Added

@@ -11,12 +11,49 @@ import { getCredential } from "./credentials.ts";
 
 type RunEvent = { ts: number; type: string; detail?: string };
 
+/**
+ * Per-row finding for the hosted run timeline. IDs + issue type ONLY — no field
+ * values ever leave the CLI, keeping the audit's row data on the operator's side
+ * while still giving the dashboard navigable, filterable detail.
+ */
+export type RunFinding = {
+  objectType: string;
+  objectId: string;
+  severity: string;
+  ruleId: string;
+  field?: string;
+  operation?: string;
+};
+
+/**
+ * Where a run's findings live in the source CRM, so the dashboard can deep-link
+ * each record. `recordUrlBase` is the provider's record URL prefix; the
+ * dashboard appends the per-object path. Just an URL prefix — no record data.
+ */
+export type RunCrm = { provider: string; recordUrlBase: string };
+
+// Bound the fire-and-forget POST: a pathological audit could surface thousands
+// of findings; cap what we ship (counts still carry the true total).
+const MAX_REPORTED_FINDINGS = 2000;
+
 let counts: Record<string, unknown> | undefined;
+let findings: RunFinding[] | undefined;
+let crm: RunCrm | undefined;
 const events: RunEvent[] = [];
 
 /** A command annotates its headline metrics (merged). */
 export function reportCounts(values: Record<string, unknown>): void {
   counts = { ...(counts ?? {}), ...values };
+}
+
+/** A command reports per-row findings (IDs + issue type, no values). */
+export function reportFindings(values: RunFinding[]): void {
+  findings = values.slice(0, MAX_REPORTED_FINDINGS);
+}
+
+/** A command reports the source CRM's record-URL base for dashboard deep-links. */
+export function reportCrm(value: RunCrm): void {
+  crm = value;
 }
 
 /** A command annotates a structured event (plan saved, meter charged, …). */
@@ -65,6 +102,8 @@ export async function flushRunReport(
         finishedAt,
         durationMs: finishedAt - startedAt,
         counts,
+        findings: findings?.length ? findings : undefined,
+        crm,
         events: events.length ? events : undefined,
         error,
       }),

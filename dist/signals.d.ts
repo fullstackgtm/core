@@ -133,6 +133,41 @@ export declare function buildSignalsFromAts(rawJobs: Array<AtsJob & {
     priorSignals?: Signal[];
 }): Signal[];
 /**
+ * One staged signal row: the platform-agnostic intake shape every NON-job source
+ * produces (a source connector's output, or a `--from` JSON row). It carries the
+ * evidence anchor (`quote`) but none of the derived fields (`id`, `weight`,
+ * `source`) — `stagedRowToSignal` fills those so there is ONE place that gates
+ * evidence and stamps identity, whether the row came from a file or an API.
+ */
+export type StagedSignalRow = {
+    bucket: SignalBucket;
+    accountDomain: string;
+    trigger: string;
+    /** VERBATIM evidence — required, non-empty. */
+    quote: string;
+    sourceUrl?: string;
+    /** ISO 8601; defaults to run time when absent. */
+    firstSeen?: string;
+    /** Optional explicit weight; defaults to the bucket's configured weight. */
+    weight?: number;
+};
+/**
+ * Validate one loosely-typed staged row and turn it into a `Signal`, applying
+ * the verbatim-evidence gate (a row with no quote is rejected, never faked) and
+ * the same id/normalization logic the ATS path uses. `errorLabel` lets the
+ * caller produce a precise message ("--from f.json: row 3", "serpapi-news row 0")
+ * since both the `--from` ingest and the source-connector registry funnel here.
+ *
+ * Throws on a malformed row; returns the canonical `Signal` on success. Bucket
+ * FILTERING (skip rows outside a `--bucket` selection) stays with the caller —
+ * this function is per-row validation only.
+ */
+export declare function stagedRowToSignal(entry: Record<string, unknown>, opts: {
+    now: Date;
+    source: string;
+    errorLabel: string;
+}): Signal;
+/**
  * Split candidate signals into fresh vs. deduped against prior signals. A
  * candidate is deduped when a prior signal shares its `dedupKey`
  * (account|bucket|trigger) AND that prior was seen inside `windowDays` — the
@@ -160,6 +195,25 @@ export declare function dedupeSignals(candidates: Signal[], priorSignals: Signal
  */
 export declare function computeWeights(config: SignalsConfig, outcomes: SignalOutcome[], signalsById?: Map<string, Signal>): Record<SignalBucket, number>;
 export declare function signalsDir(baseDir?: string): string;
+/**
+ * Conventional webhook landing zone: `<signals>/spool`, profile-scoped. A
+ * webhook receiver (hosted, or the operator's own glue) appends one JSONL row
+ * per event to a `*.jsonl` file here; `signals fetch --connector file` reads the
+ * whole directory when given no explicit path. The CLI never writes here — the
+ * receiver does — so this is just the agreed-upon location, not a managed store.
+ * Per-source files (`rb2b.jsonl`, `hubspot.jsonl`, …) coexist. See
+ * docs/signal-spool-format.md.
+ */
+export declare function signalsSpoolDir(baseDir?: string): string;
+/**
+ * Conventional outbox: `<signals>/outbox`, profile-scoped — the SEND-side mirror
+ * of the spool. `apply --channel outbox` renders each APPROVED drafted opener to
+ * a `<channel>.jsonl` file here (one row per touch); a downstream sender (hosted,
+ * or the operator's own) drains it. The CLI WRITES governed, approved send
+ * intents here but TRANSMITS NOTHING — the "drafts everything, transmits nothing"
+ * invariant holds. See docs/outbox-format.md.
+ */
+export declare function signalsOutboxDir(baseDir?: string): string;
 export type SignalRun = {
     id: string;
     runLabel: string;

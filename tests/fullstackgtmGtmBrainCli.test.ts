@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/cli.ts";
 import { createFilePlanStore } from "../src/planStore.ts";
-import { createFileSignalStore } from "../src/signals.ts";
+import { createFileSignalStore, signalsSpoolDir } from "../src/signals.ts";
 import { createFileJudgeStore } from "../src/judge.ts";
+import { listOutbox } from "../src/connectors/outboxChannel.ts";
 
 // The GTM-brain nightly chain end-to-end through the CLI router, deterministic
 // (no LLM key): signals fetch --save (staged ingest, no network) -> icp judge
@@ -179,6 +180,64 @@ test("nightly chain: signals fetch --save -> icp judge --save -> draft --save st
   });
 });
 
+// Phase-3 governed send: draft -> approve -> `apply --channel outbox` renders the
+// approved opener to the outbox and TRANSMITS NOTHING (no CRM provider involved).
+test("draft -> approve -> apply --channel outbox renders the opener; transmits nothing", async () => {
+  await withHome(async (home) => {
+    const staged = stagedSignalsFile(home);
+    const snapPath = join(home, "crm.json");
+    writeFileSync(
+      snapPath,
+      JSON.stringify({
+        generatedAt: "2026-06-23T00:00:00.000Z",
+        provider: "hubspot",
+        users: [],
+        accounts: [{ id: "acct-apex", name: "ApexNorth", domain: "apexnorth.agency" }],
+        contacts: [{ id: "con-apex", accountId: "acct-apex", email: "vp@apexnorth.agency", title: "VP Growth" }],
+        deals: [],
+        activities: [],
+      }),
+    );
+    await cli(["signals", "fetch", "--bucket", "funding,job", "--from", staged, "--label", "run1", "--save"]);
+    await cli(["icp", "judge", "--signals-from", "run1", "--input", snapPath, "--label", "judge1", "--save"]);
+    const draftRun = await cli(["draft", "--from-judge", "judge1", "--channel", "email", "--save"]);
+    assert.equal(draftRun.exitCode, 0, draftRun.stderr);
+
+    const planStore = createFilePlanStore();
+    const planId = (await planStore.list())[0].plan.id;
+
+    // Approve, then apply through the outbox channel (no --provider).
+    const approve = await cli(["plans", "approve", planId, "--operations", "all"]);
+    assert.equal(approve.exitCode, 0, approve.stderr);
+    const applied = await cli(["apply", "--plan-id", planId, "--channel", "outbox"]);
+    assert.equal(applied.exitCode, 0, applied.stderr);
+    assert.match(applied.stdout + applied.stderr, /outbox|transmitted/i);
+
+    // The approved opener landed in the outbox, addressed to the resolved contact.
+    const entries = listOutbox();
+    assert.equal(entries.length, 1, "one opener rendered to the outbox");
+    assert.equal(entries[0].channel, "email");
+    assert.equal(entries[0].objectType, "contact");
+    assert.equal(entries[0].objectId, "con-apex");
+    assert.ok(entries[0].body.length > 0, "carries the opener body");
+    assert.ok((entries[0].evidenceIds ?? []).length >= 1, "carries the grounding evidence id");
+
+    // The plan store transitions to applied — no CRM provider was ever involved.
+    const after = (await planStore.list())[0];
+    assert.equal(after.status, "applied");
+    assert.equal(after.runs.at(-1)!.provider, "outbox");
+  });
+});
+
+test("apply requires a target: neither --provider nor --channel errors", async () => {
+  await withHome(async () => {
+    await assert.rejects(
+      () => cli(["apply", "--plan", "/tmp/none.json", "--approve", "all"]),
+      /--provider .* or --channel/,
+    );
+  });
+});
+
 test("`signals fetch` WITHOUT --save produces NO plan (read-only re: CRM)", async () => {
   await withHome(async (home) => {
     const staged = stagedSignalsFile(home);
@@ -214,5 +273,40 @@ test("`draft --help` is help-before-network (prints usage, no plan, exit 0)", as
     assert.equal(res.exitCode, 0);
     assert.match(res.stdout, /draft \[--from-judge/);
     assert.equal((await createFilePlanStore().list()).length, 0);
+  });
+});
+
+// Phase-2 spool: `--connector file` zero-arg reads the conventional landing zone
+// (<home>/signals/spool), every *.jsonl in it. Regression guard for the bucket
+// fix: a `demand` row (a bucket with NO configured `sources`) must still flow
+// when no --bucket is given — only --bucket narrows explicitly-provided rows.
+test("signals fetch --connector file reads the conventional spool; demand rows flow, --bucket narrows", async () => {
+  await withHome(async () => {
+    const spool = signalsSpoolDir();
+    mkdirSync(spool, { recursive: true });
+    writeFileSync(
+      join(spool, "rb2b.jsonl"),
+      `{"bucket":"company","accountDomain":"globex.com","trigger":"visited pricing","quote":"globex.com — viewed /pricing"}\n`,
+    );
+    writeFileSync(
+      join(spool, "hubspot.jsonl"),
+      `{"bucket":"demand","accountDomain":"initech.com","trigger":"form: Demo","quote":"Submitted \\"Demo\\" — vp@initech.com"}\n`,
+    );
+
+    const all = await cli(["signals", "fetch", "--connector", "file"]);
+    assert.equal(all.exitCode, 0, all.stderr);
+    const rows = JSON.parse(all.stdout) as Array<{ accountDomain: string; bucket: string; source: string }>;
+    assert.equal(rows.length, 2, `expected both spool rows, got ${all.stdout}`);
+    assert.deepEqual(
+      rows.map((r) => r.bucket).sort(),
+      ["company", "demand"],
+      "the demand row (no configured sources) must flow without --bucket",
+    );
+    assert.ok(rows.every((r) => r.source === "file"));
+
+    const narrowed = await cli(["signals", "fetch", "--connector", "file", "--bucket", "demand"]);
+    const only = JSON.parse(narrowed.stdout) as Array<{ accountDomain: string; bucket: string }>;
+    assert.equal(only.length, 1);
+    assert.equal(only[0].accountDomain, "initech.com");
   });
 });

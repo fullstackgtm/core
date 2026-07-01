@@ -56,6 +56,28 @@ export declare function fetchPipe0CrustdataProspects(opts: {
     apiBaseUrl?: string;
     fetchImpl?: FetchImpl;
 }): Promise<Prospect[]>;
+export declare const EXPLORIUM_BUSINESS_COUNT_CAP = 60000;
+export type BusinessCountProbe = {
+    /** matching companies (the account universe); == cap when saturated. */
+    total: number;
+    /** true when total hit EXPLORIUM_BUSINESS_COUNT_CAP — treat total as a lower bound. */
+    capped: boolean;
+};
+/**
+ * Count the COMPANIES (accounts) matching an ICP firmographic via Explorium
+ * /v1/businesses. Returns the real total (capped at 60k — `capped` flags the
+ * ceiling) or null if the response carries no `total_results`. Use
+ * `icpToExploriumBusinessFilters` to build `filters` (firmographic field names
+ * differ from /v1/prospects).
+ */
+export declare function probeExploriumBusinessCount(opts: {
+    apiKey: string;
+    filters: Record<string, {
+        values?: string[];
+    }>;
+    apiBaseUrl?: string;
+    fetchImpl?: FetchImpl;
+}): Promise<BusinessCountProbe | null>;
 export declare function pipe0ResolveWorkEmails(opts: {
     apiKey: string;
     prospects: Prospect[];

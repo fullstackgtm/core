@@ -149,6 +149,43 @@ accounts distort the queue.
 
 ---
 
+## Recipe 6 — Size your TAM, then fill it on a schedule
+
+**Goal:** turn the ICP into a defensible market size, then close the gap to it
+over weeks — with a number for "how far along am I."
+
+```bash
+# 1. Estimate the universe FROM the ICP. Either probe a provider for the
+#    ICP-match count, or pass --accounts from a known segment. Record a baseline.
+fullstackgtm tam estimate --source explorium --provider hubspot --acv 180000
+#    → accounts: matching COMPANIES (Explorium /v1/businesses) = the account universe.
+#    → ACV: a real ANNUAL figure you confirm (--acv), or --acv-from-crm
+#      --deal-period monthly|quarterly|annual to derive+annualize from closed-won.
+#      (--provider is your coverage source, not your ACV — it won't auto-set it.)
+#    → buyers/account: CRM avg-contacts/account (or --buyers-per-account); labeled.
+#    → TAM model: accounts × ACV = $; contacts = accounts × buyers (population target)
+
+# 2. Schedule the population — plan-only acquire, apply stays a human gate.
+fullstackgtm tam populate --cron "0 7 * * 1-5" --source pipe0 --provider hubspot
+fullstackgtm schedule install
+
+# 3. Each cycle: approve the morning's lead plan (Recipe 1's tail), then apply.
+fullstackgtm plans list && fullstackgtm plans approve <id> --operations all
+fullstackgtm apply --plan-id <id> --provider hubspot
+
+# 4. Track where you're getting to — stamp a coverage reading; once a couple
+#    accumulate, report projects a burn-up + ETA to full coverage.
+fullstackgtm tam status --provider hubspot --save
+fullstackgtm tam report > tam-report.md
+```
+
+The estimate is honest about its source (provider count vs. assumption), the
+population never auto-writes (the meter is charged only at apply), and the ETA is
+refused rather than faked until the timeline shows real movement. See
+[tam.md](./tam.md).
+
+---
+
 ## The boundary, restated
 
 - **Read freely. Write only through `plans approve → apply`.** Never bypass it.
