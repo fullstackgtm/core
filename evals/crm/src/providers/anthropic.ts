@@ -24,7 +24,10 @@ export async function runAnthropicAgent(opts: AgentLoopOptions): Promise<AgentLo
     turns += 1;
     const response = await client.messages.create({
       model: opts.model,
-      max_tokens: 8192,
+      // Fable 5 bills always-on thinking into max_tokens; without headroom a
+      // long thinking turn truncates with no tool call and scores as a model
+      // failure. Other models keep the original cap for comparability.
+      max_tokens: opts.model.startsWith("claude-fable") ? 16384 : 8192,
       system: opts.system,
       tools,
       messages,

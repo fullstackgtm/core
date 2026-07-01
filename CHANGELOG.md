@@ -7,6 +7,17 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
 
 ## [Unreleased]
 
+## [0.44.0] — 2026-07-01
+
+### Added
+
+- **Paired CLI auto-links HubSpot to the hosted deployment.** When a broker
+  credential exists (a paired CLI), `audit --provider hubspot` hands the local
+  HubSpot private-app token to the deployment over the broker channel
+  (best-effort, with a printed notice), so the hosted Integrations page shows
+  HubSpot connected and syncing without a separate OAuth setup. Unpaired CLIs
+  are unaffected — pairing remains opt-in via `login --via`.
+
 ### Added
 
 - **`tam accounts` credit-cost preview + spend guard.** Pulling the list costs ~3

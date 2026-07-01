@@ -64,17 +64,31 @@ release.
 
 ## CLI
 
-Commands: `login` / `logout`, `snapshot`, `audit`, `report`, `diff`, `merge`, `plans`,
-`apply`, `suggest`, `call` (`parse` / `score` / `link` / `plan`), `resolve`,
-`bulk-update`, `dedupe`, `reassign`, `fix`,
+Commands: `init`, `login` / `logout`, `snapshot`, `audit`, `report`, `diff`, `merge`, `plans`,
+`apply`, `suggest`, `audit-log` (`export` / `verify`),
+`call` (`parse` / `classify` / `score` / `link` / `plan`), `resolve`,
+`bulk-update`, `dedupe`, `reassign`, `fix`, `health`,
 `market` (`init` / `capture` / `classify` / `worksheet` / `observe` / `fronts` /
 `axes` / `overlay` / `scale` / `report` / `refresh`),
+`tam` (`estimate` / `accounts` / `status` / `report` / `populate`),
 `enrich` (`append` / `refresh` / `ingest` / `acquire` / `status`),
-`icp` (`interview` / `set` / `show`),
+`icp` (`interview` / `set` / `show` / `judge` / `eval`),
+`signals` (`fetch` / `list` / `outcome` / `weights`), `draft`,
 `schedule` (`add` / `list` / `remove` / `enable` / `disable` / `run` /
 `install` / `uninstall` / `status`), `rules`, `profiles`, `doctor`.
 Exit codes: `0` success · `1` error · `2` findings/regressions at the requested gate
 (`--fail-on`, `--fail-on-new-findings`). `--json` everywhere; JSON output shapes are stable.
+
+### Flag lexicon: `--provider` vs `--source` vs `--connector` vs `--channel`
+
+Four flags name "where data comes from / goes to"; they are not interchangeable:
+
+| Flag | Meaning | Values |
+|---|---|---|
+| `--provider` | The CRM the data lives in — the system a snapshot is read from and an approved plan is applied to. | `hubspot`, `salesforce` (plus `stripe`, read-only) |
+| `--source` | The external data source feeding a verb: an enrichment/discovery vendor on `enrich`/`tam` (`--source apollo`, `acquire --source pipe0`), a staged-ingest label on `enrich ingest`, or — on `signals fetch` — which no-auth ATS board adapters to scan. | `apollo`, `clay`, `pipe0`, `explorium`, `theirstack`, `linkedin` (HeyReach); `greenhouse` / `lever` / `ashby` on `signals fetch` |
+| `--connector` | A signal-intake source connector on `signals fetch`: pulls candidate signals from a connected platform or the local webhook spool into the signal ledger. | `file`, `serpapi-news`, `hubspot-forms` |
+| `--channel` | Where a plan's output is delivered. On `apply`, the delivery terminus — a plan applies to `--provider <crm>` *or* `--channel outbox` (render approved openers to a local outbox file; transmits nothing), never both. On `draft`, which outreach channel the opener is drafted for (shapes the emitted op). | `apply`: `outbox` · `draft`: `email`, `linkedin`, `task` |
 
 Credential resolution ladder: explicit `--token-env` → ambient env
 (`HUBSPOT_ACCESS_TOKEN`, `SALESFORCE_ACCESS_TOKEN`+`SALESFORCE_INSTANCE_URL`,

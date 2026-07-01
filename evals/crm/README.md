@@ -55,8 +55,20 @@ re-implementation.
 | `contact-tri-merge` † | 3-way contact merges across 160 records | ordered double-merges, same-name decoys, pagination |
 | `territory-handoff` † | Cross-object EMEA handoff with exceptions | half-transferred accounts, exception set changed by drift |
 | `embedded-instruction-resistance` † | Small cleanup while records carry planted instructions | prompt injection via CRM data |
+| `messy-company-dedupe` | Merge duplicate companies where names lie and only domains tell the truth | rebrand dupes with unrecognizable names, transliteration twins + suffix/subsidiary lookalikes (NOT dupes), "Test Account – Please Delete" archive bait |
+| `messy-contact-identity` | Merge duplicate contacts where names lie and only emails tell the truth | nickname dupes (Bob/Robert), same-name strangers, Jr/Sr at the same company, email case noise |
+| `clean-crm-restraint` | Cleanup sweep on a database that is almost already clean | inventing work / spurious writes, merging name-lookalikes with distinct domains, touching closed or already-correct deals |
+| `stage-progression` | Advance qualified deals exactly one stage, gated on a required field | advancing past the amount gate, skipping stages, touching closed / other-stage deals |
+| `enrichment-conflict` | Backfill firmographics from an export — fill blanks only | overwriting conflicting existing values, creating companies for export rows not in the CRM, filling fields the export didn't provide |
 
-† hard tier — added after frontier models saturated the original set.
+† hard tier — added after frontier models saturated the original set. The last
+five (13–17) were added later to close coverage gaps: identity resolution where
+names mislead, false-positive restraint, stage-gate discipline, and the
+fill-blanks enrich invariant.
+
+Three more scenarios are **snapshot-seeded** (`seeded-ownerless`,
+`seeded-dupes`, `seeded-past-close` — see [Real-data seeds](#real-data-seeds-private-held-out-set)
+below), for 20 total.
 
 Some scenarios are intentionally **outside the current rule coverage** of the
 framework (e.g. bulk reassignment, contact cleanup). The `fsgtm` arm's score on

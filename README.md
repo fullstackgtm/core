@@ -38,13 +38,17 @@ It installs a compact operating guide ([skills/fullstackgtm/SKILL.md](./skills/f
 ## Five-minute loop
 
 ```bash
-# 0. No credentials? Try it on a realistic, deliberately messy demo CRM
+# 0. Scaffold a workspace: a starter icp.json, an enrich.config.json acquire
+#    preset, and a PLAYBOOK.md wired for your provider + discovery source
+npx fullstackgtm init --provider hubspot --source pipe0
+
+# 1. No credentials? Try it on a realistic, deliberately messy demo CRM
 npx fullstackgtm audit --demo
 
-# 1. Audit your real HubSpot portal (private app token or OAuth access token)
+# 2. Audit your real HubSpot portal (private app token or OAuth access token)
 HUBSPOT_ACCESS_TOKEN=pat-... npx fullstackgtm audit --provider hubspot --out plan.json
 
-# 2. Review plan.json, then apply ONLY the operations you approve
+# 3. Review plan.json, then apply ONLY the operations you approve
 HUBSPOT_ACCESS_TOKEN=pat-... npx fullstackgtm apply \
   --plan plan.json --provider hubspot \
   --approve op_abc123,op_def456 \
@@ -52,6 +56,8 @@ HUBSPOT_ACCESS_TOKEN=pat-... npx fullstackgtm apply \
 ```
 
 Nothing is ever written without an explicit `--approve`. Operations whose value is a human decision (`requires_human_*` placeholders, e.g. which owner to assign) are refused unless you supply a concrete `--value` override.
+
+`init` keeps any files you already have (`--force` overwrites) and works with `--source pipe0|explorium|linkedin` and `--provider hubspot|salesforce`. The PLAYBOOK.md it writes wires the cold-start and outbound-loop recipes to your workspace; the full play set — cold start, trigger-based outbound, scheduling, ABM, hygiene-gating, TAM — is [docs/recipes.md](./docs/recipes.md).
 
 ## Call workflows: calls become governed evidence
 

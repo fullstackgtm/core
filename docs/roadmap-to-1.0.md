@@ -140,8 +140,38 @@ outward, one layer per release, each consolidating before the next expanded:
   broker-https enforcement, the build/CI dist-integrity gate (published dist is
   provably from source), Salesforce-merge capability matrix.
 
+## 0.29 → 0.43 — from hygiene to the full outbound loop, as shipped
+
+The next train extended the governed spine from *fixing the CRM* to *filling
+it and acting on it*, without ever loosening the write gate:
+
+- **0.29–0.34** — market-map maturation (config suggestion + taxonomy types,
+  sourcing helpers, competitor discovery, vendor logos/scale in the report)
+  plus call-type classification with type-specific coaching rubrics (0.32);
+  Salesforce `dedupe`/`merge_records` via SOAP and pipeline-aware closed/won
+  detection (0.30).
+- **0.35–0.36** — DX cohesion: progressive-disclosure help, summary-first
+  `audit` with next-step guidance; the engagement workspace — a deterministic
+  `health` verb over a per-profile timeline.
+- **0.37–0.39** — acquire: `enrich acquire` (net-new, ICP-targeted,
+  resolve-first deduped, metered lead creation), lead assignment policies so
+  leads are never born ownerless, the LinkedIn (HeyReach) discovery source
+  with email resolution, and run observability for broker-paired CLIs.
+- **0.40** — Salesforce reaches full write parity with HubSpot
+  (`create_record`); HubSpot date-field writes no longer false-conflict.
+- **0.41** — signal-based outbound: `signals fetch/list/outcome/weights`,
+  `icp judge`/`icp eval` (timing × fit × memory, golden-set calibration
+  gate), `draft` (trigger-grounded openers as governed plans), and the LLM
+  base-URL override.
+- **0.42** — bulk apply for lead creation (HubSpot batch + Salesforce
+  composite).
+- **0.43** — the on-ramp and the seams: `init` workspace scaffolding,
+  `docs/recipes.md` (five composable plays), and the contact/account seam
+  campaign — contact-granular outbound end to end, account-level acquire for
+  ABM, `health` by object type.
+
 The known-gaps list below predates these layers and has been re-verified
-against the 0.28 surface: still accurate, still open.
+against the 0.43 surface (2026-07): still accurate, still open.
 
 ## Known real-portal gaps to close before 1.0
 
