@@ -154,6 +154,19 @@ connector produces, so both paths dedup against each other.
 | `quote` | `"Submitted \"<form name>\" — <email>"` |
 | `firstSeen` | submission timestamp (ISO 8601) |
 
+## One container convention across staged intake
+
+The spool CONTAINER (JSONL one-object-per-line; JSON array accepted; a
+directory means every `*.jsonl` / `*.json` file in it, name-sorted) is shared
+by every staged-file intake path, not just `--connector file`:
+
+- `signals fetch --from <path>` — rows are staged signal rows (this doc's table);
+- `enrich ingest <path> --source <id>` — rows are that source's enrichment rows;
+- `market observe --from <path>` — each object is one observation-set envelope.
+
+Each verb keeps its original single-file `.json` / `.csv` handling unchanged;
+the row schema stays the verb's own. Shared reader: `src/spoolFiles.ts`.
+
 ## See also
 
 - `docs/api.md` — the `signals` verb and the `SignalSourceConnector` contract.

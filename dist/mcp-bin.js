@@ -7,8 +7,8 @@ const MISSING_PEER_HELP = `The MCP server needs the optional peer dependencies @
 In a project:
   npm install fullstackgtm @modelcontextprotocol/sdk zod
 
-Zero-install:
-  npx -p fullstackgtm -p @modelcontextprotocol/sdk -p zod fullstackgtm-mcp`;
+Zero-install (the fullstackgtm-mcp wrapper package bundles the peers):
+  npx -y fullstackgtm-mcp`;
 function isMissingPeerError(error) {
     if (!(error instanceof Error))
         return false;

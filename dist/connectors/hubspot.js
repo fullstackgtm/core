@@ -89,7 +89,7 @@ export function createHubspotConnector(options) {
         }
         return map;
     }
-    async function list(path) {
+    async function list(path, onPage) {
         const results = [];
         let after;
         const seen = new Set();
@@ -104,12 +104,18 @@ export function createHubspotConnector(options) {
             const separator = path.includes("?") ? "&" : "?";
             const data = await request(`${path}${after ? `${separator}after=${encodeURIComponent(after)}` : ""}`);
             results.push(...(data.results ?? []));
+            try {
+                onPage?.(results.length);
+            }
+            catch {
+                // progress is presentation-only; never let it fail a pull
+            }
             after = data.paging?.next?.after;
         } while (after);
         return results;
     }
     async function assembleSnapshot(fetchObjects) {
-        const owners = await list("/crm/v3/owners?limit=100");
+        const owners = await list("/crm/v3/owners?limit=100", (fetched) => options.onProgress?.({ objectType: "user", fetched }));
         const users = owners
             .filter((owner) => owner.id)
             .map((owner) => ({
@@ -235,7 +241,8 @@ export function createHubspotConnector(options) {
         };
     }
     async function fetchSnapshot() {
-        return assembleSnapshot((objectType, properties, withAssociations) => list(`/crm/v3/objects/${objectType}?limit=100&properties=${properties}${withAssociations ? "&associations=companies" : ""}`));
+        const canonicalType = { companies: "account", contacts: "contact", deals: "deal" };
+        return assembleSnapshot((objectType, properties, withAssociations) => list(`/crm/v3/objects/${objectType}?limit=100&properties=${properties}${withAssociations ? "&associations=companies" : ""}`, (fetched) => options.onProgress?.({ objectType: canonicalType[objectType], fetched })));
     }
     const MODIFIED_DATE_PROPERTIES = {
         companies: "hs_lastmodifieddate",

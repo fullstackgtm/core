@@ -40,9 +40,11 @@ export type ScheduleRunRecord = {
      * recorded for visibility but nothing ran. Reasons: "plan_not_approved"
      * (scheduled apply against a plan that is not approved — there is no flag
      * that relaxes this), "not_schedulable" (the stored argv no longer passes
-     * the allowlist, e.g. after a hand edit of schedules.json).
+     * the allowlist, e.g. after a hand edit of schedules.json),
+     * "duplicate_firing" (a cron-triggered run already recorded in this minute
+     * — launchd can double-trigger the Vixie dom+dow OR corner).
      */
-    noopReason?: "plan_not_approved" | "not_schedulable";
+    noopReason?: "plan_not_approved" | "not_schedulable" | "duplicate_firing";
 };
 export declare function scheduleId(label: string, cron: string, argv: string[], createdAt: string): string;
 /**
@@ -158,3 +160,79 @@ export declare function renderManagedBlock(profile: string, entries: ScheduleEnt
  * Idempotent: re-applying the same block yields identical content.
  */
 export declare function replaceManagedBlock(existing: string, profile: string, block: string | null): string;
+/**
+ * One launchd StartCalendarInterval dict: every present key must match (AND),
+ * a missing key is a wildcard, and an array of dicts fires when ANY dict
+ * matches. Weekday 0 is Sunday, as in cron.
+ */
+export type LaunchdCalendarInterval = {
+    Minute?: number;
+    Hour?: number;
+    Day?: number;
+    Weekday?: number;
+    Month?: number;
+};
+/**
+ * Compile a cron expression to StartCalendarInterval dicts. Full-range fields
+ * (`*`, but also spellings like `0-59`) are omitted (launchd wildcard); the
+ * rest cross-product, capped so a dense expression cannot render a megabyte
+ * plist. Vixie day semantics: when day-of-month AND day-of-week are both
+ * restricted, either may match — launchd ANDs keys within one dict, so that
+ * becomes the union of a Day dict set and a Weekday dict set. A date matching
+ * both sets makes launchd trigger twice in the same minute; the run entry
+ * point drops the second via isDuplicateCronFiring.
+ */
+export declare function cronToCalendarIntervals(cron: CronExpression, cap?: number): LaunchdCalendarInterval[];
+/**
+ * True when a cron-triggered run was already recorded in `firedAt`'s minute.
+ * The `schedule run` entry point checks this for trigger:cron so a launchd
+ * double-trigger (dom+dow OR corner above) records a duplicate_firing no-op
+ * instead of running the command twice. Manual runs are never deduplicated.
+ */
+export declare function isDuplicateCronFiring(runs: ScheduleRunRecord[], firedAt: string): boolean;
+/** Reverse-DNS namespace for one profile's agents; install/uninstall own this prefix wholesale. */
+export declare function launchdAgentPrefix(profile: string): string;
+export declare function launchdLabel(profile: string, scheduleEntryId: string): string;
+/**
+ * Render one LaunchAgent plist. ProgramArguments is an argv array — launchd
+ * execs it directly, no shell, so there is no quoting/injection surface at
+ * all (values are XML-escaped for the document, nothing more).
+ */
+export declare function renderLaunchdPlist(options: {
+    label: string;
+    programArguments: string[];
+    calendarIntervals: LaunchdCalendarInterval[];
+    environment?: Record<string, string>;
+    standardOutPath?: string;
+    standardErrorPath?: string;
+}): string;
+export type LaunchdIo = {
+    /** Plist file names currently in the agents directory. */
+    list(): string[];
+    write(fileName: string, content: string): void;
+    remove(fileName: string): void;
+    /** Load one agent plist into the user's gui domain; throws on failure. */
+    bootstrap(fileName: string): void;
+    /** Best-effort unload by label; a label that is not loaded is not an error. */
+    bootout(label: string): void;
+};
+/**
+ * The real ~/Library/LaunchAgents + launchctl. Everything above takes a
+ * LaunchdIo so tests inject fakes and never touch the user's agents.
+ */
+export declare function systemLaunchdIo(agentsDirOverride?: string): LaunchdIo;
+/**
+ * Materialize enabled entries as one LaunchAgent each, replacing the
+ * profile's com.fullstackgtm.<profile>.* fleet wholesale (stale agents are
+ * booted out and deleted; plists outside the prefix are never touched).
+ * `cliArgv` is the argv-array analog of the crontab invocation line.
+ */
+export declare function installLaunchdAgents(profile: string, entries: ScheduleEntry[], cliArgv: string[], io: LaunchdIo, options?: {
+    environment?: Record<string, string>;
+    logDir?: string;
+}): {
+    installed: string[];
+    removed: string[];
+};
+/** Boot out and delete every agent in the profile's prefix; returns the removed labels. */
+export declare function uninstallLaunchdAgents(profile: string, io: LaunchdIo): string[];

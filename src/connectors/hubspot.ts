@@ -18,6 +18,7 @@ import type {
   GtmObjectType,
   PatchOperation,
   PatchOperationResult,
+  SnapshotProgress,
 } from "../types.ts";
 
 const DEFAULT_API_BASE_URL = "https://api.hubapi.com";
@@ -30,6 +31,8 @@ export type HubspotConnectorOptions = {
   apiBaseUrl?: string;
   /** Injectable fetch for testing. */
   fetchImpl?: typeof fetch;
+  /** Per-page snapshot-pull progress (presentation only — errors are swallowed). */
+  onProgress?: (progress: SnapshotProgress) => void;
 };
 
 const OBJECT_PATHS: Partial<Record<GtmObjectType, string>> = {
@@ -123,7 +126,7 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
     return map;
   }
 
-  async function list(path: string): Promise<any[]> {
+  async function list(path: string, onPage?: (fetched: number) => void): Promise<any[]> {
     const results: any[] = [];
     let after: string | undefined;
     const seen = new Set<string>();
@@ -137,6 +140,11 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
       const separator = path.includes("?") ? "&" : "?";
       const data = await request(`${path}${after ? `${separator}after=${encodeURIComponent(after)}` : ""}`);
       results.push(...(data.results ?? []));
+      try {
+        onPage?.(results.length);
+      } catch {
+        // progress is presentation-only; never let it fail a pull
+      }
       after = data.paging?.next?.after;
     } while (after);
     return results;
@@ -149,7 +157,9 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
       withAssociations: boolean,
     ) => Promise<any[]>,
   ): Promise<CanonicalGtmSnapshot> {
-    const owners = await list("/crm/v3/owners?limit=100");
+    const owners = await list("/crm/v3/owners?limit=100", (fetched) =>
+      options.onProgress?.({ objectType: "user", fetched }),
+    );
     const users: CanonicalUser[] = owners
       .filter((owner) => owner.id)
       .map((owner) => ({
@@ -310,9 +320,11 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
   }
 
   async function fetchSnapshot(): Promise<CanonicalGtmSnapshot> {
+    const canonicalType = { companies: "account", contacts: "contact", deals: "deal" } as const;
     return assembleSnapshot((objectType, properties, withAssociations) =>
       list(
         `/crm/v3/objects/${objectType}?limit=100&properties=${properties}${withAssociations ? "&associations=companies" : ""}`,
+        (fetched) => options.onProgress?.({ objectType: canonicalType[objectType], fetched }),
       ),
     );
   }

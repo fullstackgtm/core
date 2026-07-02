@@ -24,6 +24,21 @@ export type ApplyPatchPlanOptions = {
      * edited mid-apply is conflicted out instead of overwritten. Default 25.
      */
     recheckEvery?: number;
+    /**
+     * Per-operation progress as the run executes (presentation only — a
+     * throwing callback never affects the run). `completed` counts every
+     * resolved operation including skips and conflicts; `total` is the plan's
+     * full operation count.
+     */
+    onOperation?: (progress: ApplyProgress) => void;
+};
+export type ApplyProgress = {
+    completed: number;
+    total: number;
+    applied: number;
+    failed: number;
+    conflicts: number;
+    skipped: number;
 };
 /**
  * Apply an approved subset of a patch plan through a connector.

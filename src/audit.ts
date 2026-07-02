@@ -18,6 +18,19 @@ const DEFAULT_POLICY: Omit<GtmPolicy, "today"> = {
   requireAccountForDeal: true,
 };
 
+/**
+ * Wall clock for the plan's stdout-bound `createdAt`, honoring the
+ * SOURCE_DATE_EPOCH reproducible-build convention (seconds since the Unix
+ * epoch). When set, `audit --demo --json` is byte-deterministic across
+ * re-runs — golden tests and CI diffs can pin the payload. Unset (normal
+ * use) it is the real clock, exactly as before.
+ */
+function nowIso(): string {
+  const epoch = process.env.SOURCE_DATE_EPOCH;
+  if (epoch && /^\d+$/.test(epoch)) return new Date(Number(epoch) * 1000).toISOString();
+  return new Date().toISOString();
+}
+
 export function defaultPolicy(today = new Date().toISOString().slice(0, 10)): GtmPolicy {
   return {
     ...DEFAULT_POLICY,
@@ -28,20 +41,33 @@ export function defaultPolicy(today = new Date().toISOString().slice(0, 10)): Gt
 /**
  * Run every rule over the snapshot and collect the results into a single
  * dry-run patch plan. Pass custom rules to extend or replace the built-ins.
+ * `onRule` reports per-rule progress (presentation only — a throwing callback
+ * never fails the audit).
  */
 export function auditSnapshot(
   snapshot: CanonicalGtmSnapshot,
   policy: GtmPolicy = defaultPolicy(),
   rules: GtmAuditRule[] = builtinAuditRules,
+  onRule?: (ruleId: string, phase: "start" | "done", findings?: number) => void,
 ): PatchPlan {
   const context = { snapshot, policy, index: buildSnapshotIndex(snapshot) };
   const findings: AuditFinding[] = [];
   const operations: PatchOperation[] = [];
 
   for (const rule of rules) {
+    try {
+      onRule?.(rule.id, "start");
+    } catch {
+      // progress is presentation-only
+    }
     const result = rule.evaluate(context);
     findings.push(...result.findings);
     operations.push(...result.operations);
+    try {
+      onRule?.(rule.id, "done", result.findings.length);
+    } catch {
+      // progress is presentation-only
+    }
   }
 
 
@@ -52,7 +78,7 @@ export function auditSnapshot(
   return {
     id: `patch_plan_${stableHash(`${snapshot.provider}:${snapshot.generatedAt}:${findings.length}:${operations.length}`)}`,
     title: "GTM hygiene audit patch plan",
-    createdAt: new Date().toISOString(),
+    createdAt: nowIso(),
     status: operations.length > 0 ? "needs_approval" : "draft",
     dryRun: true,
     summary: `${findings.length} findings and ${operations.length} proposed dry-run operations.`,

@@ -5,7 +5,191 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
 
-## [Unreleased]
+## [0.45.0] — 2026-07-02
+
+### Added (TUI glamour — interactive terminals only)
+
+- **A terminal presentation layer (`src/cli/ui.ts`, zero new dependencies) —
+  styling and animation exist ONLY on an interactive TTY.** Piped, redirected,
+  `--json`, CI, and `NO_COLOR` output is byte-identical to the pre-TUI CLI
+  (verified against the previous build for 14 verbs: stdout, stderr, exit
+  codes); a new `agent-cli.yml` step and `tests/fullstackgtmAnsiSafety.test.ts`
+  enforce zero ANSI bytes in piped output permanently. `FORCE_COLOR=1` opts
+  piped output back into color per spec. On a TTY:
+  - `doctor` colors each check (green ok / red MISSING), dims what's not
+    connected, bands the health score, appends a score-history sparkline, and
+    frames "Next step" in a box. `--help` gets a dimmed brand header
+    (version · active profile), bold command names, cyan lifecycle groups.
+  - `health` renders a styled rollup: banded score, ▲/▼ delta, score
+    sparkline, aligned object-type and per-rule tables (positive finding
+    deltas red — more findings is worse — negative green).
+  - Live provider pulls show a stderr spinner with a running tally ("Pulling
+    contacts from hubspot… 2,400 fetched · 12s"): the HubSpot/Salesforce
+    connectors accept an optional per-page `onProgress` (presentation-only,
+    errors swallowed). `audit` renders its rule registry as a live checklist
+    (○ → spinner → ✓ with finding counts) via a new optional `onRule` on
+    `auditSnapshot`; `signals fetch` shows a per-domain ATS tally.
+  - `apply` and `fix --yes` tick per-operation progress ("Applying 41/120 ·
+    ✓ 40 applied · 0 failed · 1 conflict") via a new optional `onOperation` on
+    `applyPatchPlan`, closing with a colored outcome badge. `enrich
+    append/refresh` gets a progress bar with rate + ETA over the Apollo pull;
+    `enrich acquire` adds a budget fuel gauge (records + spend vs day/month
+    caps, color-banded by burn).
+  - LLM waits show an elapsed status line (`call parse` / `call score`);
+    `icp judge` and `market classify` report per-account / per-vendor progress
+    via new optional `onAccount` / `onVendor` callbacks.
+  - Patch plans render with severity banding and value diffs — current value
+    red, proposed value green, `requires_human_*` placeholders yellow — in
+    `audit` and `plans show`; `plans list` becomes an aligned status-banded
+    table (summaries truncated with `…` to the terminal width so rows never
+    wrap); `fix` frames its stop-before-apply command in a box.
+
+### Added (agent ergonomics pass 1)
+
+- **Flag typos are caught instead of silently ignored.** Any `--flag` that is
+  documented nowhere in the help reference but sits within one edit of a
+  documented flag (after lowercasing and `_`→`-` normalization) now stops with
+  exit 1, a `Did you mean: --json` hint, and the exact corrected command;
+  `--json` callers get a structured `UNKNOWN_FLAG` envelope. Previously
+  `audit --demo --jsn` exited 0 and printed markdown where the caller asked
+  for JSON, and `reassign … --sav` exited 0 without saving. Suggest-only —
+  the correction is never auto-executed, so a typo can never change what a
+  write-shaped invocation stages. The known-flag registry is derived at
+  runtime from the help table (no parallel list); unknown flags with no
+  near-miss behave exactly as before.
+- **Unknown commands get a did-you-mean on the plain-text path too.**
+  `fullstackgtm plan` now answers `Did you mean: fullstackgtm plans` plus one
+  pointer line each to `--help` and `capabilities --json`, instead of the
+  full usage-reference dump. (The `--json` envelope already had the hint.)
+- **`doctor` is now the one-call triage surface.** `doctor --json` adds a
+  `workspace` slice — `healthScore`, `scoreDelta`, `lastAuditAt`,
+  `auditCount`, and `pendingPlans` (id, summary, operation/approved counts) —
+  and when a plan is awaiting approval `nextSteps` becomes the copy-pasteable
+  `plans show` → `plans approve` → `apply` chain with the connected provider
+  filled in. Text `doctor` gains the matching `Workspace:` section.
+  Previously orienting an agent took three calls (doctor + health +
+  plans list).
+- **`audit` output is byte-deterministic under `SOURCE_DATE_EPOCH`.** The
+  plan's `createdAt` honors the reproducible-build convention (seconds since
+  the epoch) so golden tests and CI diffs can pin `audit --demo --json`
+  byte-for-byte. Unset, it remains the real clock.
+- **GNU-style `--flag=value` is corrected too.** `audit --rules=x` was
+  silently dropped (the audit ran with all rules); an `=`-form whose base
+  resolves to a documented flag now stops with the space-separated form this
+  CLI parses (`Try: … --rules x`).
+- **A flag-shaped first token is diagnosed as flag-before-command.**
+  `fullstackgtm --jsn` was "Unknown command: --jsn"; now it explains that a
+  command must come first and resolves the flag when it near-misses a
+  documented one.
+- **Subverb typos get a nearest-match did-you-mean on all 7 multi-verb
+  commands** (`enrich`, `market`, `icp`, `signals`, `plans`, `schedule`,
+  `tam`): `enrich apend` → `Did you mean: fullstackgtm enrich append?` plus
+  the full list. `market <typo>` no longer dies with a `market.config.json`
+  ENOENT before the subcommand is validated.
+
+### Changed (agent ergonomics pass 1)
+
+- **`apply <planId>` / `suggest <planId>` (positional) now name the exact
+  corrected command** (`apply --plan-id <id> --provider <…>`) instead of
+  misdiagnosing the mistake as a missing `--provider`. Both verbs stay
+  flag-explicit; nothing is inferred into execution.
+- **`Unknown provider: hubpsot` now adds `Did you mean hubspot?`** (CLI and
+  MCP paths); the supported-provider list is unchanged.
+
+### Changed
+
+- **MCP zero-install is now one short command: `npx -y fullstackgtm-mcp`.** A
+  thin wrapper package (`fullstackgtm-mcp@0.1.0`, monorepo
+  `packages/fullstackgtm-mcp`, published manually — the OIDC release flow
+  covers only this package) pins the optional MCP peers as hard dependencies
+  and delegates to this package's `dist/mcp-bin.js`. README, SKILL.md, and the
+  missing-peer help text now lead with the short command; the explicit
+  `-p fullstackgtm -p @modelcontextprotocol/sdk -p zod` form still works.
+
+### Added
+
+- **`schedule install` no longer needs Full Disk Access on macOS: launchd
+  LaunchAgents are the default timer there.** macOS gates `crontab` writes
+  behind FDA — an unpromptable TCC permission granted to the terminal app,
+  not the CLI — so on darwin `install` now writes one LaunchAgent plist per
+  enabled entry (`com.fullstackgtm.<profile>.<id>` in
+  `~/Library/LaunchAgents`, loaded via `launchctl bootstrap gui/<uid>`),
+  which needs no permission at all. The cron expression compiles to
+  `StartCalendarInterval` dicts (full-range fields become launchd wildcards;
+  dense expressions are capped at 512 dicts with a clear error; Vixie
+  dom+dow OR becomes a Day set plus a Weekday set). Every plist's
+  `ProgramArguments` is `… schedule run <id> --profile <p> --trigger cron`
+  and nothing else — the same single-entry-point audit story as the crontab
+  block — and re-install replaces the profile's plist fleet wholesale,
+  never touching foreign plists. launchd also coalesces firings missed
+  during sleep into one run on wake, where cron silently skips. `--timer
+  crontab|launchd` overrides the platform default (launchd on macOS, crontab
+  elsewhere); stdout/stderr of each firing lands in
+  `<home>/schedule/logs/<label>.log`. New run no-op reason
+  `duplicate_firing`: `schedule run` drops a second cron trigger in the same
+  minute, so a date matching both the Day and Weekday interval sets cannot
+  double-run a command.
+
+- **Standardized flag aliases (additive — every legacy flag keeps working).**
+  `--dry-run` is now accepted on the plan-spine verbs (`audit`, `suggest`,
+  `bulk-update`, `dedupe`, `reassign`, `fix`, `call plan`,
+  `enrich append`/`refresh`/`acquire`, `signals fetch`, `icp judge`, `draft`,
+  `tam status`, `market overlay`): these verbs were already preview-by-default,
+  so the flag asserts that default — it suppresses `--save` (with a stderr note
+  when both are passed) and locks `fix` to its stop-before-apply path even with
+  `--yes`. Omitting it changes nothing. `--confirm` is now an accepted alias
+  for `fix --yes` (matching `tam accounts --confirm`); `--dry-run` beats both.
+- **Staged-file ingestion converged on the spool container convention
+  (additive).** `signals fetch --from` and `enrich ingest` now also accept a
+  `*.jsonl` spool file (one JSON row per line) or a directory of `*.jsonl` /
+  `*.json` spool files — the Phase-2 webhook landing-zone format
+  (docs/signal-spool-format.md) — and `market observe --from` accepts a
+  `*.jsonl` file / directory of observation-set envelopes, each validated and
+  appended through the same gates as the single-file path. Existing `.json` /
+  `.csv` inputs parse exactly as before. Shared reader: `src/spoolFiles.ts`
+  (the `file` signal-source connector now delegates to it, error text
+  unchanged).
+- **Machine-readable agent contract: `capabilities`, `robot-docs`, and
+  `--help --json`.** `capabilities` prints the CLI contract as JSON: the
+  command inventory with read-only vs write-shaped access derived from the
+  help table's lifecycle phases (never a hand-maintained parallel list), the
+  documented exit-code contract, safety defaults, and the MCP entrypoint.
+  `<command> --help --json` (and `help <command> --json`) prints the same
+  per-command help as JSON — plain `--help` output is unchanged except that
+  `audit --help` now documents the pre-existing `--input <path>` flag.
+  Unknown commands invoked with `--json` return a structured
+  `{ ok: false, error: { code: "UNKNOWN_COMMAND", hints: [did-you-mean] } }`
+  envelope on stdout (exit 1) instead of the full-usage text wall.
+  `robot-docs` prints the packaged agent guide (skills/fullstackgtm/SKILL.md,
+  already shipped in the npm tarball) — one maintained guide, not a third
+  parallel one.
+- **MCP `fullstackgtm_capabilities` tool.** The MCP server's tools are now
+  declared in a single registration table and registered in a loop; the new
+  tool reports the inventory (with per-tool `writesCrm` flags — only
+  `fullstackgtm_apply` can reach a CRM) from that same table, so the
+  advertised list cannot drift from what is actually registered. The existing
+  tools' behavior is unchanged.
+- **`--input` snapshot files are validated.** `--input` now checks the file
+  parses to the canonical snapshot shape (the JSON `snapshot --out` writes)
+  and fails with a field-level error naming what's missing, instead of a
+  blind cast that surfaced as a crash deep in a rule — or an empty "clean"
+  audit.
+
+### Fixed
+
+- **`bulk-update` restored to the help front door.** The grouped short-usage
+  map listed the verb in its Remediate group but silently skipped rendering
+  it (no help-table entry), and `help bulk-update` dead-ended on the short
+  map. It now has a proper entry and appears in the derived `capabilities`
+  inventory.
+
+### Changed
+
+- **Internal: `src/cli.ts` (6,003 lines) split into per-verb modules under
+  `src/cli/`** (help, audit, fix, call, market, enrich, signals, draft, tam,
+  icp, init, schedule, plans, auth, shared). No behavior change: `dist/bin.js`
+  stays the entry, arg parsing / help text / exit codes are unchanged, and
+  `cli.ts` still exports `runCli`, `doctorReport`, `assertSecureBrokerUrl`.
 
 ## [0.44.0] — 2026-07-01
 

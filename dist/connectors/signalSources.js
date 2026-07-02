@@ -18,9 +18,10 @@
  *     the caller), it must never sink a multi-source run — the per-provider
  *     try/catch idiom of atsBoards/prospectSources.
  */
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { SIGNAL_BUCKETS } from "../signals.js";
+import { parseSpoolText, spoolFilesIn } from "../spoolFiles.js";
 // ---------------------------------------------------------------------------
 // file — local JSON / JSONL intake (also the webhook landing-zone reader)
 /**
@@ -59,6 +60,9 @@ export const fileSource = {
         catch {
             return []; // missing path: an empty source, not a crash
         }
+        // Container parsing lives in the shared spool reader (src/spoolFiles.ts) so
+        // `signals fetch --from`, `enrich ingest`, and `market observe --from` read
+        // the same convention; the "file source" label keeps error text unchanged.
         const files = isDir ? spoolFilesIn(abs) : [abs];
         const rows = [];
         for (const file of files) {
@@ -69,67 +73,11 @@ export const fileSource = {
             catch {
                 continue; // one unreadable file in a spool dir must not sink the rest
             }
-            const trimmed = raw.trim();
-            if (!trimmed)
-                continue;
-            const parsed = trimmed.startsWith("[") ? parseJsonArray(trimmed, file) : parseJsonl(trimmed, file);
-            rows.push(...parsed);
+            rows.push(...parseSpoolText(raw, file, "file source"));
         }
         return rows.map((row) => coerceRow(row, this.bucket));
     },
 };
-/** Spool files in a landing-zone directory: `*.jsonl` / `*.json`, name-sorted. */
-function spoolFilesIn(dir) {
-    let names;
-    try {
-        names = readdirSync(dir);
-    }
-    catch {
-        return [];
-    }
-    return names
-        .filter((name) => name.endsWith(".jsonl") || name.endsWith(".json"))
-        .sort()
-        .map((name) => join(dir, name));
-}
-function parseJsonArray(raw, path) {
-    let parsed;
-    try {
-        parsed = JSON.parse(raw);
-    }
-    catch (error) {
-        throw new Error(`file source ${path}: not valid JSON (${error instanceof Error ? error.message : String(error)}).`);
-    }
-    if (!Array.isArray(parsed))
-        throw new Error(`file source ${path}: expected a JSON array of staged signal rows.`);
-    return parsed.map((entry, index) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-            throw new Error(`file source ${path}: row ${index} is not an object.`);
-        }
-        return entry;
-    });
-}
-function parseJsonl(raw, path) {
-    const out = [];
-    const lines = raw.split("\n");
-    lines.forEach((line, index) => {
-        const t = line.trim();
-        if (!t)
-            return;
-        let parsed;
-        try {
-            parsed = JSON.parse(t);
-        }
-        catch (error) {
-            throw new Error(`file source ${path}: line ${index} is not valid JSON (${error instanceof Error ? error.message : String(error)}).`);
-        }
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throw new Error(`file source ${path}: line ${index} is not a JSON object.`);
-        }
-        out.push(parsed);
-    });
-    return out;
-}
 // ---------------------------------------------------------------------------
 // serpapi-news — funding/company signals from a news REST query (API key)
 const SERPAPI_BASE_URL = "https://serpapi.com";

@@ -79,7 +79,7 @@ Add `--json` for machine-readable output on any command.
 ## MCP server (alternative surface, same gates)
 
 ```bash
-npx -y -p fullstackgtm -p @modelcontextprotocol/sdk -p zod fullstackgtm-mcp
+npx -y fullstackgtm-mcp
 ```
 
 Tools over stdio: `fullstackgtm_audit` (read-only), `fullstackgtm_rules`,

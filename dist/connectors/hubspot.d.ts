@@ -1,5 +1,5 @@
 import { type FieldMappings } from "../mappings.ts";
-import type { GtmConnector } from "../types.ts";
+import type { GtmConnector, SnapshotProgress } from "../types.ts";
 export type HubspotConnectorOptions = {
     /** Returns a HubSpot access token (private app token or OAuth access token). */
     getAccessToken: () => string | Promise<string>;
@@ -8,6 +8,8 @@ export type HubspotConnectorOptions = {
     apiBaseUrl?: string;
     /** Injectable fetch for testing. */
     fetchImpl?: typeof fetch;
+    /** Per-page snapshot-pull progress (presentation only — errors are swallowed). */
+    onProgress?: (progress: SnapshotProgress) => void;
 };
 /**
  * Reference connector for HubSpot.

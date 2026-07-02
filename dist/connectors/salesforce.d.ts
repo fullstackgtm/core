@@ -1,5 +1,5 @@
 import { type FieldMappings } from "../mappings.ts";
-import type { GtmConnector } from "../types.ts";
+import type { GtmConnector, SnapshotProgress } from "../types.ts";
 export type SalesforceConnection = {
     accessToken: string;
     /** e.g. https://yourorg.my.salesforce.com */
@@ -13,6 +13,8 @@ export type SalesforceConnectorOptions = {
     apiVersion?: string;
     /** Injectable fetch for testing. */
     fetchImpl?: typeof fetch;
+    /** Per-page snapshot-pull progress (presentation only — errors are swallowed). */
+    onProgress?: (progress: SnapshotProgress) => void;
 };
 /**
  * Reference connector for Salesforce.

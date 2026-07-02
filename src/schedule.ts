@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { credentialsDir, ensureSecureHomeDir, writeSecureFile } from "./credentials.ts";
 
@@ -49,9 +50,11 @@ export type ScheduleRunRecord = {
    * recorded for visibility but nothing ran. Reasons: "plan_not_approved"
    * (scheduled apply against a plan that is not approved — there is no flag
    * that relaxes this), "not_schedulable" (the stored argv no longer passes
-   * the allowlist, e.g. after a hand edit of schedules.json).
+   * the allowlist, e.g. after a hand edit of schedules.json),
+   * "duplicate_firing" (a cron-triggered run already recorded in this minute
+   * — launchd can double-trigger the Vixie dom+dow OR corner).
    */
-  noopReason?: "plan_not_approved" | "not_schedulable";
+  noopReason?: "plan_not_approved" | "not_schedulable" | "duplicate_firing";
 };
 
 // Mirrors stableHash in rules.ts (FNV-1a); duplicated to keep schedule.ts
@@ -728,4 +731,308 @@ export function replaceManagedBlock(existing: string, profile: string, block: st
   while (merged.length > 0 && merged[merged.length - 1].trim() === "") merged.pop();
   if (merged.length === 0) return "";
   return `${merged.join("\n")}\n`;
+}
+
+// ---------------------------------------------------------------------------
+// Local provider: launchd LaunchAgents (macOS)
+//
+// On macOS `crontab -` writes to the TCC-protected /var/at/tabs, which
+// requires granting Full Disk Access to the *terminal app* — a permission no
+// program can request and a huge over-grant for one timer line. Per-user
+// LaunchAgents need no permission at all: one plist per enabled entry in
+// ~/Library/LaunchAgents, loaded with `launchctl bootstrap gui/<uid>`. Bonus
+// over cron: launchd coalesces firings missed while asleep into one run on
+// wake, where cron silently skips. Same audit story as the crontab block —
+// every plist's ProgramArguments is `... schedule run <id>` and nothing else,
+// and install replaces the com.fullstackgtm.<profile>.* fleet wholesale.
+
+/**
+ * One launchd StartCalendarInterval dict: every present key must match (AND),
+ * a missing key is a wildcard, and an array of dicts fires when ANY dict
+ * matches. Weekday 0 is Sunday, as in cron.
+ */
+export type LaunchdCalendarInterval = {
+  Minute?: number;
+  Hour?: number;
+  Day?: number;
+  Weekday?: number;
+  Month?: number;
+};
+
+/**
+ * Compile a cron expression to StartCalendarInterval dicts. Full-range fields
+ * (`*`, but also spellings like `0-59`) are omitted (launchd wildcard); the
+ * rest cross-product, capped so a dense expression cannot render a megabyte
+ * plist. Vixie day semantics: when day-of-month AND day-of-week are both
+ * restricted, either may match — launchd ANDs keys within one dict, so that
+ * becomes the union of a Day dict set and a Weekday dict set. A date matching
+ * both sets makes launchd trigger twice in the same minute; the run entry
+ * point drops the second via isDuplicateCronFiring.
+ */
+export function cronToCalendarIntervals(cron: CronExpression, cap = 512): LaunchdCalendarInterval[] {
+  const full = (values: number[], min: number, max: number) => values.length === max - min + 1;
+  const minutes: Array<number | undefined> = full(cron.minute, 0, 59) ? [undefined] : cron.minute;
+  const hours: Array<number | undefined> = full(cron.hour, 0, 23) ? [undefined] : cron.hour;
+  const months: Array<number | undefined> = full(cron.month, 1, 12) ? [undefined] : cron.month;
+  const domRestricted = cron.dayOfMonthRestricted && !full(cron.dayOfMonth, 1, 31);
+  const dowRestricted = cron.dayOfWeekRestricted && !full(cron.dayOfWeek, 0, 6);
+  const daySlots: Array<Pick<LaunchdCalendarInterval, "Day" | "Weekday">> = [];
+  if (domRestricted) for (const day of cron.dayOfMonth) daySlots.push({ Day: day });
+  if (dowRestricted) for (const weekday of cron.dayOfWeek) daySlots.push({ Weekday: weekday });
+  if (daySlots.length === 0) daySlots.push({});
+  const count = minutes.length * hours.length * daySlots.length * months.length;
+  if (count > cap) {
+    throw new Error(
+      `Cron expression "${cron.source}" expands to ${count} launchd calendar intervals (cap ${cap}). ` +
+        "Simplify the expression or split it into separate schedules.",
+    );
+  }
+  const intervals: LaunchdCalendarInterval[] = [];
+  for (const month of months) {
+    for (const daySlot of daySlots) {
+      for (const hour of hours) {
+        for (const minute of minutes) {
+          const dict: LaunchdCalendarInterval = {};
+          if (minute !== undefined) dict.Minute = minute;
+          if (hour !== undefined) dict.Hour = hour;
+          if (daySlot.Day !== undefined) dict.Day = daySlot.Day;
+          if (daySlot.Weekday !== undefined) dict.Weekday = daySlot.Weekday;
+          if (month !== undefined) dict.Month = month;
+          intervals.push(dict);
+        }
+      }
+    }
+  }
+  return intervals;
+}
+
+/**
+ * True when a cron-triggered run was already recorded in `firedAt`'s minute.
+ * The `schedule run` entry point checks this for trigger:cron so a launchd
+ * double-trigger (dom+dow OR corner above) records a duplicate_firing no-op
+ * instead of running the command twice. Manual runs are never deduplicated.
+ */
+export function isDuplicateCronFiring(runs: ScheduleRunRecord[], firedAt: string): boolean {
+  const minute = new Date(firedAt);
+  minute.setSeconds(0, 0);
+  return runs.some((run) => {
+    if (run.trigger !== "cron") return false;
+    const fired = new Date(run.firedAt);
+    fired.setSeconds(0, 0);
+    return fired.getTime() === minute.getTime();
+  });
+}
+
+/** Reverse-DNS namespace for one profile's agents; install/uninstall own this prefix wholesale. */
+export function launchdAgentPrefix(profile: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(profile)) {
+    throw new Error(
+      `Cannot build a launchd label from profile "${profile}" — profile names in LaunchAgent labels ` +
+        "must be alphanumeric with dot/dash/underscore.",
+    );
+  }
+  return `com.fullstackgtm.${profile}.`;
+}
+
+export function launchdLabel(profile: string, scheduleEntryId: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(scheduleEntryId)) {
+    throw new Error(`Cannot build a launchd label from schedule id "${scheduleEntryId}".`);
+  }
+  return `${launchdAgentPrefix(profile)}${scheduleEntryId}`;
+}
+
+function xmlEscape(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      default:
+        return "&apos;";
+    }
+  });
+}
+
+/**
+ * Render one LaunchAgent plist. ProgramArguments is an argv array — launchd
+ * execs it directly, no shell, so there is no quoting/injection surface at
+ * all (values are XML-escaped for the document, nothing more).
+ */
+export function renderLaunchdPlist(options: {
+  label: string;
+  programArguments: string[];
+  calendarIntervals: LaunchdCalendarInterval[];
+  environment?: Record<string, string>;
+  standardOutPath?: string;
+  standardErrorPath?: string;
+}): string {
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    "<dict>",
+    "\t<key>Label</key>",
+    `\t<string>${xmlEscape(options.label)}</string>`,
+    "\t<key>ProgramArguments</key>",
+    "\t<array>",
+    ...options.programArguments.map((arg) => `\t\t<string>${xmlEscape(arg)}</string>`),
+    "\t</array>",
+    "\t<key>StartCalendarInterval</key>",
+    "\t<array>",
+  ];
+  const keyOrder = ["Minute", "Hour", "Day", "Weekday", "Month"] as const;
+  for (const interval of options.calendarIntervals) {
+    lines.push("\t\t<dict>");
+    for (const key of keyOrder) {
+      const value = interval[key];
+      if (value === undefined) continue;
+      lines.push(`\t\t\t<key>${key}</key>`, `\t\t\t<integer>${value}</integer>`);
+    }
+    lines.push("\t\t</dict>");
+  }
+  lines.push("\t</array>");
+  if (options.environment && Object.keys(options.environment).length > 0) {
+    lines.push("\t<key>EnvironmentVariables</key>", "\t<dict>");
+    for (const [name, value] of Object.entries(options.environment)) {
+      lines.push(`\t\t<key>${xmlEscape(name)}</key>`, `\t\t<string>${xmlEscape(value)}</string>`);
+    }
+    lines.push("\t</dict>");
+  }
+  if (options.standardOutPath) {
+    lines.push("\t<key>StandardOutPath</key>", `\t<string>${xmlEscape(options.standardOutPath)}</string>`);
+  }
+  if (options.standardErrorPath) {
+    lines.push("\t<key>StandardErrorPath</key>", `\t<string>${xmlEscape(options.standardErrorPath)}</string>`);
+  }
+  lines.push("</dict>", "</plist>");
+  return `${lines.join("\n")}\n`;
+}
+
+export type LaunchdIo = {
+  /** Plist file names currently in the agents directory. */
+  list(): string[];
+  write(fileName: string, content: string): void;
+  remove(fileName: string): void;
+  /** Load one agent plist into the user's gui domain; throws on failure. */
+  bootstrap(fileName: string): void;
+  /** Best-effort unload by label; a label that is not loaded is not an error. */
+  bootout(label: string): void;
+};
+
+/**
+ * The real ~/Library/LaunchAgents + launchctl. Everything above takes a
+ * LaunchdIo so tests inject fakes and never touch the user's agents.
+ */
+export function systemLaunchdIo(agentsDirOverride?: string): LaunchdIo {
+  const agentsDir = agentsDirOverride ?? join(homedir(), "Library", "LaunchAgents");
+  const domain = () => {
+    const uid = typeof process.getuid === "function" ? process.getuid() : null;
+    if (uid === null) throw new Error("launchd scheduling requires a POSIX user id (macOS only).");
+    return `gui/${uid}`;
+  };
+  const launchctl = (args: string[]) => {
+    const result = spawnSync("launchctl", args, { encoding: "utf8" });
+    if (result.error) throw new Error(`Cannot run \`launchctl\`: ${result.error.message}`);
+    return result;
+  };
+  return {
+    list() {
+      try {
+        return readdirSync(agentsDir).filter((name) => name.endsWith(".plist"));
+      } catch {
+        return [];
+      }
+    },
+    write(fileName, content) {
+      mkdirSync(agentsDir, { recursive: true });
+      // 0644 like every LaunchAgent: launchd refuses group/world-WRITABLE
+      // plists, and this file holds a dispatch line, not a secret.
+      writeFileSync(join(agentsDir, fileName), content, { mode: 0o644 });
+    },
+    remove(fileName) {
+      rmSync(join(agentsDir, fileName), { force: true });
+    },
+    bootstrap(fileName) {
+      const result = launchctl(["bootstrap", domain(), join(agentsDir, fileName)]);
+      if (result.status !== 0) {
+        throw new Error(
+          `\`launchctl bootstrap\` failed for ${fileName}: ${(result.stderr ?? "").trim() || `exit ${result.status}`}`,
+        );
+      }
+    },
+    bootout(label) {
+      launchctl(["bootout", `${domain()}/${label}`]);
+    },
+  };
+}
+
+/**
+ * Materialize enabled entries as one LaunchAgent each, replacing the
+ * profile's com.fullstackgtm.<profile>.* fleet wholesale (stale agents are
+ * booted out and deleted; plists outside the prefix are never touched).
+ * `cliArgv` is the argv-array analog of the crontab invocation line.
+ */
+export function installLaunchdAgents(
+  profile: string,
+  entries: ScheduleEntry[],
+  cliArgv: string[],
+  io: LaunchdIo,
+  options: { environment?: Record<string, string>; logDir?: string } = {},
+): { installed: string[]; removed: string[] } {
+  for (const token of cliArgv) {
+    if (hasControlChar(token)) {
+      throw new Error(
+        "Refusing to render LaunchAgents: the resolved CLI invocation (node path or script path) " +
+          "contains a newline or control character.",
+      );
+    }
+  }
+  const removed = uninstallLaunchdAgents(profile, io);
+  const installed: string[] = [];
+  for (const entry of entries) {
+    assertRenderableEntry(profile, entry);
+    let intervals: LaunchdCalendarInterval[];
+    try {
+      intervals = cronToCalendarIntervals(parseCron(entry.cron));
+    } catch (error) {
+      throw new Error(
+        `Schedule ${entry.id} ("${entry.label}") cannot materialize as a LaunchAgent: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const label = launchdLabel(profile, entry.id);
+    const logPath = options.logDir ? join(options.logDir, `${label}.log`) : undefined;
+    const plist = renderLaunchdPlist({
+      label,
+      programArguments: [...cliArgv, "schedule", "run", entry.id, "--profile", profile, "--trigger", "cron"],
+      calendarIntervals: intervals,
+      environment: options.environment,
+      standardOutPath: logPath,
+      standardErrorPath: logPath,
+    });
+    const fileName = `${label}.plist`;
+    io.write(fileName, plist);
+    io.bootstrap(fileName);
+    installed.push(label);
+  }
+  return { installed, removed };
+}
+
+/** Boot out and delete every agent in the profile's prefix; returns the removed labels. */
+export function uninstallLaunchdAgents(profile: string, io: LaunchdIo): string[] {
+  const prefix = launchdAgentPrefix(profile);
+  const removed: string[] = [];
+  for (const name of io.list()) {
+    if (!name.startsWith(prefix)) continue;
+    const label = name.slice(0, -".plist".length);
+    io.bootout(label);
+    io.remove(name);
+    removed.push(label);
+  }
+  return removed;
 }

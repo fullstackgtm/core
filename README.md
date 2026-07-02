@@ -254,15 +254,15 @@ Everything the CLI produces is accurate the moment it runs and silently stale af
 fullstackgtm schedule add "enrich refresh --source apollo --save" --cron "0 6 * * 1" --label weekly-apollo
 fullstackgtm schedule add "audit --provider hubspot --save" --cron "0 2 * * *"   # nightly drift baseline
 fullstackgtm schedule list                       # declarative entries; nothing runs yet
-fullstackgtm schedule install                    # materialize enabled entries into a managed crontab block
+fullstackgtm schedule install                    # materialize enabled entries into the system timer (launchd on macOS, crontab elsewhere)
 fullstackgtm schedule run <id>                   # execute now; same run record a cron firing produces
 fullstackgtm schedule status --runs 5            # last runs, exit codes, artifacts, next + missed firings
 fullstackgtm schedule uninstall                  # remove the managed block, touch nothing else
 ```
 
-**Scheduling never auto-approves.** Schedulable commands are read/plan-side only — `audit`, `snapshot`, `enrich append|refresh`, `market capture|refresh`, `signals fetch`, `icp judge`, `icp eval`, `draft`, `suggest`, `report`, `doctor` — so unattended runs accumulate *proposals* (plans in the queue, run records, reports), never CRM writes. `apply` is schedulable only as `apply --plan-id <id>`, and every firing re-checks the plan's status is approved: an unapproved plan records a `plan_not_approved` no-op run instead of executing, and no flag relaxes this. Arbitrary shell is not schedulable — an entry's argv must resolve to a known fullstackgtm command (validated at `add` time and re-checked at run time), and the crontab line you audit is always `fullstackgtm schedule run <id>` and nothing else.
+**Scheduling never auto-approves.** Schedulable commands are read/plan-side only — `audit`, `snapshot`, `enrich append|refresh`, `market capture|refresh`, `signals fetch`, `icp judge`, `icp eval`, `draft`, `suggest`, `report`, `doctor` — so unattended runs accumulate *proposals* (plans in the queue, run records, reports), never CRM writes. `apply` is schedulable only as `apply --plan-id <id>`, and every firing re-checks the plan's status is approved: an unapproved plan records a `plan_not_approved` no-op run instead of executing, and no flag relaxes this. Arbitrary shell is not schedulable — an entry's argv must resolve to a known fullstackgtm command (validated at `add` time and re-checked at run time), and the timer line you audit — crontab entry or LaunchAgent `ProgramArguments` — is always `fullstackgtm schedule run <id>` and nothing else.
 
-`install` renders enabled entries into a sentinel-delimited block (`# >>> fullstackgtm <profile> >>>` … `# <<< fullstackgtm <profile> <<<`) in your user crontab; re-install replaces the block wholesale and never touches lines outside it. Honest limitation: local cron has no catch-up — a laptop asleep at firing time means a missed run. `schedule status` surfaces missed firings by comparing expected-vs-actual run history, so the gap is at least visible. Entries are provider-agnostic; cloud providers (Modal, AWS) arrive as scaffold generators that call the same `schedule run <id>` contract, and are refused as "not yet implemented" until then.
+`install` materializes enabled entries into the system timer; `--timer` defaults by platform. On macOS it writes one LaunchAgent plist per entry (`com.fullstackgtm.<profile>.<id>` in `~/Library/LaunchAgents`, loaded via `launchctl bootstrap`) — macOS gates `crontab` writes behind Full Disk Access, a permission no program can request, while LaunchAgents need none; launchd also coalesces firings missed during sleep into one run on wake. Re-install replaces the profile's plist fleet wholesale and never touches foreign plists. Elsewhere (or with `--timer crontab`) it renders a sentinel-delimited block (`# >>> fullstackgtm <profile> >>>` … `# <<< fullstackgtm <profile> <<<`) in your user crontab; re-install replaces the block wholesale and never touches lines outside it. Honest limitation: cron has no catch-up — a laptop asleep at firing time means a missed run. `schedule status` surfaces missed firings by comparing expected-vs-actual run history, so the gap is at least visible. Entries are provider-agnostic; cloud providers (Modal, AWS) arrive as scaffold generators that call the same `schedule run <id>` contract, and are refused as "not yet implemented" until then.
 
 ### Working across organizations
 
@@ -281,6 +281,17 @@ Set `FULLSTACKGTM_PROFILE=acme` to pin a shell (or agent sandbox) to one client.
 Every command is designed to compose in an agent loop — deterministic output, machine-readable everywhere, meaningful exit codes:
 
 ```bash
+# Discover the machine-readable contract: every command, read-only vs
+# write-shaped access, exit codes, safety defaults (derived from the same
+# help table humans read, so it can't drift)
+fullstackgtm capabilities --json
+
+# Per-command help as JSON; plain --help stays human-shaped
+fullstackgtm audit --help --json
+
+# Print the shipped agent operating guide (the same SKILL.md `npx skills add` installs)
+fullstackgtm robot-docs
+
 # Discover what the auditor checks
 fullstackgtm rules --json
 
@@ -296,6 +307,7 @@ fullstackgtm audit --provider hubspot --fail-on warning
 fullstackgtm diff --before old.json --after new.json --fail-on-new-findings
 ```
 
+- Terminal polish never leaks into machine output: color, spinners, progress bars, and sparklines render **only on an interactive TTY** (stderr for anything animated). Piped, redirected, `--json`, CI, and `NO_COLOR` output carries **zero ANSI bytes** — enforced by tests and a CI contract check — so transcripts and pipes see the same plain text they always did (`FORCE_COLOR=1` opts back in).
 - Finding and operation ids are **stable hashes** of rule + record, so two runs over the same data produce identical ids — agents can diff plans, track findings across runs, and approve operations by id without re-parsing.
 - `--demo` (with `--seed`) generates a realistic mid-market CRM with injected real-world failure modes — departed owners, unlinked deals, orphan accounts, stale pipeline — so agents and CI can exercise the full snapshot → audit → apply pipeline with zero credentials.
 - Exit codes: `0` success, `1` error, `2` findings at/above `--fail-on`.
@@ -488,14 +500,14 @@ The MCP entrypoint needs the optional peer dependencies `@modelcontextprotocol/s
 npm install fullstackgtm @modelcontextprotocol/sdk zod
 HUBSPOT_ACCESS_TOKEN=pat-... npx fullstackgtm-mcp
 
-# Zero-install
-npx -p fullstackgtm -p @modelcontextprotocol/sdk -p zod fullstackgtm-mcp
+# Zero-install (the fullstackgtm-mcp wrapper package bundles the MCP peers)
+npx -y fullstackgtm-mcp
 ```
 
 Add it to Claude Code in one command:
 
 ```bash
-claude mcp add fullstackgtm -e HUBSPOT_ACCESS_TOKEN=pat-... -- npx -y -p fullstackgtm -p @modelcontextprotocol/sdk -p zod fullstackgtm-mcp
+claude mcp add fullstackgtm -e HUBSPOT_ACCESS_TOKEN=pat-... -- npx -y fullstackgtm-mcp
 ```
 
 Or configure any MCP client (Cursor, Claude Desktop, …) with:
@@ -505,7 +517,7 @@ Or configure any MCP client (Cursor, Claude Desktop, …) with:
   "mcpServers": {
     "fullstackgtm": {
       "command": "npx",
-      "args": ["-y", "-p", "fullstackgtm", "-p", "@modelcontextprotocol/sdk", "-p", "zod", "fullstackgtm-mcp"],
+      "args": ["-y", "fullstackgtm-mcp"],
       "env": { "HUBSPOT_ACCESS_TOKEN": "pat-..." }
     }
   }

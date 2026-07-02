@@ -230,6 +230,8 @@ export declare function judgeSignals(opts: {
     promptTemplate?: string;
     llm?: LlmCallOptions;
     now?: Date;
+    /** Per-account progress (presentation only — a throwing callback never fails the run). */
+    onAccount?: (done: number, total: number, domain: string) => void;
 }): Promise<JudgeDecision[]>;
 export declare function judgeDir(baseDir?: string): string;
 export interface JudgeStore {

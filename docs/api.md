@@ -75,9 +75,40 @@ Commands: `init`, `login` / `logout`, `snapshot`, `audit`, `report`, `diff`, `me
 `icp` (`interview` / `set` / `show` / `judge` / `eval`),
 `signals` (`fetch` / `list` / `outcome` / `weights`), `draft`,
 `schedule` (`add` / `list` / `remove` / `enable` / `disable` / `run` /
-`install` / `uninstall` / `status`), `rules`, `profiles`, `doctor`.
+`install` / `uninstall` / `status`), `rules`, `profiles`, `doctor`,
+`capabilities`, `robot-docs`.
 Exit codes: `0` success · `1` error · `2` findings/regressions at the requested gate
 (`--fail-on`, `--fail-on-new-findings`). `--json` everywhere; JSON output shapes are stable.
+
+Agent discovery: `capabilities` prints the machine-readable CLI contract —
+the command inventory with read-only vs write-shaped access (derived from the
+help table, not a parallel list), this exit-code contract, and safety
+defaults. `<command> --help --json` (and `help <command> --json`) prints
+per-command help as JSON. Unknown commands with `--json` return a structured
+`UNKNOWN_COMMAND` envelope with a did-you-mean hint; the plain-text path
+prints the same hint plus pointers to `--help` and `capabilities --json`.
+`robot-docs` prints the packaged agent guide (skills/fullstackgtm/SKILL.md).
+
+Intent inference: a `--flag` that is documented nowhere in the help reference
+but is within one edit of a documented flag (lowercased, `_`→`-`) is treated
+as a typo — exit 1 with `Did you mean` and the exact corrected command
+(structured `UNKNOWN_FLAG` envelope under `--json`). GNU-style `--flag=value`
+spellings of documented flags get the space-separated correction this CLI
+parses. Corrections are suggest-only, never auto-executed. Unknown flags with
+no near-miss are ignored, as before. Unknown `--provider` values and subverb
+typos on the multi-verb commands (`enrich apend` → `enrich append`) get
+nearest-match suggestions; a flag-shaped first token is diagnosed as
+flag-before-command.
+
+Triage: `doctor --json` returns environment status plus a `workspace` slice
+(`healthScore`, `scoreDelta`, `lastAuditAt`, `auditCount`, `pendingPlans`)
+and state-aware `nextSteps` — when a plan awaits approval, the exact
+`plans show <id>` → `plans approve <id> --operations <ids|all>` →
+`apply --plan-id <id> --provider <name>` chain. One call orients an agent.
+
+Reproducibility: with `SOURCE_DATE_EPOCH` set (seconds since the epoch), the
+audit plan's `createdAt` is pinned and `audit --demo --json` is
+byte-deterministic across re-runs.
 
 ### Flag lexicon: `--provider` vs `--source` vs `--connector` vs `--channel`
 
@@ -89,6 +120,25 @@ Four flags name "where data comes from / goes to"; they are not interchangeable:
 | `--source` | The external data source feeding a verb: an enrichment/discovery vendor on `enrich`/`tam` (`--source apollo`, `acquire --source pipe0`), a staged-ingest label on `enrich ingest`, or — on `signals fetch` — which no-auth ATS board adapters to scan. | `apollo`, `clay`, `pipe0`, `explorium`, `theirstack`, `linkedin` (HeyReach); `greenhouse` / `lever` / `ashby` on `signals fetch` |
 | `--connector` | A signal-intake source connector on `signals fetch`: pulls candidate signals from a connected platform or the local webhook spool into the signal ledger. | `file`, `serpapi-news`, `hubspot-forms` |
 | `--channel` | Where a plan's output is delivered. On `apply`, the delivery terminus — a plan applies to `--provider <crm>` *or* `--channel outbox` (render approved openers to a local outbox file; transmits nothing), never both. On `draft`, which outreach channel the opener is drafted for (shapes the emitted op). | `apply`: `outbox` · `draft`: `email`, `linkedin`, `task` |
+
+### Standardized flag aliases
+
+Additive; every legacy flag keeps working:
+
+- `--dry-run` — accepted on the plan-spine verbs (`audit`, `suggest`,
+  `bulk-update`, `dedupe`, `reassign`, `fix`, `call plan`,
+  `enrich append`/`refresh`/`acquire`, `signals fetch`, `icp judge`, `draft`,
+  `tam status`, `market overlay`). These verbs are already preview-by-default
+  (plans are dry-run; nothing writes to a CRM outside approve → apply), so the
+  flag asserts that default rather than changing it: it additionally suppresses
+  `--save` (nothing is persisted to the plan store / run ledgers; a stderr note
+  is printed when both are passed) and locks `fix` to its stop-before-apply
+  path even when `--yes` is present. Omitting `--dry-run` changes nothing.
+  (`tam accounts` had `--dry-run` before this convention — there it prices the
+  credit pull; same spirit, spend nothing.)
+- `--confirm` — accepted wherever an ad-hoc confirmation flag already gates a
+  write stage: alias for `fix --yes` (`tam accounts` already used `--confirm`
+  for its spend guard). `--dry-run` beats `--confirm`/`--yes`.
 
 Credential resolution ladder: explicit `--token-env` → ambient env
 (`HUBSPOT_ACCESS_TOKEN`, `SALESFORCE_ACCESS_TOKEN`+`SALESFORCE_INSTANCE_URL`,
@@ -144,6 +194,13 @@ stamps read by `latestStamps` / `selectStaleWork`). `parseCsv` is the
 dependency-free CSV intake; the Apollo client (`createApolloClient`,
 `pullApolloRecords`, 429-aware with `Retry-After`) is the first `api`-kind
 source.
+
+Staged-file intake follows one container convention (`spoolFiles.ts`, shared
+with `signals fetch --from` and `market observe --from`): `enrich ingest`
+accepts — in addition to its original `.csv` / `.json` forms, which parse
+exactly as before — a `*.jsonl` spool file (one JSON row per line) or a
+directory of `*.jsonl` / `*.json` spool files (name-sorted), the Phase-2
+webhook landing-zone format (docs/signal-spool-format.md).
 
 ## Acquire (net-new lead generation)
 
@@ -226,10 +283,17 @@ firing — an unapproved plan records a `plan_not_approved` no-op run
 - Cron: `parseCron` → `CronExpression`, `cronMatches`, `nextCronFiring`,
   `expectedFirings`, `computeMissedFirings` (status and missed-firing
   visibility — local cron has no catch-up).
-- Local provider: `schedule install` renders enabled entries into a
-  sentinel-managed crontab block — `crontabSentinels`, `renderManagedBlock`,
+- Local provider: `schedule install` materializes enabled entries into the
+  platform timer. crontab (Linux default, `--timer crontab`): a
+  sentinel-managed block — `crontabSentinels`, `renderManagedBlock`,
   `replaceManagedBlock`, and `systemCrontabIo` behind the injectable
-  `CrontabIo` seam (tests never touch a real crontab).
+  `CrontabIo` seam (tests never touch a real crontab). launchd (macOS
+  default, no Full Disk Access needed): one LaunchAgent per entry —
+  `cronToCalendarIntervals` (→ `LaunchdCalendarInterval[]`),
+  `renderLaunchdPlist`, `launchdLabel` / `launchdAgentPrefix`,
+  `installLaunchdAgents` / `uninstallLaunchdAgents`, and `systemLaunchdIo`
+  behind the injectable `LaunchdIo` seam (tests never touch launchctl);
+  `isDuplicateCronFiring` backs the `duplicate_firing` run no-op.
 
 ## Market map
 
@@ -261,9 +325,11 @@ the stored capture it cites before a set is accepted; failed captures read as
 
 ## MCP
 
-Tools: `fullstackgtm_audit`, `fullstackgtm_rules`, `fullstackgtm_apply`
-(requires explicit `approvedOperationIds`), `fullstackgtm_suggest`,
-`fullstackgtm_call_parse`, `fullstackgtm_resolve`,
+Tools: `fullstackgtm_capabilities` (the machine-readable server contract —
+tool inventory with per-tool CRM-write flags, derived from the server's own
+registration table), `fullstackgtm_audit`, `fullstackgtm_rules`,
+`fullstackgtm_apply` (requires explicit `approvedOperationIds`),
+`fullstackgtm_suggest`, `fullstackgtm_call_parse`, `fullstackgtm_resolve`,
 `fullstackgtm_market_worksheet`, `fullstackgtm_market_observe` (validates,
 verifies quoted spans against the stored captures, appends, returns front
 states). Input schemas are stable.

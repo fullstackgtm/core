@@ -113,6 +113,8 @@ export type ClassifyMarketOptions = {
   /** Captures directory override (tests); defaults to the profile market home. */
   capturesDir?: string;
   now?: () => Date;
+  /** Per-vendor progress (presentation only — a throwing callback never fails the run). */
+  onVendor?: (done: number, total: number, vendorId: string) => void;
 };
 
 export type ClassifyMarketResult = {
@@ -143,7 +145,12 @@ export async function classifyMarket(
   const observations: MarketObservation[] = [];
   const retriedVendorIds: string[] = [];
 
-  for (const vendorId of vendorIds) {
+  for (const [vendorIndex, vendorId] of vendorIds.entries()) {
+    try {
+      options.onVendor?.(vendorIndex, vendorIds.length, vendorId);
+    } catch {
+      // progress is presentation-only
+    }
     const vendor = config.vendors.find((candidate) => candidate.id === vendorId);
     if (!vendor) throw new Error(`Unknown vendor "${vendorId}"`);
     const vendorEntries = runEntries.filter((entry) => entry.vendorId === vendorId);

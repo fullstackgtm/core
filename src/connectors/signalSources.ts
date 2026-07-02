@@ -19,10 +19,11 @@
  *     try/catch idiom of atsBoards/prospectSources.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import type { SignalBucket, StagedSignalRow } from "../signals.ts";
 import { SIGNAL_BUCKETS } from "../signals.ts";
+import { parseSpoolText, spoolFilesIn } from "../spoolFiles.ts";
 
 export type SignalSourceShape = "pull" | "push";
 export type SignalSourceAuth = "none" | "api_key" | "oauth";
@@ -99,6 +100,9 @@ export const fileSource: SignalSourceConnector = {
     } catch {
       return []; // missing path: an empty source, not a crash
     }
+    // Container parsing lives in the shared spool reader (src/spoolFiles.ts) so
+    // `signals fetch --from`, `enrich ingest`, and `market observe --from` read
+    // the same convention; the "file source" label keeps error text unchanged.
     const files = isDir ? spoolFilesIn(abs) : [abs];
     const rows: Record<string, unknown>[] = [];
     for (const file of files) {
@@ -108,64 +112,11 @@ export const fileSource: SignalSourceConnector = {
       } catch {
         continue; // one unreadable file in a spool dir must not sink the rest
       }
-      const trimmed = raw.trim();
-      if (!trimmed) continue;
-      const parsed = trimmed.startsWith("[") ? parseJsonArray(trimmed, file) : parseJsonl(trimmed, file);
-      rows.push(...parsed);
+      rows.push(...parseSpoolText(raw, file, "file source"));
     }
     return rows.map((row) => coerceRow(row, this.bucket));
   },
 };
-
-/** Spool files in a landing-zone directory: `*.jsonl` / `*.json`, name-sorted. */
-function spoolFilesIn(dir: string): string[] {
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return [];
-  }
-  return names
-    .filter((name) => name.endsWith(".jsonl") || name.endsWith(".json"))
-    .sort()
-    .map((name) => join(dir, name));
-}
-
-function parseJsonArray(raw: string, path: string): Record<string, unknown>[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`file source ${path}: not valid JSON (${error instanceof Error ? error.message : String(error)}).`);
-  }
-  if (!Array.isArray(parsed)) throw new Error(`file source ${path}: expected a JSON array of staged signal rows.`);
-  return parsed.map((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`file source ${path}: row ${index} is not an object.`);
-    }
-    return entry as Record<string, unknown>;
-  });
-}
-
-function parseJsonl(raw: string, path: string): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
-  const lines = raw.split("\n");
-  lines.forEach((line, index) => {
-    const t = line.trim();
-    if (!t) return;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(t);
-    } catch (error) {
-      throw new Error(`file source ${path}: line ${index} is not valid JSON (${error instanceof Error ? error.message : String(error)}).`);
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(`file source ${path}: line ${index} is not a JSON object.`);
-    }
-    out.push(parsed as Record<string, unknown>);
-  });
-  return out;
-}
 
 // ---------------------------------------------------------------------------
 // serpapi-news — funding/company signals from a news REST query (API key)

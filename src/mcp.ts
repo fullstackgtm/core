@@ -38,6 +38,8 @@ const { StdioServerTransport } = await importPeer<typeof import("@modelcontextpr
 );
 const { z } = await importPeer<typeof import("zod/v4")>("zod/v4");
 import { auditSnapshot, defaultPolicy } from "./audit.ts";
+import { assertCanonicalSnapshot } from "./cli/shared.ts";
+import { nearest } from "./cli/suggest.ts";
 import { loadConfig, mergePolicy, resolveConfiguredRules } from "./config.ts";
 import { applyPatchPlan } from "./connector.ts";
 import { createHubspotConnector } from "./connectors/hubspot.ts";
@@ -123,8 +125,10 @@ async function connectorFor(provider: string): Promise<GtmConnector> {
     }
     return createStripeConnector({ getApiKey: () => key });
   }
+  const providerSuggestion = nearest(provider.toLowerCase(), ["hubspot", "salesforce", "stripe"], 3);
   throw new Error(
-    `Unknown provider: ${provider}. Supported providers: hubspot, salesforce, stripe`,
+    `Unknown provider: ${provider}.${providerSuggestion ? ` Did you mean ${providerSuggestion}?` : ""} ` +
+      "Supported providers: hubspot, salesforce, stripe",
   );
 }
 
@@ -138,9 +142,10 @@ async function readSnapshot(
     return connector.fetchSnapshot();
   }
   if (!inputPath) return sampleSnapshot;
-  return JSON.parse(
-    readFileSync(resolve(process.cwd(), inputPath), "utf8"),
-  ) as CanonicalGtmSnapshot;
+  return assertCanonicalSnapshot(
+    JSON.parse(readFileSync(resolve(process.cwd(), inputPath), "utf8")),
+    inputPath,
+  );
 }
 
 function packageVersion() {
@@ -152,15 +157,29 @@ function packageVersion() {
   }
 }
 
-export async function startMcpServer() {
-  const server = new McpServer({
-    name: "fullstackgtm",
-    version: packageVersion(),
-  });
+type ToolDefinition = {
+  name: string;
+  // Whether the tool can write to a CRM. Everything else reads, or writes
+  // only local workspace state (market_observe appends to the local
+  // observation store).
+  writesCrm: boolean;
+  config: { title: string; description: string; inputSchema?: Record<string, unknown> };
+  // Args are validated by the SDK against config.inputSchema before the
+  // handler runs; the loose typing here is what lets one table drive a
+  // registration loop instead of per-call generics.
+  handler: (args: any) => Promise<ReturnType<typeof content>> | ReturnType<typeof content>;
+};
 
-  server.registerTool(
-    "fullstackgtm_audit",
-    {
+// Single registration table. startMcpServer() registers exactly this list,
+// and fullstackgtm_capabilities reports its names from the same array — the
+// advertised inventory cannot drift from what is actually registered.
+// (A hand-written parallel tool list was a core defect of the first pass at
+// a capabilities tool, which reported 4 of the 8 registered tools.)
+const toolDefinitions: ToolDefinition[] = [
+  {
+    name: "fullstackgtm_audit",
+    writesCrm: false,
+    config: {
       title: "GTM Ops Audit",
       description:
         "Run a dry-run GTM hygiene audit and return a reviewable patch plan. " +
@@ -176,23 +195,23 @@ export async function startMcpServer() {
         staleDealDays: z.number().int().positive().optional(),
       },
     },
-    async ({ provider, inputPath, configPath, rules, output, today, staleDealDays }) => {
+    handler: async ({ provider, inputPath, configPath, rules, output, today, staleDealDays }) => {
       const loaded = configPath ? loadConfig(configPath) : null;
       const policy = mergePolicy(defaultPolicy(today), loaded?.config);
       if (today) policy.today = today;
       if (staleDealDays !== undefined) policy.staleDealDays = staleDealDays;
       const ruleSet = await resolveConfiguredRules(loaded);
       const selected = rules?.length
-        ? ruleSet.filter((rule) => rules.includes(rule.id))
+        ? ruleSet.filter((rule: { id: string }) => rules.includes(rule.id))
         : ruleSet;
       const plan = auditSnapshot(await readSnapshot(provider, inputPath), policy, selected);
       return content(output === "markdown" ? patchPlanToMarkdown(plan) : plan);
     },
-  );
-
-  server.registerTool(
-    "fullstackgtm_suggest",
-    {
+  },
+  {
+    name: "fullstackgtm_suggest",
+    writesCrm: false,
+    config: {
       title: "Suggest Placeholder Values",
       description:
         "Derive values for a plan's requires_human_* placeholder operations from snapshot " +
@@ -204,16 +223,16 @@ export async function startMcpServer() {
         inputPath: z.string().optional(),
       },
     },
-    async ({ planPath, provider, inputPath }) => {
+    handler: async ({ planPath, provider, inputPath }) => {
       const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8")) as PatchPlan;
       const snapshot = await readSnapshot(provider, inputPath);
       return content({ suggestions: suggestValues(plan, snapshot) });
     },
-  );
-
-  server.registerTool(
-    "fullstackgtm_call_parse",
-    {
+  },
+  {
+    name: "fullstackgtm_call_parse",
+    writesCrm: false,
+    config: {
       title: "Parse Call Transcript",
       description:
         "Parse a call transcript (Speaker:/[Speaker]: lines or Granola utterance JSON) into " +
@@ -230,7 +249,7 @@ export async function startMcpServer() {
         model: z.string().optional(),
       },
     },
-    async ({ transcript, transcriptPath, title, source, extractor, model }) => {
+    handler: async ({ transcript, transcriptPath, title, source, extractor, model }) => {
       const raw =
         transcript ??
         (transcriptPath ? readFileSync(resolve(process.cwd(), transcriptPath), "utf8") : null);
@@ -255,11 +274,11 @@ export async function startMcpServer() {
       }
       return content(parseCall(raw, { title, sourceSystem: source }));
     },
-  );
-
-  server.registerTool(
-    "fullstackgtm_resolve",
-    {
+  },
+  {
+    name: "fullstackgtm_resolve",
+    writesCrm: false,
+    config: {
       title: "Resolve Record (create gate)",
       description:
         "Before creating a CRM record, check whether it already exists. Returns a verdict " +
@@ -276,29 +295,29 @@ export async function startMcpServer() {
         inputPath: z.string().optional(),
       },
     },
-    async ({ objectType, name, domain, email, accountId, provider, inputPath }) => {
+    handler: async ({ objectType, name, domain, email, accountId, provider, inputPath }) => {
       const snapshot = await readSnapshot(provider, inputPath);
       return content(resolveRecord(snapshot, { objectType, name, domain, email, accountId }));
     },
-  );
-
-  server.registerTool(
-    "fullstackgtm_rules",
-    {
+  },
+  {
+    name: "fullstackgtm_rules",
+    writesCrm: false,
+    config: {
       title: "List Audit Rules",
       description: "List the built-in deterministic audit rules with ids and descriptions.",
       inputSchema: {},
     },
-    async () => {
+    handler: async () => {
       return content(
         builtinAuditRules.map(({ id, title, description }) => ({ id, title, description })),
       );
     },
-  );
-
-  server.registerTool(
-    "fullstackgtm_apply",
-    {
+  },
+  {
+    name: "fullstackgtm_apply",
+    writesCrm: true,
+    config: {
       title: "Apply Approved Patch Operations",
       description:
         "Apply explicitly approved operations from a patch plan through a provider " +
@@ -312,7 +331,7 @@ export async function startMcpServer() {
         output: z.enum(["json", "markdown"]).optional(),
       },
     },
-    async ({ provider, planPath, approvedOperationIds, valueOverrides, output }) => {
+    handler: async ({ provider, planPath, approvedOperationIds, valueOverrides, output }) => {
       const plan = JSON.parse(
         readFileSync(resolve(process.cwd(), planPath), "utf8"),
       ) as PatchPlan;
@@ -322,11 +341,11 @@ export async function startMcpServer() {
       });
       return content(output === "markdown" ? formatPatchPlanRun(run) : run);
     },
-  );
-
-  server.registerTool(
-    "fullstackgtm_market_worksheet",
-    {
+  },
+  {
+    name: "fullstackgtm_market_worksheet",
+    writesCrm: false,
+    config: {
       title: "Market Map Classification Worksheet",
       description:
         "Get everything needed to classify ONE vendor's messaging intensity for a market map: " +
@@ -341,15 +360,15 @@ export async function startMcpServer() {
         captureRun: z.string().optional(),
       },
     },
-    async ({ vendorId, configPath, captureRun }) => {
+    handler: async ({ vendorId, configPath, captureRun }) => {
       const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
       return content(buildWorksheet(config, vendorId, { captureRun }));
     },
-  );
-
-  server.registerTool(
-    "fullstackgtm_market_observe",
-    {
+  },
+  {
+    name: "fullstackgtm_market_observe",
+    writesCrm: false,
+    config: {
       title: "Submit Market Map Observations",
       description:
         "Submit a complete ObservationSet (every vendor × claim cell) for a market map run. " +
@@ -361,7 +380,7 @@ export async function startMcpServer() {
         configPath: z.string().optional().describe("Path to market.config.json (default ./market.config.json)"),
       },
     },
-    async ({ observationsPath, configPath }) => {
+    handler: async ({ observationsPath, configPath }) => {
       const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
       const set = JSON.parse(readFileSync(resolve(process.cwd(), observationsPath), "utf8")) as ObservationSet;
       const problems = validateObservationSet(config, set);
@@ -377,7 +396,61 @@ export async function startMcpServer() {
       const fronts = computeFrontStates(config, set);
       return content({ accepted: true, runLabel: set.runLabel, observations: set.observations.length, fronts });
     },
-  );
+  },
+];
+
+// Registered first so agents that list tools see the contract entry up top.
+// Its payload closes over the registration table, so the reported inventory
+// is derived, not hand-maintained.
+toolDefinitions.unshift({
+  name: "fullstackgtm_capabilities",
+  writesCrm: false,
+  config: {
+    title: "FullStackGTM Capabilities",
+    description:
+      "Machine-readable contract for this MCP server: the tool inventory (derived from the " +
+      "server's own registration table, with per-tool CRM-write flags), safety defaults, and " +
+      "the CLI entrypoints for everything the tools don't cover.",
+  },
+  handler: async () =>
+    content({
+      ok: true,
+      tool: "fullstackgtm",
+      version: packageVersion(),
+      planFirst: true,
+      mcpTools: toolDefinitions.map(({ name, writesCrm, config }) => ({
+        name,
+        title: config.title,
+        writesCrm,
+      })),
+      safety:
+        "Only tools flagged writesCrm can reach a CRM; fullstackgtm_apply writes only operations " +
+        "listed in approvedOperationIds and never writes requires_human_* placeholders without a value override.",
+      server: { command: "npx -y fullstackgtm-mcp" },
+      cli: {
+        command: "npx fullstackgtm <command> [--json]",
+        capabilities: "npx fullstackgtm capabilities --json",
+        agentGuide: "npx fullstackgtm robot-docs",
+      },
+      examples: [
+        "npx -y fullstackgtm-mcp",
+        "npx fullstackgtm capabilities --json",
+        "npx fullstackgtm audit --demo --json",
+      ],
+    }),
+});
+
+export async function startMcpServer() {
+  const server = new McpServer({
+    name: "fullstackgtm",
+    version: packageVersion(),
+  });
+
+  for (const tool of toolDefinitions) {
+    // The table is loosely typed so it can drive one loop; the SDK still
+    // validates every call against the zod inputSchema at runtime.
+    server.registerTool(tool.name, tool.config as never, tool.handler as never);
+  }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

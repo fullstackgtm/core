@@ -309,3 +309,25 @@ test("cli: market observe rejects invalid sets without writing", async () => {
     delete process.env.FSGTM_HOME;
   }
 });
+
+test("cli: market observe --from reads a .jsonl spool of observation-set envelopes", async () => {
+  const home = mkdtempSync(join(tmpdir(), "fsgtm-home-"));
+  const work = mkdtempSync(join(tmpdir(), "fsgtm-work-"));
+  process.env.FSGTM_HOME = home;
+  const cwd = process.cwd();
+  process.chdir(work);
+  try {
+    writeFileSync(join(work, "market.config.json"), `${JSON.stringify(config(), null, 2)}\n`);
+    // Two envelopes, one per line — each validated + appended through the same
+    // gates as the single-file path (spans unverified here, as in the JSON test).
+    const first = fullSet();
+    const second = { ...fullSet(), runLabel: "run-2" };
+    writeFileSync(join(work, "sets.jsonl"), `${JSON.stringify(first)}\n${JSON.stringify(second)}\n`);
+    await runCli(["market", "observe", "--from", "sets.jsonl", "--unverified"]);
+    assert.ok(existsSync(join(home, "market", "test-category", "observations", "run-1.json")));
+    assert.ok(existsSync(join(home, "market", "test-category", "observations", "run-2.json")));
+  } finally {
+    process.chdir(cwd);
+    delete process.env.FSGTM_HOME;
+  }
+});

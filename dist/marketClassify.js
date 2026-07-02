@@ -92,7 +92,13 @@ export async function classifyMarket(config, options) {
     const claimIds = config.claims.map((claim) => claim.id);
     const observations = [];
     const retriedVendorIds = [];
-    for (const vendorId of vendorIds) {
+    for (const [vendorIndex, vendorId] of vendorIds.entries()) {
+        try {
+            options.onVendor?.(vendorIndex, vendorIds.length, vendorId);
+        }
+        catch {
+            // progress is presentation-only
+        }
         const vendor = config.vendors.find((candidate) => candidate.id === vendorId);
         if (!vendor)
             throw new Error(`Unknown vendor "${vendorId}"`);

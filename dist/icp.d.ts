@@ -86,18 +86,22 @@ export declare function icpToTheirStackFilters(icp: Icp): {
 /**
  * pipe0 Crustdata people-search config.filters from the ICP. `current_job_titles`
  * matches real LinkedIn title strings (case-sensitive), so keywords are Title
- * Cased. Seniority + industry are mapped to Crustdata's controlled vocab via the
- * tables above.
+ * Cased. Industry is mapped to Crustdata's controlled vocab via the table above.
  *
- * LIVE FINDINGS (2026-06-26): `current_job_titles` is confirmed working (a
- * titles-only RevOps search returns results); `current_title` is rejected (422).
- * The full ICP filter returned 0 — the prime suspect is the industry vocab
- * (LinkedIn v1/v2 taxonomy mismatch), now hedged by sending BOTH generations in
- * CRUSTDATA_INDUSTRY above. NOT yet re-confirmed end-to-end (pipe0 credits were
- * exhausted mid-investigation) — re-run `enrich acquire --source pipe0` once
- * credits refill; if it still returns 0, the next suspects are the
- * `current_seniority_levels` shape/values and `locations`. Note fit-scoring backs
- * up PERSONA precision but NOT industry, so the industry filter is load-bearing.
+ * LIVE FINDINGS (2026-06-26, re-confirmed 2026-07-02 with fresh credits):
+ * `current_job_titles` works; `current_title` is rejected (422). The culprit
+ * that zeroed the full ICP filter is `current_seniority_levels`: ANY non-empty
+ * `include` returns 0 results through pipe0's people:profiles:crustdata@1 —
+ * including Crustdata's own documented values ("CXO", "Director",
+ * "Vice President"), lowercase, and SNAKE_CASE variants — while the identical
+ * search without it returns results. (An array instead of the
+ * {include, exclude} object is a 422, so the shape was right; the filter is
+ * broken upstream.) So job levels are NOT sent to the provider: persona
+ * seniority is enforced by fit scoring (scoreProspectAgainstIcp weights
+ * jobLevels), which was always the precision backstop. `locations` and
+ * `current_employers_linkedin_industries` (both-taxonomy hedge) are live-
+ * verified working in combination with titles. Note fit-scoring backs up
+ * PERSONA precision but NOT industry, so the industry filter is load-bearing.
  */
 export declare function icpToCrustdataFilters(icp: Icp): Record<string, unknown>;
 export type IcpFit = {

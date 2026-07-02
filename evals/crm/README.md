@@ -1,6 +1,6 @@
 # CRM Ops Eval
 
-**Latest results: [leaderboard/RESULTS.md](leaderboard/RESULTS.md)** — 1,892-run matrix (nine models × 3 arms × up to 4 trials over 20 scenarios), CuP + pass^k.
+**Latest results: [leaderboard/RESULTS.md](leaderboard/RESULTS.md)** — 2,096-run matrix (ten models × 3 arms × up to 4 trials over 20 scenarios), CuP + pass^k.
 
 Measures whether LLM agents make fewer mistakes operating a CRM when they have
 the [`fullstackgtm`](https://github.com/fullstackgtm/core) framework available —

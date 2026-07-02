@@ -34,8 +34,28 @@ test("mcp server exposes the audit, rules, and apply tools over stdio", () =>
     const tools = await client.listTools();
     assert.deepEqual(
       tools.tools.map((tool) => tool.name).sort(),
-      ["fullstackgtm_apply", "fullstackgtm_audit", "fullstackgtm_call_parse", "fullstackgtm_market_observe", "fullstackgtm_market_worksheet", "fullstackgtm_resolve", "fullstackgtm_rules", "fullstackgtm_suggest"],
+      ["fullstackgtm_apply", "fullstackgtm_audit", "fullstackgtm_call_parse", "fullstackgtm_capabilities", "fullstackgtm_market_observe", "fullstackgtm_market_worksheet", "fullstackgtm_resolve", "fullstackgtm_rules", "fullstackgtm_suggest"],
     );
+  }));
+
+test("mcp capabilities tool reports the full derived tool inventory", () =>
+  withMcpClient(async (client) => {
+    const tools = await client.listTools();
+    const registered = tools.tools.map((tool) => tool.name).sort();
+    const result = await client.callTool({ name: "fullstackgtm_capabilities", arguments: {} });
+    const payload = JSON.parse(textPayload(result));
+    assert.equal(payload.ok, true);
+    // Derived from the registration table, so it must match what the server
+    // actually registered — every tool, not a hand-picked subset.
+    assert.deepEqual(
+      payload.mcpTools.map((tool: { name: string }) => tool.name).sort(),
+      registered,
+    );
+    // apply is the only tool that can reach a CRM.
+    const writers = payload.mcpTools.filter((tool: { writesCrm: boolean }) => tool.writesCrm);
+    assert.deepEqual(writers.map((tool: { name: string }) => tool.name), ["fullstackgtm_apply"]);
+    // Published-package phrasing, not monorepo-dev phrasing.
+    assert.ok(payload.examples.every((example: string) => example.startsWith("npx")));
   }));
 
 test("mcp audit over the demo dataset returns a valid dry-run patch plan", () =>

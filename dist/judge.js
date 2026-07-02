@@ -438,6 +438,12 @@ export async function judgeSignals(opts) {
     }
     const decisions = [];
     for (const [domain, signals] of byAccount) {
+        try {
+            opts.onAccount?.(decisions.length, byAccount.size, domain);
+        }
+        catch {
+            // progress is presentation-only
+        }
         // Memory + fit stay gated on --with-history (scoring semantics unchanged).
         const recentlyTouched = opts.withHistory && opts.snapshot ? accountRecentlyTouched(domain, opts.snapshot, now) : false;
         const bestContact = opts.withHistory && opts.icp && opts.snapshot ? bestContactForAccount(domain, opts.snapshot) : undefined;

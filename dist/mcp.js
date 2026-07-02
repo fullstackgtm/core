@@ -42,6 +42,8 @@ const { McpServer } = await importPeer("@modelcontextprotocol/sdk/server/mcp.js"
 const { StdioServerTransport } = await importPeer("@modelcontextprotocol/sdk/server/stdio.js");
 const { z } = await importPeer("zod/v4");
 import { auditSnapshot, defaultPolicy } from "./audit.js";
+import { assertCanonicalSnapshot } from "./cli/shared.js";
+import { nearest } from "./cli/suggest.js";
 import { loadConfig, mergePolicy, resolveConfiguredRules } from "./config.js";
 import { applyPatchPlan } from "./connector.js";
 import { createHubspotConnector } from "./connectors/hubspot.js";
@@ -101,7 +103,9 @@ async function connectorFor(provider) {
         }
         return createStripeConnector({ getApiKey: () => key });
     }
-    throw new Error(`Unknown provider: ${provider}. Supported providers: hubspot, salesforce, stripe`);
+    const providerSuggestion = nearest(provider.toLowerCase(), ["hubspot", "salesforce", "stripe"], 3);
+    throw new Error(`Unknown provider: ${provider}.${providerSuggestion ? ` Did you mean ${providerSuggestion}?` : ""} ` +
+        "Supported providers: hubspot, salesforce, stripe");
 }
 async function readSnapshot(provider, inputPath) {
     if (provider === "demo")
@@ -112,7 +116,7 @@ async function readSnapshot(provider, inputPath) {
     }
     if (!inputPath)
         return sampleSnapshot;
-    return JSON.parse(readFileSync(resolve(process.cwd(), inputPath), "utf8"));
+    return assertCanonicalSnapshot(JSON.parse(readFileSync(resolve(process.cwd(), inputPath), "utf8")), inputPath);
 }
 function packageVersion() {
     try {
@@ -123,179 +127,268 @@ function packageVersion() {
         return "0.0.0";
     }
 }
+// Single registration table. startMcpServer() registers exactly this list,
+// and fullstackgtm_capabilities reports its names from the same array — the
+// advertised inventory cannot drift from what is actually registered.
+// (A hand-written parallel tool list was a core defect of the first pass at
+// a capabilities tool, which reported 4 of the 8 registered tools.)
+const toolDefinitions = [
+    {
+        name: "fullstackgtm_audit",
+        writesCrm: false,
+        config: {
+            title: "GTM Ops Audit",
+            description: "Run a dry-run GTM hygiene audit and return a reviewable patch plan. " +
+                "Sources: the realistic zero-credential demo CRM (provider: \"demo\" — richest test data), " +
+                "the minimal sample dataset, a snapshot file, or a live provider.",
+            inputSchema: {
+                provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
+                inputPath: z.string().optional(),
+                configPath: z.string().optional(),
+                rules: z.array(z.string()).optional(),
+                output: z.enum(["json", "markdown"]).optional(),
+                today: z.string().optional(),
+                staleDealDays: z.number().int().positive().optional(),
+            },
+        },
+        handler: async ({ provider, inputPath, configPath, rules, output, today, staleDealDays }) => {
+            const loaded = configPath ? loadConfig(configPath) : null;
+            const policy = mergePolicy(defaultPolicy(today), loaded?.config);
+            if (today)
+                policy.today = today;
+            if (staleDealDays !== undefined)
+                policy.staleDealDays = staleDealDays;
+            const ruleSet = await resolveConfiguredRules(loaded);
+            const selected = rules?.length
+                ? ruleSet.filter((rule) => rules.includes(rule.id))
+                : ruleSet;
+            const plan = auditSnapshot(await readSnapshot(provider, inputPath), policy, selected);
+            return content(output === "markdown" ? patchPlanToMarkdown(plan) : plan);
+        },
+    },
+    {
+        name: "fullstackgtm_suggest",
+        writesCrm: false,
+        config: {
+            title: "Suggest Placeholder Values",
+            description: "Derive values for a plan's requires_human_* placeholder operations from snapshot " +
+                "evidence (account-name matching, contact associations), with confidence levels and " +
+                "reasons. Read-only; feed accepted values into fullstackgtm_apply's valueOverrides.",
+            inputSchema: {
+                planPath: z.string(),
+                provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
+                inputPath: z.string().optional(),
+            },
+        },
+        handler: async ({ planPath, provider, inputPath }) => {
+            const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
+            const snapshot = await readSnapshot(provider, inputPath);
+            return content({ suggestions: suggestValues(plan, snapshot) });
+        },
+    },
+    {
+        name: "fullstackgtm_call_parse",
+        writesCrm: false,
+        config: {
+            title: "Parse Call Transcript",
+            description: "Parse a call transcript (Speaker:/[Speaker]: lines or Granola utterance JSON) into " +
+                "canonical segments, insights, and GtmEvidence records. extractor: 'auto' (default) " +
+                "uses LLM extraction when an Anthropic/OpenAI key is configured in the server " +
+                "environment or credential store, else the free deterministic keyword baseline; " +
+                "'llm' and 'deterministic' force either. Read-only; every insight is provenance-marked.",
+            inputSchema: {
+                transcript: z.string().optional(),
+                transcriptPath: z.string().optional(),
+                title: z.string().optional(),
+                source: z.enum(["gong", "chorus", "fathom", "manual", "csv", "unknown"]).optional(),
+                extractor: z.enum(["auto", "llm", "deterministic"]).optional(),
+                model: z.string().optional(),
+            },
+        },
+        handler: async ({ transcript, transcriptPath, title, source, extractor, model }) => {
+            const raw = transcript ??
+                (transcriptPath ? readFileSync(resolve(process.cwd(), transcriptPath), "utf8") : null);
+            if (!raw)
+                throw new Error("Provide transcript (text) or transcriptPath (file).");
+            const mode = extractor ?? "auto";
+            const credential = mode === "deterministic" ? null : resolveLlmCredential();
+            if (mode === "llm" && !credential) {
+                throw new Error("extractor 'llm' needs an API key: set ANTHROPIC_API_KEY or OPENAI_API_KEY in the MCP server environment, or store one with `fullstackgtm login anthropic|openai`.");
+            }
+            if (credential) {
+                const normalized = normalizeTranscript(raw);
+                const { insights, model: used } = await extractInsightsLlm(normalized, {
+                    ...credential,
+                    model,
+                    title,
+                });
+                return content(parseCall(raw, { title, sourceSystem: source, insights, extractor: `llm:${credential.provider}:${used}` }));
+            }
+            return content(parseCall(raw, { title, sourceSystem: source }));
+        },
+    },
+    {
+        name: "fullstackgtm_resolve",
+        writesCrm: false,
+        config: {
+            title: "Resolve Record (create gate)",
+            description: "Before creating a CRM record, check whether it already exists. Returns a verdict " +
+                "(exists | ambiguous | safe_to_create) with matches and a reason, using the same " +
+                "identity keys as the audit/merge engines (account domain, contact email, open-deal " +
+                "key). Read-only. Never create on 'exists' or 'ambiguous'.",
+            inputSchema: {
+                objectType: z.enum(["account", "contact", "deal"]),
+                name: z.string().optional(),
+                domain: z.string().optional(),
+                email: z.string().optional(),
+                accountId: z.string().optional(),
+                provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
+                inputPath: z.string().optional(),
+            },
+        },
+        handler: async ({ objectType, name, domain, email, accountId, provider, inputPath }) => {
+            const snapshot = await readSnapshot(provider, inputPath);
+            return content(resolveRecord(snapshot, { objectType, name, domain, email, accountId }));
+        },
+    },
+    {
+        name: "fullstackgtm_rules",
+        writesCrm: false,
+        config: {
+            title: "List Audit Rules",
+            description: "List the built-in deterministic audit rules with ids and descriptions.",
+            inputSchema: {},
+        },
+        handler: async () => {
+            return content(builtinAuditRules.map(({ id, title, description }) => ({ id, title, description })));
+        },
+    },
+    {
+        name: "fullstackgtm_apply",
+        writesCrm: true,
+        config: {
+            title: "Apply Approved Patch Operations",
+            description: "Apply explicitly approved operations from a patch plan through a provider " +
+                "connector. Operations not listed in approvedOperationIds are never written, " +
+                "and requires_human_* placeholders need a value override.",
+            inputSchema: {
+                provider: z.enum(["hubspot", "salesforce"]),
+                planPath: z.string(),
+                approvedOperationIds: z.array(z.string()).min(1),
+                valueOverrides: z.record(z.string(), z.string()).optional(),
+                output: z.enum(["json", "markdown"]).optional(),
+            },
+        },
+        handler: async ({ provider, planPath, approvedOperationIds, valueOverrides, output }) => {
+            const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
+            const run = await applyPatchPlan(await connectorFor(provider), plan, {
+                approvedOperationIds,
+                valueOverrides,
+            });
+            return content(output === "markdown" ? formatPatchPlanRun(run) : run);
+        },
+    },
+    {
+        name: "fullstackgtm_market_worksheet",
+        writesCrm: false,
+        config: {
+            title: "Market Map Classification Worksheet",
+            description: "Get everything needed to classify ONE vendor's messaging intensity for a market map: " +
+                "the claim taxonomy with judging definitions, the surface rule, and the captured page " +
+                "texts. Read each claim's definition, judge loud/quiet/absent from the page texts only, " +
+                "and quote verbatim spans (≤300 chars) for every loud/quiet reading. Submit the full " +
+                "ObservationSet via fullstackgtm_market_observe — quotes are verified character-for-" +
+                "character against the captures, so never paraphrase.",
+            inputSchema: {
+                vendorId: z.string(),
+                configPath: z.string().optional().describe("Path to market.config.json (default ./market.config.json)"),
+                captureRun: z.string().optional(),
+            },
+        },
+        handler: async ({ vendorId, configPath, captureRun }) => {
+            const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
+            return content(buildWorksheet(config, vendorId, { captureRun }));
+        },
+    },
+    {
+        name: "fullstackgtm_market_observe",
+        writesCrm: false,
+        config: {
+            title: "Submit Market Map Observations",
+            description: "Submit a complete ObservationSet (every vendor × claim cell) for a market map run. " +
+                "Validates coverage, the verbatim-evidence rule, and mechanically verifies every quoted " +
+                "span against the stored capture it cites. Returns problems if rejected; nothing is " +
+                "stored unless the whole set passes. Observations are append-only — use a new runLabel.",
+            inputSchema: {
+                observationsPath: z.string().describe("Path to the ObservationSet JSON file"),
+                configPath: z.string().optional().describe("Path to market.config.json (default ./market.config.json)"),
+            },
+        },
+        handler: async ({ observationsPath, configPath }) => {
+            const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
+            const set = JSON.parse(readFileSync(resolve(process.cwd(), observationsPath), "utf8"));
+            const problems = validateObservationSet(config, set);
+            const failures = verifyEvidenceSpans(set.observations, loadCaptureTexts(config.category).textByHash);
+            if (problems.length > 0 || failures.length > 0) {
+                return content({
+                    accepted: false,
+                    problems,
+                    spanFailures: failures.map((failure) => `${failure.vendorId} × ${failure.claimId}: ${failure.problem}`),
+                });
+            }
+            await createFileObservationStore(config.category).append(set);
+            const fronts = computeFrontStates(config, set);
+            return content({ accepted: true, runLabel: set.runLabel, observations: set.observations.length, fronts });
+        },
+    },
+];
+// Registered first so agents that list tools see the contract entry up top.
+// Its payload closes over the registration table, so the reported inventory
+// is derived, not hand-maintained.
+toolDefinitions.unshift({
+    name: "fullstackgtm_capabilities",
+    writesCrm: false,
+    config: {
+        title: "FullStackGTM Capabilities",
+        description: "Machine-readable contract for this MCP server: the tool inventory (derived from the " +
+            "server's own registration table, with per-tool CRM-write flags), safety defaults, and " +
+            "the CLI entrypoints for everything the tools don't cover.",
+    },
+    handler: async () => content({
+        ok: true,
+        tool: "fullstackgtm",
+        version: packageVersion(),
+        planFirst: true,
+        mcpTools: toolDefinitions.map(({ name, writesCrm, config }) => ({
+            name,
+            title: config.title,
+            writesCrm,
+        })),
+        safety: "Only tools flagged writesCrm can reach a CRM; fullstackgtm_apply writes only operations " +
+            "listed in approvedOperationIds and never writes requires_human_* placeholders without a value override.",
+        server: { command: "npx -y fullstackgtm-mcp" },
+        cli: {
+            command: "npx fullstackgtm <command> [--json]",
+            capabilities: "npx fullstackgtm capabilities --json",
+            agentGuide: "npx fullstackgtm robot-docs",
+        },
+        examples: [
+            "npx -y fullstackgtm-mcp",
+            "npx fullstackgtm capabilities --json",
+            "npx fullstackgtm audit --demo --json",
+        ],
+    }),
+});
 export async function startMcpServer() {
     const server = new McpServer({
         name: "fullstackgtm",
         version: packageVersion(),
     });
-    server.registerTool("fullstackgtm_audit", {
-        title: "GTM Ops Audit",
-        description: "Run a dry-run GTM hygiene audit and return a reviewable patch plan. " +
-            "Sources: the realistic zero-credential demo CRM (provider: \"demo\" — richest test data), " +
-            "the minimal sample dataset, a snapshot file, or a live provider.",
-        inputSchema: {
-            provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
-            inputPath: z.string().optional(),
-            configPath: z.string().optional(),
-            rules: z.array(z.string()).optional(),
-            output: z.enum(["json", "markdown"]).optional(),
-            today: z.string().optional(),
-            staleDealDays: z.number().int().positive().optional(),
-        },
-    }, async ({ provider, inputPath, configPath, rules, output, today, staleDealDays }) => {
-        const loaded = configPath ? loadConfig(configPath) : null;
-        const policy = mergePolicy(defaultPolicy(today), loaded?.config);
-        if (today)
-            policy.today = today;
-        if (staleDealDays !== undefined)
-            policy.staleDealDays = staleDealDays;
-        const ruleSet = await resolveConfiguredRules(loaded);
-        const selected = rules?.length
-            ? ruleSet.filter((rule) => rules.includes(rule.id))
-            : ruleSet;
-        const plan = auditSnapshot(await readSnapshot(provider, inputPath), policy, selected);
-        return content(output === "markdown" ? patchPlanToMarkdown(plan) : plan);
-    });
-    server.registerTool("fullstackgtm_suggest", {
-        title: "Suggest Placeholder Values",
-        description: "Derive values for a plan's requires_human_* placeholder operations from snapshot " +
-            "evidence (account-name matching, contact associations), with confidence levels and " +
-            "reasons. Read-only; feed accepted values into fullstackgtm_apply's valueOverrides.",
-        inputSchema: {
-            planPath: z.string(),
-            provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
-            inputPath: z.string().optional(),
-        },
-    }, async ({ planPath, provider, inputPath }) => {
-        const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
-        const snapshot = await readSnapshot(provider, inputPath);
-        return content({ suggestions: suggestValues(plan, snapshot) });
-    });
-    server.registerTool("fullstackgtm_call_parse", {
-        title: "Parse Call Transcript",
-        description: "Parse a call transcript (Speaker:/[Speaker]: lines or Granola utterance JSON) into " +
-            "canonical segments, insights, and GtmEvidence records. extractor: 'auto' (default) " +
-            "uses LLM extraction when an Anthropic/OpenAI key is configured in the server " +
-            "environment or credential store, else the free deterministic keyword baseline; " +
-            "'llm' and 'deterministic' force either. Read-only; every insight is provenance-marked.",
-        inputSchema: {
-            transcript: z.string().optional(),
-            transcriptPath: z.string().optional(),
-            title: z.string().optional(),
-            source: z.enum(["gong", "chorus", "fathom", "manual", "csv", "unknown"]).optional(),
-            extractor: z.enum(["auto", "llm", "deterministic"]).optional(),
-            model: z.string().optional(),
-        },
-    }, async ({ transcript, transcriptPath, title, source, extractor, model }) => {
-        const raw = transcript ??
-            (transcriptPath ? readFileSync(resolve(process.cwd(), transcriptPath), "utf8") : null);
-        if (!raw)
-            throw new Error("Provide transcript (text) or transcriptPath (file).");
-        const mode = extractor ?? "auto";
-        const credential = mode === "deterministic" ? null : resolveLlmCredential();
-        if (mode === "llm" && !credential) {
-            throw new Error("extractor 'llm' needs an API key: set ANTHROPIC_API_KEY or OPENAI_API_KEY in the MCP server environment, or store one with `fullstackgtm login anthropic|openai`.");
-        }
-        if (credential) {
-            const normalized = normalizeTranscript(raw);
-            const { insights, model: used } = await extractInsightsLlm(normalized, {
-                ...credential,
-                model,
-                title,
-            });
-            return content(parseCall(raw, { title, sourceSystem: source, insights, extractor: `llm:${credential.provider}:${used}` }));
-        }
-        return content(parseCall(raw, { title, sourceSystem: source }));
-    });
-    server.registerTool("fullstackgtm_resolve", {
-        title: "Resolve Record (create gate)",
-        description: "Before creating a CRM record, check whether it already exists. Returns a verdict " +
-            "(exists | ambiguous | safe_to_create) with matches and a reason, using the same " +
-            "identity keys as the audit/merge engines (account domain, contact email, open-deal " +
-            "key). Read-only. Never create on 'exists' or 'ambiguous'.",
-        inputSchema: {
-            objectType: z.enum(["account", "contact", "deal"]),
-            name: z.string().optional(),
-            domain: z.string().optional(),
-            email: z.string().optional(),
-            accountId: z.string().optional(),
-            provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
-            inputPath: z.string().optional(),
-        },
-    }, async ({ objectType, name, domain, email, accountId, provider, inputPath }) => {
-        const snapshot = await readSnapshot(provider, inputPath);
-        return content(resolveRecord(snapshot, { objectType, name, domain, email, accountId }));
-    });
-    server.registerTool("fullstackgtm_rules", {
-        title: "List Audit Rules",
-        description: "List the built-in deterministic audit rules with ids and descriptions.",
-        inputSchema: {},
-    }, async () => {
-        return content(builtinAuditRules.map(({ id, title, description }) => ({ id, title, description })));
-    });
-    server.registerTool("fullstackgtm_apply", {
-        title: "Apply Approved Patch Operations",
-        description: "Apply explicitly approved operations from a patch plan through a provider " +
-            "connector. Operations not listed in approvedOperationIds are never written, " +
-            "and requires_human_* placeholders need a value override.",
-        inputSchema: {
-            provider: z.enum(["hubspot", "salesforce"]),
-            planPath: z.string(),
-            approvedOperationIds: z.array(z.string()).min(1),
-            valueOverrides: z.record(z.string(), z.string()).optional(),
-            output: z.enum(["json", "markdown"]).optional(),
-        },
-    }, async ({ provider, planPath, approvedOperationIds, valueOverrides, output }) => {
-        const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
-        const run = await applyPatchPlan(await connectorFor(provider), plan, {
-            approvedOperationIds,
-            valueOverrides,
-        });
-        return content(output === "markdown" ? formatPatchPlanRun(run) : run);
-    });
-    server.registerTool("fullstackgtm_market_worksheet", {
-        title: "Market Map Classification Worksheet",
-        description: "Get everything needed to classify ONE vendor's messaging intensity for a market map: " +
-            "the claim taxonomy with judging definitions, the surface rule, and the captured page " +
-            "texts. Read each claim's definition, judge loud/quiet/absent from the page texts only, " +
-            "and quote verbatim spans (≤300 chars) for every loud/quiet reading. Submit the full " +
-            "ObservationSet via fullstackgtm_market_observe — quotes are verified character-for-" +
-            "character against the captures, so never paraphrase.",
-        inputSchema: {
-            vendorId: z.string(),
-            configPath: z.string().optional().describe("Path to market.config.json (default ./market.config.json)"),
-            captureRun: z.string().optional(),
-        },
-    }, async ({ vendorId, configPath, captureRun }) => {
-        const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
-        return content(buildWorksheet(config, vendorId, { captureRun }));
-    });
-    server.registerTool("fullstackgtm_market_observe", {
-        title: "Submit Market Map Observations",
-        description: "Submit a complete ObservationSet (every vendor × claim cell) for a market map run. " +
-            "Validates coverage, the verbatim-evidence rule, and mechanically verifies every quoted " +
-            "span against the stored capture it cites. Returns problems if rejected; nothing is " +
-            "stored unless the whole set passes. Observations are append-only — use a new runLabel.",
-        inputSchema: {
-            observationsPath: z.string().describe("Path to the ObservationSet JSON file"),
-            configPath: z.string().optional().describe("Path to market.config.json (default ./market.config.json)"),
-        },
-    }, async ({ observationsPath, configPath }) => {
-        const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
-        const set = JSON.parse(readFileSync(resolve(process.cwd(), observationsPath), "utf8"));
-        const problems = validateObservationSet(config, set);
-        const failures = verifyEvidenceSpans(set.observations, loadCaptureTexts(config.category).textByHash);
-        if (problems.length > 0 || failures.length > 0) {
-            return content({
-                accepted: false,
-                problems,
-                spanFailures: failures.map((failure) => `${failure.vendorId} × ${failure.claimId}: ${failure.problem}`),
-            });
-        }
-        await createFileObservationStore(config.category).append(set);
-        const fronts = computeFrontStates(config, set);
-        return content({ accepted: true, runLabel: set.runLabel, observations: set.observations.length, fronts });
-    });
+    for (const tool of toolDefinitions) {
+        // The table is loosely typed so it can drive one loop; the SDK still
+        // validates every call against the zod inputSchema at runtime.
+        server.registerTool(tool.name, tool.config, tool.handler);
+    }
     const transport = new StdioServerTransport();
     await server.connect(transport);
 }

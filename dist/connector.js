@@ -253,7 +253,41 @@ export async function applyPatchPlan(connector, plan, options) {
                 batched.set(result.operationId, result);
         }
     }
+    // Progress ticker state: every loop iteration below pushes at most one
+    // result; `lastNotified` guards the rare early-throw path so an iteration
+    // that pushed nothing reports nothing.
+    const progressCounts = { applied: 0, failed: 0, conflicts: 0, skipped: 0 };
+    const resultsBefore = results.length;
+    let lastNotified = results.length;
+    const notifyProgress = () => {
+        if (!options.onOperation || results.length === lastNotified)
+            return;
+        lastNotified = results.length;
+        const last = results[results.length - 1];
+        if (last.status === "applied")
+            progressCounts.applied += 1;
+        else if (last.status === "failed")
+            progressCounts.failed += 1;
+        else if (last.status === "conflict")
+            progressCounts.conflicts += 1;
+        else
+            progressCounts.skipped += 1;
+        try {
+            options.onOperation({
+                completed: results.length - resultsBefore,
+                total: plan.operations.length,
+                ...progressCounts,
+            });
+        }
+        catch {
+            // progress is presentation-only
+        }
+    };
     for (const operation of plan.operations) {
+        // Report the previous iteration's result (guarded: no-op if it pushed
+        // nothing). One-iteration lag keeps this a two-line hook instead of a
+        // notify after all ten push sites; the loop-exit call below flushes the last.
+        notifyProgress();
         const batchedResult = batched.get(operation.id);
         if (batchedResult) {
             results.push(batchedResult);
@@ -342,6 +376,7 @@ export async function applyPatchPlan(connector, plan, options) {
             });
         }
     }
+    notifyProgress();
     return {
         planId: plan.id,
         provider: connector.provider,

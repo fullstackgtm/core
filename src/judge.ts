@@ -612,6 +612,8 @@ export async function judgeSignals(opts: {
   promptTemplate?: string;
   llm?: LlmCallOptions;
   now?: Date;
+  /** Per-account progress (presentation only — a throwing callback never fails the run). */
+  onAccount?: (done: number, total: number, domain: string) => void;
 }): Promise<JudgeDecision[]> {
   const now = opts.now ?? new Date();
   const signalsById = new Map(opts.signals.map((s) => [s.id, s]));
@@ -629,6 +631,11 @@ export async function judgeSignals(opts: {
 
   const decisions: JudgeDecision[] = [];
   for (const [domain, signals] of byAccount) {
+    try {
+      opts.onAccount?.(decisions.length, byAccount.size, domain);
+    } catch {
+      // progress is presentation-only
+    }
     // Memory + fit stay gated on --with-history (scoring semantics unchanged).
     const recentlyTouched =
       opts.withHistory && opts.snapshot ? accountRecentlyTouched(domain, opts.snapshot, now) : false;

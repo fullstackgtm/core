@@ -17,6 +17,7 @@ import type {
   GtmObjectType,
   PatchOperation,
   PatchOperationResult,
+  SnapshotProgress,
 } from "../types.ts";
 
 const DEFAULT_API_VERSION = "v59.0";
@@ -35,6 +36,8 @@ export type SalesforceConnectorOptions = {
   apiVersion?: string;
   /** Injectable fetch for testing. */
   fetchImpl?: typeof fetch;
+  /** Per-page snapshot-pull progress (presentation only — errors are swallowed). */
+  onProgress?: (progress: SnapshotProgress) => void;
 };
 
 const SOBJECT_TYPES: Partial<Record<GtmObjectType, string>> = {
@@ -161,7 +164,7 @@ export function createSalesforceConnector(
     return text ? JSON.parse(text) : null;
   }
 
-  async function query(soql: string): Promise<any[]> {
+  async function query(soql: string, onPage?: (fetched: number) => void): Promise<any[]> {
     const records: any[] = [];
     let next: string | undefined = `/services/data/${apiVersion}/query?q=${encodeURIComponent(soql)}`;
     const seen = new Set<string>();
@@ -171,6 +174,11 @@ export function createSalesforceConnector(
       seen.add(next);
       const data = await request(next);
       records.push(...(data?.records ?? []));
+      try {
+        onPage?.(records.length);
+      } catch {
+        // progress is presentation-only; never let it fail a pull
+      }
       next = data?.nextRecordsUrl ?? undefined;
     }
     return records;
@@ -194,7 +202,12 @@ export function createSalesforceConnector(
   }
 
   async function assembleSnapshot(whereClause: string): Promise<CanonicalGtmSnapshot> {
-    const sfUsers = await query(`SELECT ${selectFields("owners")} FROM User${whereClause}`);
+    const progressFor = (objectType: SnapshotProgress["objectType"]) => (fetched: number) =>
+      options.onProgress?.({ objectType, fetched });
+    const sfUsers = await query(
+      `SELECT ${selectFields("owners")} FROM User${whereClause}`,
+      progressFor("user"),
+    );
     const users: CanonicalUser[] = sfUsers.map((user) => {
       const id = String(readMapped(user, "owners", "id", "Id"));
       const email = stringOrUndefined(readMapped(user, "owners", "email", "Email"));
@@ -212,6 +225,7 @@ export function createSalesforceConnector(
 
     const sfAccounts = await query(
       `SELECT ${selectFields("accounts")} FROM Account${whereClause}`,
+      progressFor("account"),
     );
     const accounts: CanonicalAccount[] = sfAccounts.map((account) => {
       const id = String(readMapped(account, "accounts", "id", "Id"));
@@ -236,6 +250,7 @@ export function createSalesforceConnector(
 
     const sfContacts = await query(
       `SELECT ${selectFields("contacts")} FROM Contact${whereClause}`,
+      progressFor("contact"),
     );
     const contacts: CanonicalContact[] = sfContacts.map((contact) => {
       const id = String(readMapped(contact, "contacts", "id", "Id"));
@@ -257,6 +272,7 @@ export function createSalesforceConnector(
 
     const sfOpportunities = await query(
       `SELECT ${selectFields("deals")} FROM Opportunity${whereClause}`,
+      progressFor("deal"),
     );
     const deals: CanonicalDeal[] = sfOpportunities.map((opportunity) => {
       const id = String(readMapped(opportunity, "deals", "id", "Id"));

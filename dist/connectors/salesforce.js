@@ -116,7 +116,7 @@ export function createSalesforceConnector(options) {
         const text = await response.text();
         return text ? JSON.parse(text) : null;
     }
-    async function query(soql) {
+    async function query(soql, onPage) {
         const records = [];
         let next = `/services/data/${apiVersion}/query?q=${encodeURIComponent(soql)}`;
         const seen = new Set();
@@ -127,6 +127,12 @@ export function createSalesforceConnector(options) {
             seen.add(next);
             const data = await request(next);
             records.push(...(data?.records ?? []));
+            try {
+                onPage?.(records.length);
+            }
+            catch {
+                // progress is presentation-only; never let it fail a pull
+            }
             next = data?.nextRecordsUrl ?? undefined;
         }
         return records;
@@ -138,7 +144,8 @@ export function createSalesforceConnector(options) {
         return mappedFields(mappings, objectType, SALESFORCE_DEFAULT_FIELD_MAPPINGS[objectType]).join(", ");
     }
     async function assembleSnapshot(whereClause) {
-        const sfUsers = await query(`SELECT ${selectFields("owners")} FROM User${whereClause}`);
+        const progressFor = (objectType) => (fetched) => options.onProgress?.({ objectType, fetched });
+        const sfUsers = await query(`SELECT ${selectFields("owners")} FROM User${whereClause}`, progressFor("user"));
         const users = sfUsers.map((user) => {
             const id = String(readMapped(user, "owners", "id", "Id"));
             const email = stringOrUndefined(readMapped(user, "owners", "email", "Email"));
@@ -153,7 +160,7 @@ export function createSalesforceConnector(options) {
                 active: Boolean(readMapped(user, "owners", "isActive", "IsActive")),
             };
         });
-        const sfAccounts = await query(`SELECT ${selectFields("accounts")} FROM Account${whereClause}`);
+        const sfAccounts = await query(`SELECT ${selectFields("accounts")} FROM Account${whereClause}`, progressFor("account"));
         const accounts = sfAccounts.map((account) => {
             const id = String(readMapped(account, "accounts", "id", "Id"));
             return {
@@ -170,7 +177,7 @@ export function createSalesforceConnector(options) {
                 raw: account,
             };
         });
-        const sfContacts = await query(`SELECT ${selectFields("contacts")} FROM Contact${whereClause}`);
+        const sfContacts = await query(`SELECT ${selectFields("contacts")} FROM Contact${whereClause}`, progressFor("contact"));
         const contacts = sfContacts.map((contact) => {
             const id = String(readMapped(contact, "contacts", "id", "Id"));
             return {
@@ -188,7 +195,7 @@ export function createSalesforceConnector(options) {
                 raw: contact,
             };
         });
-        const sfOpportunities = await query(`SELECT ${selectFields("deals")} FROM Opportunity${whereClause}`);
+        const sfOpportunities = await query(`SELECT ${selectFields("deals")} FROM Opportunity${whereClause}`, progressFor("deal"));
         const deals = sfOpportunities.map((opportunity) => {
             const id = String(readMapped(opportunity, "deals", "id", "Id"));
             const probability = numberOrUndefined(readMapped(opportunity, "deals", "probability", "Probability"));

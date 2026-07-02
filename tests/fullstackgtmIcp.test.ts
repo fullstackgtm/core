@@ -37,17 +37,19 @@ test("icpToExploriumFilters maps firmographics + persona to Explorium's shape", 
   assert.deepEqual(f.naics_category, { values: ["5112"] });
 });
 
-test("icpToCrustdataFilters Title-Cases titles, maps geo, seniority + industry vocab", () => {
+test("icpToCrustdataFilters Title-Cases titles, maps geo + industry vocab, omits seniority", () => {
   const f = icpToCrustdataFilters(ICP) as {
     current_job_titles: string[];
     locations: string[];
-    current_seniority_levels: { include: string[]; exclude: string[] };
     current_employers_linkedin_industries: string[];
   };
   assert.deepEqual(f.current_job_titles, ["Revenue Operations", "Sales Operations", "CRO"]);
   assert.deepEqual(f.locations, ["United States"]);
-  // jobLevels ["vp","director","manager","cxo"] → Crustdata vocab
-  assert.deepEqual(f.current_seniority_levels.include, ["Vice President", "Director", "Manager", "CXO"]);
+  // jobLevels are deliberately NOT sent: pipe0/Crustdata's
+  // current_seniority_levels returns 0 results for ANY non-empty include
+  // (live-verified 2026-07-02, documented vocab included). Persona seniority
+  // is enforced by fit scoring instead.
+  assert.ok(!("current_seniority_levels" in f), "seniority filter must not be sent to the provider");
   // industries ["software","saas"] → LinkedIn industry cluster (deduped), sending
   // BOTH taxonomy generations so a v1-vs-v2 vendor mismatch can't zero the match.
   assert.deepEqual(f.current_employers_linkedin_industries, [

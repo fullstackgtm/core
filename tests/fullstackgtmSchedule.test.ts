@@ -9,16 +9,24 @@ import {
   createFileScheduleRunStore,
   createFileScheduleStore,
   cronMatches,
+  cronToCalendarIntervals,
   crontabSentinels,
   expectedFirings,
+  installLaunchdAgents,
+  isDuplicateCronFiring,
+  launchdAgentPrefix,
+  launchdLabel,
   nextCronFiring,
   parseCron,
+  renderLaunchdPlist,
   renderManagedBlock,
   replaceManagedBlock,
   scheduleId,
   tokenizeCommand,
+  uninstallLaunchdAgents,
   validateSchedulableArgv,
   type CrontabIo,
+  type LaunchdIo,
   type ScheduleEntry,
   type ScheduleRunRecord,
 } from "../src/schedule.ts";
@@ -328,6 +336,139 @@ test("managed blocks are per profile and damaged sentinels are refused", () => {
   // Uninstall with no block present is a no-op.
   assert.equal(replaceManagedBlock("0 1 * * * job\n", "acme", null), "0 1 * * * job\n");
   assert.equal(replaceManagedBlock("", "acme", null), "");
+});
+
+// ---------------------------------------------------------------------------
+// Local provider: launchd LaunchAgents, via fakes only (NEVER the real launchctl)
+
+test("cronToCalendarIntervals compiles cron to launchd dicts, wildcarding full-range fields", () => {
+  assert.deepEqual(cronToCalendarIntervals(parseCron("0 9 * * *")), [{ Minute: 0, Hour: 9 }]);
+  assert.deepEqual(cronToCalendarIntervals(parseCron("*/15 * * * *")), [
+    { Minute: 0 },
+    { Minute: 15 },
+    { Minute: 30 },
+    { Minute: 45 },
+  ]);
+  // Every-minute and full-range spellings are a single all-wildcard dict.
+  assert.deepEqual(cronToCalendarIntervals(parseCron("* * * * *")), [{}]);
+  assert.deepEqual(cronToCalendarIntervals(parseCron("0-59 * * * 0-7")), [{ }]);
+  // Weekday restriction cross-products; cron's 7 normalizes to launchd Sunday 0.
+  assert.deepEqual(cronToCalendarIntervals(parseCron("30 8 * * 1-3")), [
+    { Minute: 30, Hour: 8, Weekday: 1 },
+    { Minute: 30, Hour: 8, Weekday: 2 },
+    { Minute: 30, Hour: 8, Weekday: 3 },
+  ]);
+  assert.deepEqual(cronToCalendarIntervals(parseCron("0 9 * * 7")), [{ Minute: 0, Hour: 9, Weekday: 0 }]);
+  assert.deepEqual(cronToCalendarIntervals(parseCron("0 0 1,15 6 *")), [
+    { Minute: 0, Hour: 0, Day: 1, Month: 6 },
+    { Minute: 0, Hour: 0, Day: 15, Month: 6 },
+  ]);
+});
+
+test("cronToCalendarIntervals expands Vixie dom+dow OR as a Day set plus a Weekday set", () => {
+  // "9am on the 13th OR on Fridays" — launchd ANDs keys within a dict, so the
+  // OR becomes two dicts. (A Friday the 13th matches both; the run entry
+  // point's duplicate-firing guard drops the second trigger.)
+  assert.deepEqual(cronToCalendarIntervals(parseCron("0 9 13 * 5")), [
+    { Minute: 0, Hour: 9, Day: 13 },
+    { Minute: 0, Hour: 9, Weekday: 5 },
+  ]);
+});
+
+test("cronToCalendarIntervals caps dense expressions with a clear error", () => {
+  // 30 minutes × 11 hours × 5 weekdays = 1650 dicts > 512.
+  assert.throws(() => cronToCalendarIntervals(parseCron("*/2 8-18 * * 1-5")), /expands to 1650 .* \(cap 512\)/);
+});
+
+test("isDuplicateCronFiring drops a second cron trigger in the same minute, never a manual run", () => {
+  const firedAt = new Date(2026, 6, 3, 9, 0, 20).toISOString();
+  const sameMinute = runAt(new Date(2026, 6, 3, 9, 0, 2), { trigger: "cron" });
+  const earlierMinute = runAt(new Date(2026, 6, 3, 8, 59, 59), { trigger: "cron" });
+  const manualSameMinute = runAt(new Date(2026, 6, 3, 9, 0, 2), { trigger: "manual" });
+  assert.equal(isDuplicateCronFiring([sameMinute], firedAt), true);
+  assert.equal(isDuplicateCronFiring([earlierMinute], firedAt), false);
+  assert.equal(isDuplicateCronFiring([manualSameMinute], firedAt), false);
+  assert.equal(isDuplicateCronFiring([], firedAt), false);
+});
+
+function fakeLaunchd(initialForeign: string[] = []): LaunchdIo & {
+  files: Map<string, string>;
+  loaded: Set<string>;
+  bootstraps: string[];
+} {
+  const io = {
+    files: new Map<string, string>(initialForeign.map((name) => [name, "<foreign/>"])),
+    loaded: new Set<string>(),
+    bootstraps: [] as string[],
+    list: () => [...io.files.keys()],
+    write: (fileName: string, content: string) => {
+      io.files.set(fileName, content);
+    },
+    remove: (fileName: string) => {
+      io.files.delete(fileName);
+    },
+    bootstrap: (fileName: string) => {
+      io.bootstraps.push(fileName);
+      io.loaded.add(fileName.slice(0, -".plist".length));
+    },
+    bootout: (label: string) => {
+      io.loaded.delete(label);
+    },
+  };
+  return io;
+}
+
+test("installLaunchdAgents writes one bootstrapped plist per entry and replaces the fleet wholesale", () => {
+  const io = fakeLaunchd(["com.example.other.plist", "com.fullstackgtm.default.sch_stale999.plist"]);
+  io.loaded.add("com.fullstackgtm.default.sch_stale999");
+  const entry = entryWith({ id: "sch_aaaa1111", cron: "0 9 * * *", label: "daily-acquire" });
+
+  const result = installLaunchdAgents("default", [entry], ["/usr/local/bin/node", "/repo/bin.js"], io, {
+    environment: { FSGTM_HOME: "/home/user/.fullstackgtm" },
+    logDir: "/home/user/.fullstackgtm/schedule/logs",
+  });
+
+  assert.deepEqual(result.removed, ["com.fullstackgtm.default.sch_stale999"]);
+  assert.deepEqual(result.installed, ["com.fullstackgtm.default.sch_aaaa1111"]);
+  assert.ok(!io.files.has("com.fullstackgtm.default.sch_stale999.plist"), "stale agent deleted");
+  assert.ok(!io.loaded.has("com.fullstackgtm.default.sch_stale999"), "stale agent booted out");
+  assert.ok(io.files.has("com.example.other.plist"), "foreign plists untouched");
+
+  const plist = io.files.get("com.fullstackgtm.default.sch_aaaa1111.plist")!;
+  assert.ok(plist.includes("<string>com.fullstackgtm.default.sch_aaaa1111</string>"));
+  // ProgramArguments is only `schedule run <id>` dispatch, argv-array, no shell.
+  const argsBlock = plist.slice(plist.indexOf("ProgramArguments"), plist.indexOf("StartCalendarInterval"));
+  for (const token of ["/usr/local/bin/node", "/repo/bin.js", "schedule", "run", "sch_aaaa1111", "--profile", "default", "--trigger", "cron"]) {
+    assert.ok(argsBlock.includes(`<string>${token}</string>`), `ProgramArguments carries ${token}`);
+  }
+  assert.ok(plist.includes("<key>Minute</key>") && plist.includes("<integer>0</integer>"));
+  assert.ok(plist.includes("<key>Hour</key>") && plist.includes("<integer>9</integer>"));
+  assert.ok(plist.includes("<key>FSGTM_HOME</key>"));
+  assert.ok(plist.includes("com.fullstackgtm.default.sch_aaaa1111.log"));
+  assert.deepEqual(io.bootstraps, ["com.fullstackgtm.default.sch_aaaa1111.plist"]);
+
+  // Uninstall removes exactly the profile's fleet.
+  const removed = uninstallLaunchdAgents("default", io);
+  assert.deepEqual(removed, ["com.fullstackgtm.default.sch_aaaa1111"]);
+  assert.deepEqual(io.list(), ["com.example.other.plist"]);
+});
+
+test("launchd plists XML-escape paths and refuse control characters / bad labels", () => {
+  const plist = renderLaunchdPlist({
+    label: "com.fullstackgtm.default.sch_x",
+    programArguments: ["/opt/node & tools/node", "/repo/<odd>/bin.js"],
+    calendarIntervals: [{ Minute: 0 }],
+  });
+  assert.ok(plist.includes("<string>/opt/node &amp; tools/node</string>"));
+  assert.ok(plist.includes("<string>/repo/&lt;odd&gt;/bin.js</string>"));
+
+  const io = fakeLaunchd();
+  assert.throws(
+    () => installLaunchdAgents("default", [entryWith()], ["/usr/bin/node\n", "/repo/bin.js"], io),
+    /control character/,
+  );
+  assert.throws(() => launchdAgentPrefix("bad profile"), /launchd label/);
+  assert.throws(() => launchdLabel("default", "sch_bad id"), /launchd label/);
 });
 
 // ---------------------------------------------------------------------------

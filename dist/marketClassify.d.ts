@@ -11,6 +11,8 @@ export type ClassifyMarketOptions = {
     /** Captures directory override (tests); defaults to the profile market home. */
     capturesDir?: string;
     now?: () => Date;
+    /** Per-vendor progress (presentation only — a throwing callback never fails the run). */
+    onVendor?: (done: number, total: number, vendorId: string) => void;
 };
 export type ClassifyMarketResult = {
     set: ObservationSet;

@@ -474,6 +474,18 @@ export type PatchPlanRun = {
 };
 
 /**
+ * Per-page progress during a snapshot pull, emitted by connectors that accept
+ * an `onProgress` option. `fetched` is the running total for the object type
+ * currently streaming (it resets when the pull moves on to the next type).
+ * Presentation-only: a throwing callback must never fail a pull, so emitters
+ * call it best-effort.
+ */
+export type SnapshotProgress = {
+  objectType: "user" | "account" | "contact" | "deal";
+  fetched: number;
+};
+
+/**
  * The provider contract. Reads produce a canonical snapshot; writes accept a
  * single patch operation and report the outcome. Connectors without
  * `applyOperation` are read-only.
