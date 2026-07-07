@@ -7,6 +7,12 @@ The path to 1.0 is planned in the roadmap doc in the repository.
 
 ## [Unreleased]
 
+## [0.47.0] — 2026-07-06
+
+### Added
+
+- **Batched CRM apply for updates and deletes.** `applyPatchPlan` can now dispatch consecutive homogeneous `set_field` / `clear_field` / `archive_record` runs through an optional connector `applyBatch` capability with connector-declared `applyBatchLimit`. Salesforce implements this with batched CAS SOQL reads and Composite sObject Collections update/delete (`allOrNone:false`, 200/call); HubSpot implements batched CAS reads plus `/batch/update` and `/batch/archive` (100/call). Both preserve per-operation `applied | skipped | conflict | failed` results and connectors without the capability stay on sequential apply.
+
 ## [0.46.0] — 2026-07-06
 
 ### Fixed — launch hardening

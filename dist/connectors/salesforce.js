@@ -376,6 +376,139 @@ export function createSalesforceConnector(options) {
             detail: `Deleted ${sobjectType}/${operation.objectId}.`,
         };
     }
+    function normalizeSalesforceValue(value) {
+        if (value === undefined || value === null || value === "")
+            return null;
+        return String(value).split("T")[0];
+    }
+    function fieldMappingFor(operation) {
+        const sobjectType = SOBJECT_TYPES[operation.objectType];
+        const mappingType = MAPPING_OBJECT_TYPES[operation.objectType];
+        if (!sobjectType || !mappingType || !operation.field)
+            return null;
+        const defaults = SALESFORCE_DEFAULT_FIELD_MAPPINGS[mappingType] ?? {};
+        return {
+            sobjectType,
+            field: mappedField(mappings, mappingType, operation.field, defaults[operation.field] ?? operation.field),
+        };
+    }
+    function compositeErrorDetail(result) {
+        const errors = Array.isArray(result?.errors) ? result.errors : [];
+        const message = errors
+            .map((error) => [error?.statusCode, error?.message].filter(Boolean).join(": "))
+            .filter(Boolean)
+            .join("; ");
+        return message ? `Salesforce rejected this record: ${message.slice(0, 300)}.` : "Salesforce rejected this record.";
+    }
+    async function applySetFieldBatch(operations) {
+        const out = new Map();
+        const mapped = operations.map((operation) => ({ operation, mapping: fieldMappingFor(operation) }));
+        for (const item of mapped) {
+            if (!item.mapping) {
+                out.set(item.operation.id, {
+                    operationId: item.operation.id,
+                    status: "skipped",
+                    detail: "Field writes are only supported for accounts, contacts, and deals with an explicit field.",
+                });
+            }
+        }
+        const clean = mapped.filter((item) => Boolean(item.mapping));
+        if (clean.length === 0)
+            return operations.map((operation) => out.get(operation.id));
+        const sobjectType = clean[0].mapping.sobjectType;
+        const fields = [...new Set(clean.map((item) => item.mapping.field))];
+        const liveById = new Map();
+        const ids = [...new Set(clean.map((item) => item.operation.objectId))];
+        for (let i = 0; i < ids.length; i += 200) {
+            const idList = ids.slice(i, i + 200).map((id) => `'${id.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`).join(",");
+            const rows = await query(`SELECT Id, ${fields.join(", ")} FROM ${sobjectType} WHERE Id IN (${idList})`);
+            for (const row of rows)
+                liveById.set(String(row.Id), row);
+        }
+        const toWrite = [];
+        for (const { operation, mapping } of clean) {
+            const row = liveById.get(operation.objectId);
+            const current = row?.[mapping.field] ?? null;
+            const expected = normalizeSalesforceValue(operation.beforeValue);
+            const found = normalizeSalesforceValue(current);
+            if (!row || expected !== found) {
+                out.set(operation.id, {
+                    operationId: operation.id,
+                    status: "conflict",
+                    detail: `Value drifted since the plan was proposed: expected ${expected ?? "∅"}, found ${found ?? "∅"}. Re-run the audit.`,
+                    providerData: { currentValue: current ?? null },
+                });
+                continue;
+            }
+            toWrite.push({ operation, field: mapping.field });
+        }
+        for (let i = 0; i < toWrite.length; i += 200) {
+            const chunk = toWrite.slice(i, i + 200);
+            const records = chunk.map(({ operation, field }) => ({
+                attributes: { type: sobjectType },
+                Id: operation.objectId,
+                [field]: operation.operation === "clear_field" ? null : String(operation.afterValue ?? ""),
+            }));
+            let response;
+            try {
+                response = (await request(`/services/data/${apiVersion}/composite/sobjects`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ allOrNone: false, records }),
+                }));
+            }
+            catch (error) {
+                for (const { operation } of chunk)
+                    out.set(operation.id, { operationId: operation.id, status: "failed", detail: error instanceof Error ? error.message : String(error) });
+                continue;
+            }
+            for (let j = 0; j < chunk.length; j++) {
+                const { operation, field } = chunk[j];
+                const result = Array.isArray(response) ? response[j] : undefined;
+                out.set(operation.id, result?.success
+                    ? { operationId: operation.id, status: "applied", detail: `Set ${field} on ${sobjectType}/${operation.objectId}.`, providerData: { sobjectType, field } }
+                    : { operationId: operation.id, status: "failed", detail: compositeErrorDetail(result) });
+            }
+        }
+        return operations.map((operation) => out.get(operation.id) ?? { operationId: operation.id, status: "failed", detail: "Batch update did not process this operation." });
+    }
+    async function applyArchiveBatch(operations) {
+        const sobjectType = SOBJECT_TYPES[operations[0]?.objectType];
+        if (!sobjectType)
+            return operations.map((operation) => ({ operationId: operation.id, status: "skipped", detail: "archive_record is supported for accounts, contacts, and deals." }));
+        const out = new Map();
+        for (let i = 0; i < operations.length; i += 200) {
+            const chunk = operations.slice(i, i + 200);
+            const ids = chunk.map((operation) => encodeURIComponent(operation.objectId)).join(",");
+            let response;
+            try {
+                response = (await request(`/services/data/${apiVersion}/composite/sobjects?ids=${ids}&allOrNone=false`, { method: "DELETE" }));
+            }
+            catch (error) {
+                for (const operation of chunk)
+                    out.set(operation.id, { operationId: operation.id, status: "failed", detail: error instanceof Error ? error.message : String(error) });
+                continue;
+            }
+            for (let j = 0; j < chunk.length; j++) {
+                const operation = chunk[j];
+                const result = Array.isArray(response) ? response[j] : undefined;
+                out.set(operation.id, result?.success
+                    ? { operationId: operation.id, status: "applied", detail: `Deleted ${sobjectType}/${operation.objectId}.` }
+                    : { operationId: operation.id, status: "failed", detail: compositeErrorDetail(result) });
+            }
+        }
+        return operations.map((operation) => out.get(operation.id) ?? { operationId: operation.id, status: "failed", detail: "Batch delete did not process this operation." });
+    }
+    async function applyBatch(operations) {
+        if (operations.length === 0)
+            return [];
+        if (operations.every((operation) => (operation.operation === "set_field" || operation.operation === "clear_field") && operation.objectType === operations[0].objectType)) {
+            return applySetFieldBatch(operations);
+        }
+        if (operations.every((operation) => operation.operation === "archive_record" && operation.objectType === operations[0].objectType)) {
+            return applyArchiveBatch(operations);
+        }
+        return operations.map((operation) => ({ operationId: operation.id, status: "skipped", detail: "This mixed operation batch is not supported." }));
+    }
     function escapeXml(value) {
         return value
             .replace(/&/g, "&amp;")
@@ -738,6 +871,8 @@ export function createSalesforceConnector(options) {
         fetchChanges,
         applyOperation,
         applyCreateContactsBatch,
+        applyBatch,
+        applyBatchLimit: 200,
         readField,
     };
 }

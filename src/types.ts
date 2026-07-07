@@ -524,6 +524,21 @@ export type GtmConnector = {
    */
   applyCreateContactsBatch?: (operations: PatchOperation[]) => Promise<PatchOperationResult[]>;
   /**
+   * Optional bulk apply path for homogeneous operation runs selected by
+   * `applyPatchPlan` (currently consecutive `set_field` ops on one object type
+   * and consecutive `archive_record` ops on one object type). Implementations
+   * MUST return exactly one result per input operation, preserve per-operation
+   * CAS/conflict semantics for field writes, and must not write operations that
+   * would have conflicted under the serial `readField` + `applyOperation` path.
+   * Connectors without it use `applyOperation` per operation.
+   */
+  applyBatch?: (operations: PatchOperation[]) => Promise<PatchOperationResult[]>;
+  /**
+   * Maximum number of operations `applyPatchPlan` should pass to one
+   * `applyBatch` call. Defaults to 200 when unspecified.
+   */
+  applyBatchLimit?: number;
+  /**
    * Read the live value of one canonical field, used for compare-and-set:
    * apply orchestration refuses to write over values that drifted since the
    * plan was proposed.

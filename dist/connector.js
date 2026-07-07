@@ -71,6 +71,13 @@ function normalizeForComparison(value) {
         return null;
     return String(value);
 }
+function isApplyBatchCandidate(operation) {
+    return (((operation.operation === "set_field" || operation.operation === "clear_field") && Boolean(operation.field)) ||
+        operation.operation === "archive_record");
+}
+function sameApplyBatchKind(a, b) {
+    return a.operation === b.operation && a.objectType === b.objectType;
+}
 /**
  * Apply an approved subset of a patch plan through a connector.
  *
@@ -194,6 +201,11 @@ export async function applyPatchPlan(connector, plan, options) {
         for (const operation of plan.operations) {
             if (!approved.has(operation.id) || conflicts.has(operation.id))
                 continue;
+            // Generic batch connectors (Salesforce) do their own batched CAS read for
+            // eligible field writes, so don't pre-read those one-by-one here.
+            if (connector.applyBatch && isApplyBatchCandidate(operation) && !operation.groupId && !operation.preconditions?.length) {
+                continue;
+            }
             let conflict = null;
             if (operation.field && FIELD_WRITE_OPERATIONS.has(operation.operation)) {
                 const current = await connector.readField(operation.objectType, operation.objectId, operation.field);
@@ -266,35 +278,38 @@ export async function applyPatchPlan(connector, plan, options) {
     const notifyProgress = () => {
         if ((!options.onOperation && !options.progress) || results.length === lastNotified)
             return;
-        lastNotified = results.length;
-        const last = results[results.length - 1];
-        if (last.status === "applied")
-            progressCounts.applied += 1;
-        else if (last.status === "failed")
-            progressCounts.failed += 1;
-        else if (last.status === "conflict")
-            progressCounts.conflicts += 1;
-        else
-            progressCounts.skipped += 1;
-        // Shared vocabulary: operation id + status only — a conflict/failure
-        // detail can echo field values, which never leave the machine.
-        options.progress?.opResult(last.operationId, last.status);
-        options.progress?.items(results.length - resultsBefore, plan.operations.length);
-        if (options.onOperation) {
-            try {
-                options.onOperation({
-                    completed: results.length - resultsBefore,
-                    total: plan.operations.length,
-                    ...progressCounts,
-                });
-            }
-            catch {
-                // progress is presentation-only
+        while (lastNotified < results.length) {
+            const last = results[lastNotified];
+            lastNotified += 1;
+            if (last.status === "applied")
+                progressCounts.applied += 1;
+            else if (last.status === "failed")
+                progressCounts.failed += 1;
+            else if (last.status === "conflict")
+                progressCounts.conflicts += 1;
+            else
+                progressCounts.skipped += 1;
+            // Shared vocabulary: operation id + status only — a conflict/failure
+            // detail can echo field values, which never leave the machine.
+            options.progress?.opResult(last.operationId, last.status);
+            options.progress?.items(results.length - resultsBefore, plan.operations.length);
+            if (options.onOperation) {
+                try {
+                    options.onOperation({
+                        completed: lastNotified - resultsBefore,
+                        total: plan.operations.length,
+                        ...progressCounts,
+                    });
+                }
+                catch {
+                    // progress is presentation-only
+                }
             }
         }
     };
     emitStage("operations");
-    for (const operation of plan.operations) {
+    for (let opIndex = 0; opIndex < plan.operations.length; opIndex++) {
+        const operation = plan.operations[opIndex];
         // Report the previous iteration's result (guarded: no-op if it pushed
         // nothing). One-iteration lag keeps this a two-line hook instead of a
         // notify after all ten push sites; the loop-exit call below flushes the last.
@@ -361,6 +376,62 @@ export async function applyPatchPlan(connector, plan, options) {
                 detail: `Skipped: another operation in group ${operation.groupId} hit a conflict — the group applies all-or-nothing.`,
             });
             continue;
+        }
+        if (connector.applyBatch && isApplyBatchCandidate(operation) && (checkConflicts || operation.operation === "archive_record") && !operation.groupId && !operation.preconditions?.length) {
+            const chunk = [];
+            const applyBatchLimit = Math.max(1, connector.applyBatchLimit ?? 200);
+            for (let scan = opIndex; scan < plan.operations.length && chunk.length < applyBatchLimit; scan++) {
+                const candidate = plan.operations[scan];
+                if (!sameApplyBatchKind(operation, candidate) || !isApplyBatchCandidate(candidate))
+                    break;
+                const candidateOverride = options.valueOverrides?.[candidate.id];
+                if (!approved.has(candidate.id) ||
+                    (requiresHumanInput(candidate.afterValue) && candidateOverride === undefined) ||
+                    conflicts.has(candidate.id) ||
+                    Boolean(candidate.groupId) ||
+                    Boolean(candidate.preconditions?.length) ||
+                    (staleByFilter && staleByFilter.has(candidate.objectId)) ||
+                    irreversibleStale.has(candidate.id)) {
+                    break;
+                }
+                chunk.push(candidateOverride === undefined ? candidate : { ...candidate, afterValue: candidateOverride });
+            }
+            if (chunk.length > 1) {
+                try {
+                    const batchResults = await connector.applyBatch(chunk);
+                    const byOperationId = new Map(batchResults.map((result) => [result.operationId, result]));
+                    for (const batchOperation of chunk) {
+                        const result = byOperationId.get(batchOperation.id) ?? {
+                            operationId: batchOperation.id,
+                            status: "failed",
+                            detail: "Batch connector did not return a result for this operation.",
+                        };
+                        results.push(result);
+                        if (result.status === "applied" || result.status === "failed")
+                            attempted += 1;
+                        if (result.status === "applied")
+                            applied += 1;
+                    }
+                    const appliedInBatch = batchResults.filter((result) => result.status === "applied").length;
+                    appliedSinceRecheck += appliedInBatch;
+                    if (appliedInBatch > 0 && (applied === appliedInBatch || appliedSinceRecheck >= recheckEvery)) {
+                        appliedSinceRecheck = 0;
+                        await refreshSnapshotChecks();
+                    }
+                }
+                catch (error) {
+                    for (const batchOperation of chunk) {
+                        results.push({
+                            operationId: batchOperation.id,
+                            status: "failed",
+                            detail: error instanceof Error ? error.message : String(error),
+                        });
+                        attempted += 1;
+                    }
+                }
+                opIndex += chunk.length - 1;
+                continue;
+            }
         }
         const resolved = override === undefined ? operation : { ...operation, afterValue: override };
         attempted += 1;

@@ -1057,6 +1057,173 @@ export function createHubspotConnector(options) {
             detail: `Archived ${objectPath}/${operation.objectId}.`,
         };
     }
+    function fieldMapping(operation) {
+        const objectPath = OBJECT_PATHS[operation.objectType];
+        const mappingType = MAPPING_OBJECT_TYPES[operation.objectType];
+        if (!objectPath || !mappingType || !operation.field)
+            return null;
+        const defaults = HUBSPOT_DEFAULT_FIELD_MAPPINGS[mappingType] ?? {};
+        return { objectPath, property: mappedField(mappings, mappingType, operation.field, defaults[operation.field] ?? operation.field) };
+    }
+    function normalizeHubspotReadValue(field, value) {
+        if (field === "closeDate" && typeof value === "string")
+            return value.split("T")[0];
+        return value ?? null;
+    }
+    function normalizeForComparison(value) {
+        if (value === undefined || value === null || value === "")
+            return null;
+        return String(value);
+    }
+    function batchErrorIds(error) {
+        const context = error?.context ?? {};
+        const ids = context.ids ?? context.id ?? error?.id ?? error?.objectId;
+        if (Array.isArray(ids))
+            return ids.map(String);
+        if (ids !== undefined && ids !== null)
+            return [String(ids)];
+        return [];
+    }
+    function batchErrorDetail(error) {
+        const category = error?.category ? `${String(error.category)}: ` : "";
+        return `${category}${String(error?.message ?? "HubSpot batch row failed.")}`;
+    }
+    async function applySetFieldBatch(operations) {
+        const out = new Map();
+        const mapped = operations.map((operation) => ({ operation, mapping: fieldMapping(operation) }));
+        for (const item of mapped) {
+            if (!item.mapping) {
+                out.set(item.operation.id, {
+                    operationId: item.operation.id,
+                    status: "skipped",
+                    detail: "Field writes are only supported for accounts, contacts, and deals with an explicit field.",
+                });
+            }
+        }
+        const clean = mapped.filter((item) => Boolean(item.mapping));
+        if (clean.length === 0)
+            return operations.map((operation) => out.get(operation.id));
+        const objectPath = clean[0].mapping.objectPath;
+        const properties = [...new Set(clean.map((item) => item.mapping.property))];
+        const liveById = new Map();
+        const ids = [...new Set(clean.map((item) => item.operation.objectId))];
+        for (let i = 0; i < ids.length; i += 100) {
+            const chunkIds = ids.slice(i, i + 100);
+            const data = await request(`/crm/v3/objects/${objectPath}/batch/read`, {
+                method: "POST",
+                body: JSON.stringify({ properties, inputs: chunkIds.map((id) => ({ id })) }),
+            });
+            for (const row of data?.results ?? []) {
+                if (row?.id)
+                    liveById.set(String(row.id), row.properties ?? {});
+            }
+        }
+        const toWrite = [];
+        for (const { operation, mapping } of clean) {
+            const props = liveById.get(operation.objectId);
+            const current = normalizeHubspotReadValue(operation.field, props?.[mapping.property] ?? null);
+            const expected = normalizeForComparison(operation.beforeValue);
+            const found = normalizeForComparison(current);
+            if (!props || expected !== found) {
+                out.set(operation.id, {
+                    operationId: operation.id,
+                    status: "conflict",
+                    detail: `Value drifted since the plan was proposed: expected ${expected ?? "∅"}, found ${found ?? "∅"}. Re-run the audit.`,
+                    providerData: { currentValue: current ?? null },
+                });
+                continue;
+            }
+            toWrite.push({ operation, property: mapping.property });
+        }
+        for (let i = 0; i < toWrite.length; i += 100) {
+            const chunk = toWrite.slice(i, i + 100);
+            let data;
+            try {
+                data = await request(`/crm/v3/objects/${objectPath}/batch/update`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                        inputs: chunk.map(({ operation, property }) => ({
+                            id: operation.objectId,
+                            properties: { [property]: operation.operation === "clear_field" ? "" : String(operation.afterValue ?? "") },
+                        })),
+                    }),
+                });
+            }
+            catch (error) {
+                for (const { operation } of chunk)
+                    out.set(operation.id, { operationId: operation.id, status: "failed", detail: error instanceof Error ? error.message : String(error) });
+                continue;
+            }
+            const opByObjectId = new Map(chunk.map(({ operation }) => [operation.objectId, operation]));
+            for (const error of data?.errors ?? []) {
+                for (const id of batchErrorIds(error)) {
+                    const operation = opByObjectId.get(id);
+                    if (operation)
+                        out.set(operation.id, { operationId: operation.id, status: "failed", detail: batchErrorDetail(error) });
+                }
+            }
+            for (const result of data?.results ?? []) {
+                const operation = opByObjectId.get(String(result?.id));
+                if (operation && !out.has(operation.id))
+                    out.set(operation.id, { operationId: operation.id, status: "applied", detail: `Set ${chunk.find((item) => item.operation.id === operation.id)?.property ?? "field"} on ${objectPath}/${operation.objectId}.`, providerData: { id: result?.id } });
+            }
+            for (const { operation, property } of chunk) {
+                if (!out.has(operation.id))
+                    out.set(operation.id, { operationId: operation.id, status: "applied", detail: `Set ${property} on ${objectPath}/${operation.objectId}.` });
+            }
+        }
+        return operations.map((operation) => out.get(operation.id) ?? { operationId: operation.id, status: "failed", detail: "Batch update did not process this operation." });
+    }
+    async function applyArchiveBatch(operations) {
+        const objectPath = OBJECT_PATHS[operations[0]?.objectType];
+        if (!objectPath)
+            return operations.map((operation) => ({ operationId: operation.id, status: "skipped", detail: "archive_record is supported for accounts, contacts, and deals." }));
+        const out = new Map();
+        for (let i = 0; i < operations.length; i += 100) {
+            const chunk = operations.slice(i, i + 100);
+            let data;
+            try {
+                data = await request(`/crm/v3/objects/${objectPath}/batch/archive`, {
+                    method: "POST",
+                    body: JSON.stringify({ inputs: chunk.map((operation) => ({ id: operation.objectId })) }),
+                });
+            }
+            catch (error) {
+                for (const operation of chunk)
+                    out.set(operation.id, { operationId: operation.id, status: "failed", detail: error instanceof Error ? error.message : String(error) });
+                continue;
+            }
+            const opByObjectId = new Map(chunk.map((operation) => [operation.objectId, operation]));
+            for (const error of data?.errors ?? []) {
+                for (const id of batchErrorIds(error)) {
+                    const operation = opByObjectId.get(id);
+                    if (operation)
+                        out.set(operation.id, { operationId: operation.id, status: "failed", detail: batchErrorDetail(error) });
+                }
+            }
+            for (const result of data?.results ?? []) {
+                const operation = opByObjectId.get(String(result?.id));
+                if (operation && !out.has(operation.id))
+                    out.set(operation.id, { operationId: operation.id, status: "applied", detail: `Archived ${objectPath}/${operation.objectId}.` });
+            }
+            for (const operation of chunk) {
+                if (!out.has(operation.id))
+                    out.set(operation.id, { operationId: operation.id, status: "applied", detail: `Archived ${objectPath}/${operation.objectId}.` });
+            }
+        }
+        return operations.map((operation) => out.get(operation.id) ?? { operationId: operation.id, status: "failed", detail: "Batch archive did not process this operation." });
+    }
+    async function applyBatch(operations) {
+        if (operations.length === 0)
+            return [];
+        if (operations.every((operation) => (operation.operation === "set_field" || operation.operation === "clear_field") && operation.objectType === operations[0].objectType)) {
+            return applySetFieldBatch(operations);
+        }
+        if (operations.every((operation) => operation.operation === "archive_record" && operation.objectType === operations[0].objectType)) {
+            return applyArchiveBatch(operations);
+        }
+        return operations.map((operation) => ({ operationId: operation.id, status: "skipped", detail: "This mixed operation batch is not supported." }));
+    }
     /**
      * Merge a duplicate group into the approved survivor via HubSpot's v3
      * merge API (supported for contacts, companies, deals, and tickets).
@@ -1182,10 +1349,7 @@ export function createHubspotConnector(options) {
         // single-object read here returns HubSpot's raw "2026-03-07T00:00:00Z", which
         // made compare-and-set see a spurious drift and refuse every date-field write.
         // Mirror the snapshot's normalization so the comparison is apples-to-apples.
-        if (field === "closeDate" && typeof value === "string") {
-            return value.split("T")[0];
-        }
-        return value;
+        return normalizeHubspotReadValue(field, value);
     }
     return {
         provider: "hubspot",
@@ -1193,6 +1357,8 @@ export function createHubspotConnector(options) {
         fetchChanges,
         applyOperation,
         applyCreateContactsBatch,
+        applyBatch,
+        applyBatchLimit: 100,
         readField,
     };
 }

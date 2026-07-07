@@ -37,9 +37,10 @@ release.
 
 ## Connectors
 
-- `GtmConnector` — `{ provider, fetchSnapshot(), applyOperation?, applyCreateContactsBatch?, readField?, fetchChanges? }`.
+- `GtmConnector` — `{ provider, fetchSnapshot(), applyOperation?, applyCreateContactsBatch?, applyBatch?, applyBatchLimit?, readField?, fetchChanges? }`.
   - Connectors never silently drop unresolvable records; audits surface them.
   - `fetchChanges(sinceIso)` returns a partial snapshot; change feeds may omit associations.
+  - `applyBatch?(operations)` — optional bulk apply path for consecutive homogeneous `set_field`, `clear_field`, or `archive_record` runs selected by `applyPatchPlan`. It must return one result per input operation; field-write implementations preserve CAS by batch-reading live target values first and writing only clean records. Connectors without it stay on the sequential `applyOperation` path. `applyBatchLimit?` declares max operations per `applyBatch` call (default 200; Salesforce 200, HubSpot 100). Salesforce uses SOQL `IN` CAS reads plus Composite sObject Collections update/delete (`allOrNone:false`); HubSpot uses batch/read + batch/update/archive.
   - `applyCreateContactsBatch?(operations)` — optional bulk fast-path for
     independent `create_record` contact ops. `applyPatchPlan` routes safe-to-batch
     creates here (batched resolve-first + batched create — ~N/100 calls instead of

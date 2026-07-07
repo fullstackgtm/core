@@ -32,4 +32,4 @@ export type SalesforceConnectorOptions = {
  * surface the gaps). Probabilities are normalized to 0..1 to match the
  * canonical model.
  */
-export declare function createSalesforceConnector(options: SalesforceConnectorOptions): Required<GtmConnector>;
+export declare function createSalesforceConnector(options: SalesforceConnectorOptions): GtmConnector;

@@ -26,4 +26,4 @@ export type HubspotConnectorOptions = {
  * amountless deals — so audit rules can surface the gaps instead of hiding
  * them.
  */
-export declare function createHubspotConnector(options: HubspotConnectorOptions): Required<GtmConnector>;
+export declare function createHubspotConnector(options: HubspotConnectorOptions): GtmConnector;
