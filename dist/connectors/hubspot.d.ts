@@ -1,6 +1,7 @@
 import { type FieldMappings } from "../mappings.ts";
 import type { GtmConnector, SnapshotProgress } from "../types.ts";
 import { type ProgressEmitter } from "../progress.ts";
+export type HubspotWritableConnector = GtmConnector & Required<Pick<GtmConnector, "applyOperation" | "readField">>;
 export type HubspotConnectorOptions = {
     /** Returns a HubSpot access token (private app token or OAuth access token). */
     getAccessToken: () => string | Promise<string>;
@@ -26,4 +27,4 @@ export type HubspotConnectorOptions = {
  * amountless deals — so audit rules can surface the gaps instead of hiding
  * them.
  */
-export declare function createHubspotConnector(options: HubspotConnectorOptions): GtmConnector;
+export declare function createHubspotConnector(options: HubspotConnectorOptions): HubspotWritableConnector;

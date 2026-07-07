@@ -240,7 +240,7 @@ test("scale v2: signals convert to revenue space via within-set calibration", ()
 
 test("scale v2: SMB-bias regression — many cheap customers must not outrank fewer expensive ones", () => {
   const cfg = config();
-  // The vendorx/dialexample shape. Calibrators: r1 (smb, revenue known) and r2 (mid, revenue known)
+  // Two-band calibration shape. Calibrators: r1 (smb, revenue known) and r2 (mid, revenue known)
   // pin the per-band revenue-per-review ratios; "smb-tool" and "mid-tool" are then
   // estimated from reviews alone.
   cfg.vendors[0].id = "smb-tool"; cfg.vendors[0].name = "SMBTOOL"; cfg.vendors[0].acvBand = "smb";

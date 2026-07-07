@@ -6,6 +6,7 @@ export type SalesforceConnection = {
     /** e.g. https://yourorg.my.salesforce.com */
     instanceUrl: string;
 };
+export type SalesforceWritableConnector = GtmConnector & Required<Pick<GtmConnector, "applyOperation" | "readField">>;
 export type SalesforceConnectorOptions = {
     /** Returns an access token plus the instance URL it belongs to. */
     getConnection: () => SalesforceConnection | Promise<SalesforceConnection>;
@@ -32,4 +33,4 @@ export type SalesforceConnectorOptions = {
  * surface the gaps). Probabilities are normalized to 0..1 to match the
  * canonical model.
  */
-export declare function createSalesforceConnector(options: SalesforceConnectorOptions): GtmConnector;
+export declare function createSalesforceConnector(options: SalesforceConnectorOptions): SalesforceWritableConnector;

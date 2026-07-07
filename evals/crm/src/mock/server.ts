@@ -125,51 +125,6 @@ export class MockHubspot {
     this.driftRules.push({ afterRequests, description, mutate });
   }
 
-  /**
-   * Seed the mock from a canonical snapshot (e.g. an anonymized real-portal
-   * export). Records get fresh mock ids; owner/account references are
-   * remapped so the relationship graph survives. Returns old-id → new-id
-   * maps so scenario generators can address specific records.
-   */
-  loadSnapshot(snapshot: {
-    users: Array<{ id: string; name: string }>;
-    accounts: Array<Record<string, any>>;
-    contacts: Array<Record<string, any>>;
-    deals: Array<Record<string, any>>;
-  }): { ownerIds: Map<string, string>; accountIds: Map<string, string>; contactIds: Map<string, string>; dealIds: Map<string, string> } {
-    const ownerIds = new Map<string, string>();
-    for (const user of snapshot.users) {
-      const [first, ...rest] = String(user.name ?? "Owner").split(" ");
-      ownerIds.set(String(user.id), this.addOwner(first || "Owner", rest.join(" ") || String(user.id)));
-    }
-    const accountIds = new Map<string, string>();
-    for (const a of snapshot.accounts) {
-      accountIds.set(String(a.id), this.seed("companies", {
-        name: a.name, domain: a.domain, industry: a.industry,
-        numberofemployees: a.employeeCount, annualrevenue: a.annualRevenue,
-        hubspot_owner_id: a.ownerId ? ownerIds.get(String(a.ownerId)) : undefined,
-      }));
-    }
-    const contactIds = new Map<string, string>();
-    for (const c of snapshot.contacts) {
-      contactIds.set(String(c.id), this.seed("contacts", {
-        firstname: c.firstName, lastname: c.lastName, email: c.email,
-        phone: c.phone, jobtitle: c.title,
-        hubspot_owner_id: c.ownerId ? ownerIds.get(String(c.ownerId)) : undefined,
-      }, c.accountId ? accountIds.get(String(c.accountId)) : undefined));
-    }
-    const dealIds = new Map<string, string>();
-    for (const d of snapshot.deals) {
-      dealIds.set(String(d.id), this.seed("deals", {
-        dealname: d.name, dealstage: d.stage, amount: d.amount,
-        closedate: d.closeDate,
-        hubspot_owner_id: d.ownerId ? ownerIds.get(String(d.ownerId)) : undefined,
-        hs_last_sales_activity_timestamp: d.lastActivityAt,
-      }, d.accountId ? accountIds.get(String(d.accountId)) : undefined));
-    }
-    return { ownerIds, accountIds, contactIds, dealIds };
-  }
-
   // ---- inspection (used by graders) --------------------------------------
 
   get(objectType: ObjectType, id: string): MockRecord | undefined {

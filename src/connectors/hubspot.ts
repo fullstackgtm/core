@@ -24,6 +24,8 @@ import { SNAPSHOT_PULL_STAGES, type ProgressEmitter } from "../progress.ts";
 
 const DEFAULT_API_BASE_URL = "https://api.hubapi.com";
 
+export type HubspotWritableConnector = GtmConnector & Required<Pick<GtmConnector, "applyOperation" | "readField">>;
+
 export type HubspotConnectorOptions = {
   /** Returns a HubSpot access token (private app token or OAuth access token). */
   getAccessToken: () => string | Promise<string>;
@@ -71,7 +73,7 @@ const PULL_STAGE_BY_TYPE: Record<SnapshotProgress["objectType"], (typeof SNAPSHO
  * amountless deals — so audit rules can surface the gaps instead of hiding
  * them.
  */
-export function createHubspotConnector(options: HubspotConnectorOptions): GtmConnector {
+export function createHubspotConnector(options: HubspotConnectorOptions): HubspotWritableConnector {
   const baseUrl = (options.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, "");
   const fetchImpl = options.fetchImpl ?? fetch;
   const mappings = options.fieldMappings;

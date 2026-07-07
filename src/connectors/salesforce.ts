@@ -29,6 +29,8 @@ export type SalesforceConnection = {
   instanceUrl: string;
 };
 
+export type SalesforceWritableConnector = GtmConnector & Required<Pick<GtmConnector, "applyOperation" | "readField">>;
+
 export type SalesforceConnectorOptions = {
   /** Returns an access token plus the instance URL it belongs to. */
   getConnection: () => SalesforceConnection | Promise<SalesforceConnection>;
@@ -86,7 +88,7 @@ const PULL_STAGE_BY_TYPE: Record<SnapshotProgress["objectType"], (typeof SNAPSHO
  */
 export function createSalesforceConnector(
   options: SalesforceConnectorOptions,
-): GtmConnector {
+): SalesforceWritableConnector {
   const apiVersion = options.apiVersion ?? DEFAULT_API_VERSION;
   const fetchImpl = options.fetchImpl ?? fetch;
   const mappings = options.fieldMappings;

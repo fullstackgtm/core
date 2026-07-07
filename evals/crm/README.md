@@ -67,12 +67,7 @@ names mislead, false-positive restraint, stage-gate discipline, and the
 fill-blanks enrich invariant.
 
 These 17 scenarios are the benchmark's standard set — everything published in
-[leaderboard/RESULTS.md](leaderboard/RESULTS.md) is computed over them. The
-harness can additionally build three **snapshot-seeded** scenarios
-(`seeded-ownerless`, `seeded-dupes`, `seeded-past-close` — see
-[Real-data seeds](#real-data-seeds-private-held-out-set) below); those are an
-optional private-seed extension for running against your own portal snapshot
-and are **not part of the standard board**.
+[leaderboard/RESULTS.md](leaderboard/RESULTS.md) is computed over them.
 
 Some scenarios are intentionally **outside the current rule coverage** of the
 framework (e.g. bulk reassignment, contact cleanup). The `fsgtm` arm's score on
@@ -115,30 +110,6 @@ Outputs: `results/runs-<ts>.jsonl` (one record per run) and
 - Graders are deterministic; no LLM-as-judge.
 - The mock's traps (page size, index lag) mirror documented HubSpot behavior,
   not adversarial inventions.
-
-## Real-data seeds (optional private extension)
-
-Real CRM portals make the best scenario substrate — their mess is the point.
-The harness can plant known footguns into an anonymized snapshot of a real
-portal and grade them with the same deterministic graders. This is an
-**optional, private-seed extension**: seeded runs are useful for validating
-agents against your own data's shape, but they are **not part of the standard
-17-scenario board** and none of the published numbers include them. The
-pipeline keeps portal data safe:
-
-```bash
-# 1. read-only export from any portal the CLI is authenticated against
-fullstackgtm snapshot --provider hubspot --out snap.json
-# 2. deterministic anonymization (pseudonyms preserve dedupe relationships)
-npm run anonymize -- snap.json seeds/my-portal.json && rm snap.json
-# 3. run snapshot-seeded scenarios: known footguns planted into real shape
-npm run eval -- --seed-snapshot seeds/my-portal.json \
-  --scenarios seeded-ownerless,seeded-dupes,seeded-past-close --models …
-```
-
-`seeds/` is gitignored on purpose: portal-derived scenarios stay private and
-contamination-resistant. The benchmark board itself is fully synthetic and
-public.
 
 ## Live-write certification (real HubSpot / Salesforce)
 
