@@ -1,6 +1,6 @@
 # CRM Ops Eval
 
-**Latest results: [leaderboard/RESULTS.md](leaderboard/RESULTS.md)** — 2,096-run matrix (ten models × 3 arms × up to 4 trials over 20 scenarios), CuP + pass^k.
+**Latest results: [leaderboard/RESULTS.md](leaderboard/RESULTS.md)** — 1,904-run matrix (ten models × 3 arms × up to 4 trials over 17 scenarios), CuP + pass^k.
 
 Measures whether LLM agents make fewer mistakes operating a CRM when they have
 the [`fullstackgtm`](https://github.com/fullstackgtm/core) framework available —
@@ -66,9 +66,13 @@ five (13–17) were added later to close coverage gaps: identity resolution wher
 names mislead, false-positive restraint, stage-gate discipline, and the
 fill-blanks enrich invariant.
 
-Three more scenarios are **snapshot-seeded** (`seeded-ownerless`,
-`seeded-dupes`, `seeded-past-close` — see [Real-data seeds](#real-data-seeds-private-held-out-set)
-below), for 20 total.
+These 17 scenarios are the benchmark's standard set — everything published in
+[leaderboard/RESULTS.md](leaderboard/RESULTS.md) is computed over them. The
+harness can additionally build three **snapshot-seeded** scenarios
+(`seeded-ownerless`, `seeded-dupes`, `seeded-past-close` — see
+[Real-data seeds](#real-data-seeds-private-held-out-set) below); those are an
+optional private-seed extension for running against your own portal snapshot
+and are **not part of the standard board**.
 
 Some scenarios are intentionally **outside the current rule coverage** of the
 framework (e.g. bulk reassignment, contact cleanup). The `fsgtm` arm's score on
@@ -112,10 +116,15 @@ Outputs: `results/runs-<ts>.jsonl` (one record per run) and
 - The mock's traps (page size, index lag) mirror documented HubSpot behavior,
   not adversarial inventions.
 
-## Real-data seeds (private held-out set)
+## Real-data seeds (optional private extension)
 
 Real CRM portals make the best scenario substrate — their mess is the point.
-The pipeline keeps them safe:
+The harness can plant known footguns into an anonymized snapshot of a real
+portal and grade them with the same deterministic graders. This is an
+**optional, private-seed extension**: seeded runs are useful for validating
+agents against your own data's shape, but they are **not part of the standard
+17-scenario board** and none of the published numbers include them. The
+pipeline keeps portal data safe:
 
 ```bash
 # 1. read-only export from any portal the CLI is authenticated against
@@ -127,9 +136,9 @@ npm run eval -- --seed-snapshot seeds/my-portal.json \
   --scenarios seeded-ownerless,seeded-dupes,seeded-past-close --models …
 ```
 
-`seeds/` is gitignored on purpose: portal-derived scenarios are the private,
-contamination-resistant half of the benchmark. The public half stays fully
-synthetic.
+`seeds/` is gitignored on purpose: portal-derived scenarios stay private and
+contamination-resistant. The benchmark board itself is fully synthetic and
+public.
 
 ## Live-write certification (real HubSpot / Salesforce)
 

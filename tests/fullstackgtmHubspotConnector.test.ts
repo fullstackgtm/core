@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHubspotConnector } from "../src/index.ts";
+import type { CreateRecordPayload, PatchOperation } from "../src/types.ts";
 
 type StubCall = { url: string; init?: RequestInit };
 
@@ -430,4 +431,296 @@ test("hubspot connector derives closed/won from pipeline stage metadata, not sub
   assert.equal(byId.o.isClosed, false); // opaque open stage no longer mis-read
   assert.equal(byId.o.isWon, false);
   assert.equal(byId.o.forecastCategory, "pipeline");
+});
+
+// ---------------------------------------------------------------------------
+// create_record for DEALS (the `backfill stripe` write path)
+
+type MethodRoute = { status?: number; body?: unknown };
+
+/** Method-aware stub: routes keyed by "METHOD /path" (create vs list differ). */
+function stubMethodFetch(routes: Record<string, MethodRoute>) {
+  const calls: StubCall[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init });
+    const key = `${init?.method ?? "GET"} ${new URL(url).pathname}`;
+    const route = routes[key];
+    if (route === undefined) return new Response(`no stub for ${key}`, { status: 404 });
+    return new Response(JSON.stringify(route.body ?? {}), {
+      status: route.status ?? 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+  return { fetchImpl, calls };
+}
+
+// Default pipeline has displayOrder 0 but is listed SECOND — picking it
+// asserts the lowest-displayOrder sort, not "first element".
+const DEAL_PIPELINES = {
+  results: [
+    {
+      id: "renewals",
+      label: "Renewals",
+      displayOrder: 1,
+      stages: [
+        { id: "ren_open", metadata: { isClosed: "false", probability: "0.5" } },
+        { id: "ren_won", metadata: { isClosed: "true", probability: "1.0" } },
+      ],
+    },
+    {
+      id: "default",
+      label: "Sales Pipeline",
+      displayOrder: 0,
+      stages: [
+        { id: "appt", metadata: { isClosed: "false", probability: "0.2" } },
+        { id: "won1", metadata: { isClosed: "true", probability: "1.0" } },
+        { id: "lost1", metadata: { isClosed: "true", probability: "0.0" } },
+      ],
+    },
+  ],
+};
+
+function dealCreateOp(payloadOverrides: Partial<CreateRecordPayload> = {}, id = "op_bkf_1"): PatchOperation {
+  return {
+    id,
+    objectType: "deal",
+    objectId: "create:stripe:invoice:in_1",
+    operation: "create_record",
+    beforeValue: null,
+    afterValue: {
+      properties: { dealname: "Invoice INV-0042 — Globex", amount: "1099.9", closedate: "2026-01-01" },
+      matchKey: "stripe_invoice_id",
+      matchValue: "in_1",
+      source: "stripe:invoices",
+      dealStage: "closed_won",
+      associateCompanyName: "Globex",
+      associateCompanyDomain: "globex.com",
+      ...payloadOverrides,
+    } satisfies CreateRecordPayload,
+    reason: "test",
+    riskLevel: "medium",
+    approvalRequired: true,
+  };
+}
+
+const DEAL_CREATE_ROUTES: Record<string, MethodRoute> = {
+  "GET /crm/v3/properties/deals/stripe_invoice_id": { body: { name: "stripe_invoice_id" } },
+  "POST /crm/v3/objects/deals/search": { body: { results: [] } },
+  "GET /crm/v3/pipelines/deals": { body: DEAL_PIPELINES },
+  "POST /crm/v3/objects/deals": { body: { id: "d99" } },
+  "POST /crm/v3/objects/companies/search": { body: { results: [{ id: "c1" }] } },
+  "PUT /crm/v4/objects/deals/d99/associations/default/companies/c1": { body: {} },
+};
+
+test("hubspot deal create_record: resolve-first hit is skipped with the existing id", async () => {
+  const { fetchImpl, calls } = stubMethodFetch({
+    ...DEAL_CREATE_ROUTES,
+    "POST /crm/v3/objects/deals/search": { body: { results: [{ id: "d77" }] } },
+  });
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+
+  const result = await connector.applyOperation!(dealCreateOp());
+
+  assert.equal(result.status, "skipped");
+  assert.match(String(result.detail), /already exists \(d77\)/);
+  assert.deepEqual(result.providerData, { id: "d77", existing: true });
+  // The search body filtered on the custom dedupe property.
+  const search = calls.find((c) => c.url.includes("/objects/deals/search"));
+  assert.ok(search);
+  assert.match(String(search.init?.body), /"propertyName":"stripe_invoice_id"/);
+  assert.match(String(search.init?.body), /"value":"in_1"/);
+  // Nothing was created.
+  assert.equal(
+    calls.some((c) => c.init?.method === "POST" && new URL(c.url).pathname === "/crm/v3/objects/deals"),
+    false,
+  );
+});
+
+test("hubspot deal create_record: confirmed miss creates a closed-won deal in the default pipeline and links the company", async () => {
+  const { fetchImpl, calls } = stubMethodFetch(DEAL_CREATE_ROUTES);
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+
+  const result = await connector.applyOperation!(dealCreateOp());
+
+  assert.equal(result.status, "applied");
+  assert.match(String(result.detail), /Created deal stripe_invoice_id=in_1 \(d99\)/);
+  assert.match(String(result.detail), /Linked to company "Globex" \(globex\.com\) \(c1\)/);
+  assert.deepEqual(result.providerData, {
+    id: "d99",
+    created: true,
+    pipelineId: "default",
+    stageId: "won1",
+  });
+
+  const create = calls.find(
+    (c) => c.init?.method === "POST" && new URL(c.url).pathname === "/crm/v3/objects/deals",
+  );
+  assert.ok(create);
+  const body = JSON.parse(String(create.init?.body)) as { properties: Record<string, string> };
+  assert.equal(body.properties.dealname, "Invoice INV-0042 — Globex");
+  assert.equal(body.properties.amount, "1099.9");
+  assert.equal(body.properties.closedate, "2026-01-01");
+  // The dedupe key is stamped so the NEXT run's resolve-first finds it.
+  assert.equal(body.properties.stripe_invoice_id, "in_1");
+  // Pipeline picked by lowest displayOrder; stage from metadata (isClosed +
+  // probability 1), never a substring guess.
+  assert.equal(body.properties.pipeline, "default");
+  assert.equal(body.properties.dealstage, "won1");
+  // Provenance stamp (best-effort variant is exercised elsewhere).
+  assert.equal(body.properties.hs_object_source_detail_2, "fullstackgtm backfill (op_bkf_1)");
+
+  // Company resolved by DOMAIN first, then associated via v4 default.
+  const companySearch = calls.find((c) => c.url.includes("/objects/companies/search"));
+  assert.ok(companySearch);
+  assert.match(String(companySearch.init?.body), /"propertyName":"domain"/);
+  const assoc = calls.find((c) => c.init?.method === "PUT");
+  assert.ok(assoc);
+  assert.match(assoc.url, /\/crm\/v4\/objects\/deals\/d99\/associations\/default\/companies\/c1$/);
+});
+
+test("hubspot deal create_record: dealPipeline hint matches a pipeline label case-insensitively", async () => {
+  const { fetchImpl, calls } = stubMethodFetch(DEAL_CREATE_ROUTES);
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+
+  const result = await connector.applyOperation!(
+    dealCreateOp({ dealPipeline: "ReNeWaLs", associateCompanyName: undefined, associateCompanyDomain: undefined }),
+  );
+
+  assert.equal(result.status, "applied");
+  const create = calls.find(
+    (c) => c.init?.method === "POST" && new URL(c.url).pathname === "/crm/v3/objects/deals",
+  );
+  const body = JSON.parse(String(create!.init?.body)) as { properties: Record<string, string> };
+  assert.equal(body.properties.pipeline, "renewals");
+  assert.equal(body.properties.dealstage, "ren_won");
+});
+
+test("hubspot deal create_record: an explicit pipeline hint that matches nothing is skipped, not defaulted", async () => {
+  const { fetchImpl, calls } = stubMethodFetch(DEAL_CREATE_ROUTES);
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+
+  const result = await connector.applyOperation!(dealCreateOp({ dealPipeline: "nope" }));
+
+  assert.equal(result.status, "skipped");
+  assert.match(String(result.detail), /Could not resolve pipeline "nope"/);
+  assert.equal(
+    calls.some((c) => c.init?.method === "POST" && new URL(c.url).pathname === "/crm/v3/objects/deals"),
+    false,
+  );
+});
+
+test("hubspot deal create_record: no resolvable closed-won stage is skipped, never guessed", async () => {
+  const { fetchImpl, calls } = stubMethodFetch({
+    ...DEAL_CREATE_ROUTES,
+    "GET /crm/v3/pipelines/deals": {
+      body: {
+        results: [
+          {
+            id: "default",
+            label: "Sales Pipeline",
+            displayOrder: 0,
+            // isClosed stages exist but none carries probability 1.
+            stages: [
+              { id: "open1", metadata: { isClosed: "false", probability: "0.2" } },
+              { id: "lost1", metadata: { isClosed: "true", probability: "0.0" } },
+            ],
+          },
+        ],
+      },
+    },
+  });
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+
+  const result = await connector.applyOperation!(dealCreateOp());
+
+  assert.equal(result.status, "skipped");
+  assert.match(String(result.detail), /closed-won stage/);
+  assert.equal(
+    calls.some((c) => c.init?.method === "POST" && new URL(c.url).pathname === "/crm/v3/objects/deals"),
+    false,
+  );
+});
+
+test("hubspot deal create_record: missing custom dedupe property is created, then the deal lands", async () => {
+  const { fetchImpl, calls } = stubMethodFetch({
+    ...DEAL_CREATE_ROUTES,
+    "GET /crm/v3/properties/deals/stripe_invoice_id": { status: 404, body: { message: "missing" } },
+    "POST /crm/v3/properties/deals": { body: { name: "stripe_invoice_id" } },
+  });
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+
+  const result = await connector.applyOperation!(dealCreateOp());
+
+  assert.equal(result.status, "applied");
+  const propertyCreate = calls.find(
+    (c) => c.init?.method === "POST" && new URL(c.url).pathname === "/crm/v3/properties/deals",
+  );
+  assert.ok(propertyCreate, "the dedupe property was created before the deal");
+  const body = JSON.parse(String(propertyCreate.init?.body));
+  assert.deepEqual(body, {
+    name: "stripe_invoice_id",
+    label: "stripe_invoice_id",
+    type: "string",
+    fieldType: "text",
+    groupName: "dealinformation",
+    hasUniqueValue: false,
+  });
+});
+
+test("hubspot deal create_record: unensurable dedupe property is skipped — never create without the dedupe key", async () => {
+  const { fetchImpl, calls } = stubMethodFetch({
+    ...DEAL_CREATE_ROUTES,
+    "GET /crm/v3/properties/deals/stripe_invoice_id": { status: 404, body: {} },
+    "POST /crm/v3/properties/deals": { status: 403, body: {} },
+  });
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+
+  const result = await connector.applyOperation!(dealCreateOp());
+
+  assert.equal(result.status, "skipped");
+  assert.match(String(result.detail), /could not be created/);
+  assert.match(String(result.detail), /refusing to create a deal without its dedupe key/);
+  // No search, no create — the property is a precondition for both.
+  assert.equal(
+    calls.some((c) => new URL(c.url).pathname === "/crm/v3/objects/deals"),
+    false,
+  );
+});
+
+test("hubspot deal create_record: same-run duplicate is skipped from the in-run cache without another search", async () => {
+  const { fetchImpl, calls } = stubMethodFetch(DEAL_CREATE_ROUTES);
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+
+  const first = await connector.applyOperation!(dealCreateOp());
+  assert.equal(first.status, "applied");
+  const searchesAfterFirst = calls.filter((c) => c.url.includes("/objects/deals/search")).length;
+
+  const second = await connector.applyOperation!(dealCreateOp({}, "op_bkf_replay"));
+  assert.equal(second.status, "skipped");
+  assert.match(String(second.detail), /already created earlier in this run/);
+  assert.deepEqual(second.providerData, { id: "d99", existing: true });
+  assert.equal(
+    calls.filter((c) => c.url.includes("/objects/deals/search")).length,
+    searchesAfterFirst,
+    "the cache answered; no second search",
+  );
+  assert.equal(
+    calls.filter((c) => c.init?.method === "POST" && new URL(c.url).pathname === "/crm/v3/objects/deals").length,
+    1,
+  );
+});
+
+test("hubspot deal create_record: missing dealStage sentinel is skipped (only closed_won is understood)", async () => {
+  const { fetchImpl, calls } = stubMethodFetch(DEAL_CREATE_ROUTES);
+  const connector = createHubspotConnector({ getAccessToken: () => "t", fetchImpl });
+
+  const result = await connector.applyOperation!(dealCreateOp({ dealStage: undefined }));
+
+  assert.equal(result.status, "skipped");
+  assert.match(String(result.detail), /dealStage "closed_won"/);
+  assert.equal(
+    calls.some((c) => c.init?.method === "POST" && new URL(c.url).pathname === "/crm/v3/objects/deals"),
+    false,
+  );
 });

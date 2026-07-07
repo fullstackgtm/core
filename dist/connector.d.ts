@@ -1,3 +1,4 @@
+import { type ProgressEmitter } from "./progress.ts";
 import type { GtmConnector, PatchPlan, PatchPlanRun } from "./types.ts";
 export type ApplyPatchPlanOptions = {
     /**
@@ -31,6 +32,13 @@ export type ApplyPatchPlanOptions = {
      * full operation count.
      */
     onOperation?: (progress: ApplyProgress) => void;
+    /**
+     * Shared progress vocabulary (src/progress.ts): the run emits the
+     * APPLY_STAGES (preflight → operations → results), one `opResult` per
+     * resolved operation (id + status only — no values), and `items` over the
+     * plan's operations. Additive alongside `onOperation`; presentation only.
+     */
+    progress?: ProgressEmitter;
 };
 export type ApplyProgress = {
     completed: number;

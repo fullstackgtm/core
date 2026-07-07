@@ -12,9 +12,11 @@ import { buildBulkUpdatePlan } from "../bulkUpdate.ts";
 import { buildDedupePlan, type DedupeOptions } from "../dedupe.ts";
 import { buildReassignPlans, type ReassignObjectType } from "../reassign.ts";
 import { suggestValues } from "../suggest.ts";
+import { APPLY_STAGES, composeListeners, createProgressEmitter } from "../progress.ts";
+import { progressReporter } from "../runReport.ts";
 import type { PatchPlan, PatchPlanRun } from "../types.ts";
 import { confirmRequested, connectorFor, isOptionValue, numericOption, option, readSnapshot, repeatedOption, saveRequested } from "./shared.ts";
-import { box, colorEnabled, createStatusLine, paint } from "./ui.ts";
+import { box, colorEnabled, createProgressRenderer, paint } from "./ui.ts";
 
 
 /**
@@ -281,22 +283,21 @@ export async function fixCommand(args: string[]) {
     return;
   }
   const connector = await connectorFor(provider, args);
-  // Live safety ticker on interactive terminals (stderr; inert otherwise).
-  const ticker = createStatusLine();
+  // Live apply board on interactive terminals (stderr; inert otherwise); the
+  // same emitter streams heartbeats to the paired hosted app on long runs.
+  const renderer = createProgressRenderer(APPLY_STAGES);
+  const progress = createProgressEmitter(
+    composeListeners(renderer.listener, progressReporter()),
+  );
   let run: PatchPlanRun;
   try {
     run = await applyPatchPlan(connector, plan, {
       approvedOperationIds: approvedIds,
       valueOverrides: overrides,
-      onOperation: ticker.active
-        ? (progress) =>
-            ticker.set(
-              `Applying ${progress.completed}/${progress.total} · ✓ ${progress.applied} applied · ${progress.failed} failed · ${progress.conflicts} conflict${progress.conflicts === 1 ? "" : "s"}`,
-            )
-        : undefined,
+      progress,
     });
   } finally {
-    ticker.done();
+    renderer.done();
   }
   await store.recordRun(plan.id, run);
   const counts: Record<string, number> = { applied: 0, conflict: 0, skipped: 0, failed: 0 };

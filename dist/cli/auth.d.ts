@@ -5,6 +5,8 @@
  * shell escaping does nothing for a token sent in cleartext.
  */
 export declare function assertSecureBrokerUrl(raw: string): URL;
+type CrmProvider = "hubspot" | "salesforce";
+export declare function hostedProviderLogin(provider: CrmProvider, baseUrl: string): Promise<void>;
 export declare function login(args: string[]): Promise<void>;
 export declare function logout(args: string[]): void;
 type ProviderDoctorStatus = {

@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 
 /**
@@ -153,6 +152,11 @@ export async function runHubspotLoopbackLogin(
   const log = options.log ?? ((message: string) => console.error(message));
   const redirectUri = `http://localhost:${port}/callback`;
   const state = randomBytes(16).toString("hex");
+  // Deferred: `node:http` transitively compiles node's bundled undici on
+  // import (~10ms+, 12% of a demo-audit run's CPU profile). This module is in
+  // the eager graph of every CLI invocation via help.ts/auth.ts, but the
+  // server is only needed during the interactive OAuth loopback login.
+  const { createServer } = await import("node:http");
 
   const code = await new Promise<string>((resolve, reject) => {
     const server = createServer((request, response) => {

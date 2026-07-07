@@ -1,6 +1,7 @@
 import { type LlmProvider } from "../llm.ts";
 import { type Icp } from "../icp.ts";
-import type { CanonicalGtmSnapshot, GtmConnector, SnapshotProgress } from "../types.ts";
+import type { CanonicalGtmSnapshot, GtmConnector } from "../types.ts";
+import { type ProgressEmitter } from "../progress.ts";
 export declare function option(args: string[], name: string): string | null;
 export declare function repeatedOption(args: string[], name: string): string[];
 /**
@@ -21,8 +22,8 @@ export declare function saveRequested(args: string[]): boolean;
  */
 export declare function confirmRequested(args: string[], ...legacyAliases: string[]): boolean;
 export declare function numericOption(args: string[], name: string): number | undefined;
-export declare function connectorFor(provider: string, args: string[], onProgress?: (progress: SnapshotProgress) => void): Promise<GtmConnector>;
-export declare function readSnapshot(args: string[]): Promise<CanonicalGtmSnapshot>;
+export declare function connectorFor(provider: string, args: string[], progress?: ProgressEmitter): Promise<GtmConnector>;
+export declare function readSnapshot(args: string[], progress?: ProgressEmitter): Promise<CanonicalGtmSnapshot>;
 /**
  * Validate that an --input file actually has the canonical snapshot shape
  * (the JSON `snapshot --out` writes) instead of blindly casting — a plan or

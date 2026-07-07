@@ -2,7 +2,7 @@
 
 > Plan/apply for your GTM stack: canonical CRM/GTM data model, deterministic
 > hygiene audits, reviewable dry-run patch plans, and approval-gated
-> write-back to HubSpot, Salesforce, and Stripe (read-only). Think
+> write-back to HubSpot and Salesforce; Stripe is read-only. Think
 > `terraform plan` for your CRM. Apache-2.0.
 
 CLI quick check: `fullstackgtm doctor --json`. Zero-credential demo:
@@ -15,7 +15,7 @@ at/above `--fail-on`.
 - [README](https://github.com/fullstackgtm/core/blob/main/README.md): install, five-minute loop, auth ladder, MCP setup, programmatic use
 - [INSTALL_FOR_AGENTS](https://github.com/fullstackgtm/core/blob/main/INSTALL_FOR_AGENTS.md): deterministic install-and-verify steps with expected outputs
 - [Agent skill](https://github.com/fullstackgtm/core/blob/main/skills/fullstackgtm/SKILL.md): compact operating guide, installable via `npx skills add fullstackgtm/core`
-- [Recipes](https://github.com/fullstackgtm/core/blob/main/packages/fullstackgtm/docs/recipes.md): five composable GTM plays over the primitives (cold-start lead-fill, the trigger→judge→draft outbound loop, scheduled-continuous, ABM-from-companies, hygiene-gated outbound) — the CLI ships primitives, your agent is the orchestrator, the package never sends
+- [Recipes](https://github.com/fullstackgtm/core/blob/main/docs/recipes.md): five composable GTM plays over the primitives (cold-start lead-fill, the trigger→judge→draft outbound loop, scheduled-continuous, ABM-from-companies, hygiene-gated outbound) — the CLI ships primitives, your agent is the orchestrator, the package never sends
 - [Architecture](https://github.com/fullstackgtm/core/blob/main/docs/architecture.md): module map + snapshot → audit → plan → apply data flow; "where do I add a rule/connector/operation"
 - [Contributing](https://github.com/fullstackgtm/core/blob/main/CONTRIBUTING.md): dev setup, the open-core mirror model, the release ritual
 - [API reference](https://github.com/fullstackgtm/core/blob/main/docs/api.md): semver-covered surfaces — canonical model, rule interface, plan/apply contract, connector contract, config, CLI, MCP tools
@@ -202,7 +202,7 @@ outbox is the send-side mirror of the spool; the always-on sender is hosted/opt-
 --contact <id> --result replied|...` credits the contact reached so weights
 re-learn. The contact↔account join (`contact.accountId` + `account.domain`) is
 surfaced at every hop, so the loop is contact-coherent end to end — see the
-[recipes](https://github.com/fullstackgtm/core/blob/main/packages/fullstackgtm/docs/recipes.md).
+[recipes](https://github.com/fullstackgtm/core/blob/main/docs/recipes.md).
 
 ## Key invariants (schedule)
 

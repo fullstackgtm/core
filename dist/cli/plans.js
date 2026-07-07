@@ -13,9 +13,10 @@ import { buildAuditLog, verifyAuditLog } from "../auditLog.js";
 import { createFilePlanStore } from "../planStore.js";
 import { ENRICH_CONFIG_FILE_NAME, loadEnrichConfig } from "../enrich.js";
 import { loadMeter, recordConsumption, remaining } from "../acquireMeter.js";
-import { reportCounts } from "../runReport.js";
+import { progressReporter, reportCounts } from "../runReport.js";
+import { APPLY_STAGES, composeListeners, createProgressEmitter } from "../progress.js";
 import { connectorFor, isOptionValue, numericOption, option, repeatedOption, selectedRules } from "./shared.js";
-import { colorEnabled, createStatusLine, paint, planStatusWord, stylizePlanMarkdown, table, truncateToWidth } from "./ui.js";
+import { colorEnabled, createProgressRenderer, paint, planStatusWord, stylizePlanMarkdown, table, truncateToWidth } from "./ui.js";
 import { unknownSubcommandError } from "./suggest.js";
 function parseValueOverrides(args) {
     const valueOverrides = {};
@@ -209,21 +210,22 @@ export async function apply(args) {
     // A channel (e.g. outbox) renders approved ops to a local artifact and
     // transmits nothing; a CRM provider writes records. Same governed apply path.
     const connector = channel ? createChannelConnector(channel) : await connectorFor(provider, args);
-    // Interactive terminals get a live safety ticker on stderr while the run
-    // executes; the summary line it leaves behind is plain text. Inert otherwise.
-    const ticker = createStatusLine();
+    // Interactive terminals get a live apply board on stderr while the run
+    // executes (preflight → operations → results, with a per-op safety ticker);
+    // piped runs render nothing. Either way the emitter streams heartbeats to
+    // the paired hosted app when a long run is in flight.
+    const renderer = createProgressRenderer(APPLY_STAGES);
+    const progress = createProgressEmitter(composeListeners(renderer.listener, progressReporter()));
     let run;
     try {
         run = await applyPatchPlan(connector, plan, {
             approvedOperationIds,
             valueOverrides,
-            onOperation: ticker.active
-                ? (progress) => ticker.set(`Applying ${progress.completed}/${progress.total} · ✓ ${progress.applied} applied · ${progress.failed} failed · ${progress.conflicts} conflict${progress.conflicts === 1 ? "" : "s"} · ${progress.skipped} skipped`)
-                : undefined,
+            progress,
         });
     }
     finally {
-        ticker.done();
+        renderer.done();
     }
     if (planId && store) {
         await store.recordRun(planId, run);
@@ -242,9 +244,9 @@ export async function apply(args) {
     for (const result of run.results)
         applyTally[result.status] = (applyTally[result.status] ?? 0) + 1;
     reportCounts(applyTally);
-    // Rich-only closing line on stderr (ticker.active implies an interactive,
+    // Rich-only closing line on stderr (renderer.active implies an interactive,
     // color-safe stderr): the one-glance outcome of the run.
-    if (ticker.active) {
+    if (renderer.active) {
         const pe = paint(true);
         const badge = run.status === "applied"
             ? pe.green(`✓ ${applyTally.applied} operation(s) applied`)

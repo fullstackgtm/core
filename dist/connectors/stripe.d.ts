@@ -1,10 +1,17 @@
 import type { GtmConnector } from "../types.ts";
+import { type ProgressEmitter } from "../progress.ts";
 export type StripeConnectorOptions = {
     /** Stripe secret key (sk_...) or restricted key. */
     getApiKey: () => string | Promise<string>;
     apiBaseUrl?: string;
     /** Injectable fetch for testing. */
     fetchImpl?: typeof fetch;
+    /**
+     * Shared progress vocabulary (src/progress.ts): the snapshot pull emits a
+     * `stage` per collection (customers, subscriptions) and an `items`
+     * heartbeat per page. Presentation-only — errors are swallowed.
+     */
+    progress?: ProgressEmitter;
 };
 /**
  * Read-only billing connector for Stripe — the first non-CRM connector,
@@ -25,3 +32,33 @@ export type StripeConnectorOptions = {
  *   collections are always empty.
  */
 export declare function createStripeConnector(options: StripeConnectorOptions): GtmConnector;
+/**
+ * One PAID Stripe invoice, normalized for the backfill plan builder
+ * (`backfill stripe`). Amounts are major units (Stripe returns cents);
+ * `paidAt` is the payment date (YYYY-MM-DD) from status_transitions.paid_at.
+ */
+export type StripePaidInvoice = {
+    id: string;
+    number?: string;
+    customerId?: string;
+    customerName?: string;
+    customerEmail?: string;
+    /** Lowercased domain of the customer's billing email — the CRM match key. */
+    customerDomain?: string;
+    /** Major currency units (amount_paid / 100). */
+    amountPaid: number;
+    currency?: string;
+    /** YYYY-MM-DD from status_transitions.paid_at (unix seconds). */
+    paidAt?: string;
+    description?: string;
+};
+/**
+ * Read-only pull of PAID invoices (GET /v1/invoices?status=paid with the
+ * customer expanded), the revenue source of truth the backfill plan builder
+ * turns into closed-won deal proposals. Invoices with a zero amount_paid or
+ * no id are skipped — a $0 invoice is not a won deal.
+ */
+export declare function fetchStripePaidInvoices(options: StripeConnectorOptions, opts?: {
+    sinceIso?: string;
+    onPage?: (fetched: number) => void;
+}): Promise<StripePaidInvoice[]>;

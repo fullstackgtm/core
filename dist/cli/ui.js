@@ -297,6 +297,59 @@ export function createChecklist(items, stream = process.stderr, env = process.en
         active: true,
     };
 }
+const NOOP_RENDERER = { listener: () => { }, done() { }, active: false };
+/**
+ * Adapter from the shared progress vocabulary (src/progress.ts) to the
+ * existing TTY primitives: `stage` events advance a live checklist (○ → ⠹ →
+ * ✓), while `items` / `note` / `opResult` / `meter` events annotate the
+ * running stage ("contacts 1,200/4,800", the apply ticker tallies, a fuel
+ * gauge). Outside an interactive TTY this is an inert no-op — piped/CI/agent
+ * output stays byte-identical (streaming listeners composed alongside still
+ * run; rendering is presentation only).
+ */
+export function createProgressRenderer(stages, stream = process.stderr, env = process.env) {
+    const board = createChecklist(stages.map((stage) => ({ id: stage, label: stage })), stream, env);
+    if (!board.active)
+        return NOOP_RENDERER;
+    let current = null;
+    const noteFor = (event, snapshot) => {
+        if (event.kind === "items") {
+            return event.total !== undefined
+                ? `${formatCount(event.done)}/${formatCount(event.total)}`
+                : formatCount(event.done);
+        }
+        if (event.kind === "note")
+            return event.note;
+        if (event.kind === "opResult") {
+            return `${GLYPH.ok} ${formatCount(snapshot.opsApplied)} applied · ${formatCount(snapshot.opsFailed)} failed · ${formatCount(snapshot.opsSkipped)} skipped`;
+        }
+        if (event.kind === "meter") {
+            const fraction = event.budget > 0 ? event.spent / event.budget : 0;
+            return `${formatBar(fraction, 10)} ${formatCount(event.spent)}/${formatCount(event.budget)} ${event.unit}`;
+        }
+        return undefined;
+    };
+    return {
+        listener(event, snapshot) {
+            if (event.kind === "stage") {
+                // Advance the board: close out the previous stage, spin the new one.
+                if (current && current !== event.stage)
+                    board.update(current, "ok");
+                current = event.stage;
+                board.update(current, "running");
+                return;
+            }
+            // Events for a stage the board doesn't know (e.g. a nested pull inside a
+            // larger flow) are ignored by createChecklist's unknown-id no-op.
+            if (current)
+                board.update(current, "running", noteFor(event, snapshot));
+        },
+        done() {
+            board.done();
+        },
+        active: true,
+    };
+}
 /** Truncate to `max` display characters, ending in "…" when cut. */
 export function truncateToWidth(text, max) {
     if (max <= 0)
@@ -370,6 +423,5 @@ export function stylizePlanMarkdown(text, p) {
 }
 /** Strip ANSI escape sequences (test helper + safety net for width math). */
 export function stripAnsi(text) {
-    // eslint-disable-next-line no-control-regex
     return text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
 }

@@ -11,8 +11,10 @@ import { buildBulkUpdatePlan } from "../bulkUpdate.js";
 import { buildDedupePlan } from "../dedupe.js";
 import { buildReassignPlans } from "../reassign.js";
 import { suggestValues } from "../suggest.js";
+import { APPLY_STAGES, composeListeners, createProgressEmitter } from "../progress.js";
+import { progressReporter } from "../runReport.js";
 import { confirmRequested, connectorFor, isOptionValue, numericOption, option, readSnapshot, repeatedOption, saveRequested } from "./shared.js";
-import { box, colorEnabled, createStatusLine, paint } from "./ui.js";
+import { box, colorEnabled, createProgressRenderer, paint } from "./ui.js";
 /**
  * The resolve gate: exit 0 = safe to create, exit 2 = match found (exists or
  * ambiguous — do NOT blind-create), exit 1 = error. Built for sync jobs and
@@ -260,20 +262,20 @@ export async function fixCommand(args) {
         return;
     }
     const connector = await connectorFor(provider, args);
-    // Live safety ticker on interactive terminals (stderr; inert otherwise).
-    const ticker = createStatusLine();
+    // Live apply board on interactive terminals (stderr; inert otherwise); the
+    // same emitter streams heartbeats to the paired hosted app on long runs.
+    const renderer = createProgressRenderer(APPLY_STAGES);
+    const progress = createProgressEmitter(composeListeners(renderer.listener, progressReporter()));
     let run;
     try {
         run = await applyPatchPlan(connector, plan, {
             approvedOperationIds: approvedIds,
             valueOverrides: overrides,
-            onOperation: ticker.active
-                ? (progress) => ticker.set(`Applying ${progress.completed}/${progress.total} · ✓ ${progress.applied} applied · ${progress.failed} failed · ${progress.conflicts} conflict${progress.conflicts === 1 ? "" : "s"}`)
-                : undefined,
+            progress,
         });
     }
     finally {
-        ticker.done();
+        renderer.done();
     }
     await store.recordRun(plan.id, run);
     const counts = { applied: 0, conflict: 0, skipped: 0, failed: 0 };

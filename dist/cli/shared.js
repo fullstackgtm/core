@@ -1,17 +1,14 @@
 // Extracted verbatim from src/cli.ts (mechanical split, no behavior change).
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createHubspotConnector } from "../connectors/hubspot.js";
-import { createSalesforceConnector } from "../connectors/salesforce.js";
-import { createStripeConnector } from "../connectors/stripe.js";
 import { credentialsPath, getCredential, resolveHubspotConnection, resolveSalesforceConnection, storeCredential } from "../credentials.js";
-import { generateDemoSnapshot } from "../demo.js";
 import { builtinAuditRules } from "../rules.js";
-import { sampleSnapshot } from "../sampleData.js";
 import { detectProviderFromKey, resolveLlmCredential, validateLlmKey } from "../llm.js";
 import { parseIcp } from "../icp.js";
 import { nearest } from "./suggest.js";
-import { createStatusLine, formatCount, formatDuration } from "./ui.js";
+import { composeListeners, createProgressEmitter, SNAPSHOT_PULL_STAGES, STRIPE_SNAPSHOT_STAGES, } from "../progress.js";
+import { progressReporter } from "../runReport.js";
+import { createProgressRenderer } from "./ui.js";
 export function option(args, name) {
     const index = args.indexOf(name);
     if (index === -1)
@@ -98,23 +95,28 @@ async function salesforceConnection() {
         return stored;
     throw new Error("No Salesforce credentials. Run `fullstackgtm login salesforce`, pair with a hosted deployment via `fullstackgtm login --via <url>`, or set SALESFORCE_ACCESS_TOKEN and SALESFORCE_INSTANCE_URL. (`fullstackgtm doctor` shows credential status; device-flow login needs an admin-created Connected App — see the README's \"Connect your CRM\" section.)");
 }
-export async function connectorFor(provider, args, onProgress) {
+export async function connectorFor(provider, args, progress) {
+    // Connector modules are the two largest files in dist (~100KB together) and
+    // load lazily here: only live `--provider` runs pay for them, not --demo/
+    // --sample/--input runs or the always-eager help/version paths.
     if (provider === "hubspot") {
         const connection = await hubspotConnection(args);
+        const { createHubspotConnector } = await import("../connectors/hubspot.js");
         return createHubspotConnector({
             getAccessToken: () => connection.accessToken,
             fieldMappings: connection.fieldMappings ?? undefined,
             // Point at a mock/proxy HubSpot (tests, evals, request-recording).
             apiBaseUrl: process.env.HUBSPOT_API_BASE_URL,
-            onProgress,
+            progress,
         });
     }
     if (provider === "salesforce") {
         const connection = await salesforceConnection();
+        const { createSalesforceConnector } = await import("../connectors/salesforce.js");
         return createSalesforceConnector({
             getConnection: () => connection,
             fieldMappings: connection.fieldMappings ?? undefined,
-            onProgress,
+            progress,
         });
     }
     if (provider === "stripe") {
@@ -122,38 +124,47 @@ export async function connectorFor(provider, args, onProgress) {
         if (!key) {
             throw new Error("No Stripe credentials. Run `echo \"$STRIPE_KEY\" | fullstackgtm login stripe` or set STRIPE_SECRET_KEY. A restricted key with read access to Customers and Subscriptions is enough. (`fullstackgtm doctor` shows credential status.)");
         }
-        return createStripeConnector({ getApiKey: () => key });
+        const { createStripeConnector } = await import("../connectors/stripe.js");
+        return createStripeConnector({ getApiKey: () => key, progress });
     }
     const providerSuggestion = nearest(provider.toLowerCase(), ["hubspot", "salesforce", "stripe"], 3);
     throw new Error(`Unknown provider: ${provider}.${providerSuggestion ? ` Did you mean ${providerSuggestion}?` : ""} ` +
         "Supported providers: hubspot, salesforce, stripe");
 }
-export async function readSnapshot(args) {
+export async function readSnapshot(args, progress) {
     const provider = option(args, "--provider");
     if (provider) {
+        // A verb driving its own progress board (e.g. `backfill stripe`) passes
+        // its emitter through; the pull's stage/items events flow into it and no
+        // second board is painted.
+        if (progress) {
+            const connector = await connectorFor(provider, args, progress);
+            return connector.fetchSnapshot();
+        }
         // Live pulls can page for minutes with nothing on screen. On an
-        // interactive terminal, a stderr status line shows the running tally;
-        // piped/CI/agent runs get an inert no-op (zero bytes written).
-        const status = createStatusLine();
-        const startedAt = Date.now();
-        const connector = await connectorFor(provider, args, status.active
-            ? (progress) => status.set(`Pulling ${progress.objectType}s from ${provider}… ${formatCount(progress.fetched)} fetched · ${formatDuration(Date.now() - startedAt)}`)
-            : undefined);
+        // interactive terminal, a stderr checklist ticks through the pull stages
+        // with running tallies; piped/CI/agent runs render nothing (zero bytes
+        // written). Either way the emitter feeds the broker heartbeat when the
+        // CLI is paired, so long pulls tick live on the hosted dashboard too.
+        const renderer = createProgressRenderer(provider === "stripe" ? STRIPE_SNAPSHOT_STAGES : SNAPSHOT_PULL_STAGES);
+        const emitter = createProgressEmitter(composeListeners(renderer.listener, progressReporter()));
+        const connector = await connectorFor(provider, args, emitter);
         try {
             return await connector.fetchSnapshot();
         }
         finally {
-            status.done();
+            renderer.done();
         }
     }
     if (args.includes("--demo")) {
+        const { generateDemoSnapshot } = await import("../demo.js");
         return generateDemoSnapshot({
             seed: numericOption(args, "--seed"),
             today: option(args, "--today") ?? undefined,
         });
     }
     if (args.includes("--sample"))
-        return sampleSnapshot;
+        return (await import("../sampleData.js")).sampleSnapshot;
     const input = option(args, "--input");
     if (!input) {
         throw new Error("No data source. Pass one of: --provider <hubspot|salesforce|stripe> (live, read-only), " +

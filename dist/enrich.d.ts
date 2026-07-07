@@ -1,4 +1,5 @@
 import type { AcquireBudget } from "./acquireMeter.ts";
+import type { ProgressEmitter } from "./progress.ts";
 import type { AssignmentContext, AssignmentPolicy } from "./assign.ts";
 import type { CanonicalGtmSnapshot, PatchPlan } from "./types.ts";
 /**
@@ -250,6 +251,12 @@ export type BuildAcquirePlanOptions = {
     /** Meter ceiling: max create ops to emit. null/undefined = unlimited. */
     maxRecords?: number | null;
     now?: () => Date;
+    /**
+     * Shared progress vocabulary (src/progress.ts): `items` over the candidate
+     * rows as they are routed, plus a `meter` reading of creates vs the meter
+     * ceiling. Presentation-only — never changes what the plan proposes.
+     */
+    progress?: ProgressEmitter;
 };
 /**
  * Lift a prospect/source payload into the routing attributes a territory rule

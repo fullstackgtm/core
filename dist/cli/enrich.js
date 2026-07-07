@@ -8,7 +8,8 @@ import { buildAcquirePlan, buildEnrichPlan, createFileEnrichRunStore, DEFAULT_ST
 import { loadMeter, remaining } from "../acquireMeter.js";
 import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspects, partitionFreshProspects, pipe0ResolveCompanyDomains, pipe0ResolveWorkEmails, prospectIdentityKeys } from "../connectors/prospectSources.js";
 import { loadSeen, recordSeen } from "../acquireSeen.js";
-import { reportCounts, reportEvent } from "../runReport.js";
+import { progressReporter, reportCounts, reportEvent } from "../runReport.js";
+import { ACQUIRE_STAGES, composeListeners, createProgressEmitter } from "../progress.js";
 import { createLinkedInProvider, discoverLinkedInProspects } from "../acquireLinkedIn.js";
 import { fitThreshold, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp } from "../icp.js";
 import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords } from "../enrichApollo.js";
@@ -16,7 +17,7 @@ import { isSpoolPath, readSpoolPath } from "../spoolFiles.js";
 import { isOptionValue, loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.js";
 import { providerKey } from "./tam.js";
 import { unknownSubcommandError } from "./suggest.js";
-import { colorEnabled, createStatusLine, formatBar, formatDuration, paint } from "./ui.js";
+import { colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint } from "./ui.js";
 /**
  * The enrich layer: governed append/refresh of third-party data (Apollo pull,
  * Clay ingest) into the CRM through the normal dry-run → approval → apply
@@ -197,14 +198,31 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
                 }
             }
         }
-        const result = buildAcquirePlan({
-            config,
-            source,
-            snapshot,
-            records,
-            runLabel: option(rest, "--run-label") ?? `acquire-${source}-${today}`,
-            maxRecords: cap,
-        });
+        // Progress: candidate rows tick on an interactive stderr board (inert when
+        // piped) and, via the composed reporter, heartbeat to a paired hosted app.
+        // The meter reading (creates vs headroom + budget burn) rides the same
+        // emitter, feeding the dashboard's gauge without printing anything new.
+        const renderer = createProgressRenderer(ACQUIRE_STAGES);
+        const acquireProgress = createProgressEmitter(composeListeners(renderer.listener, progressReporter()));
+        let result;
+        try {
+            acquireProgress.stage(ACQUIRE_STAGES[0], 0, ACQUIRE_STAGES.length);
+            if (config.acquire.budget?.records?.perDay && headroom.records.day !== null) {
+                acquireProgress.meter(config.acquire.budget.records.perDay - headroom.records.day, config.acquire.budget.records.perDay, "records/day");
+            }
+            result = buildAcquirePlan({
+                config,
+                source,
+                snapshot,
+                records,
+                runLabel: option(rest, "--run-label") ?? `acquire-${source}-${today}`,
+                maxRecords: cap,
+                progress: acquireProgress,
+            });
+        }
+        finally {
+            renderer.done();
+        }
         if (result.counts.unassigned > 0 && result.counts.created > 0) {
             console.error(`⚠ ${result.counts.unassigned}/${result.counts.created} proposed lead(s) have no owner ` +
                 `(policy could not place them). They will be created ownerless.`);

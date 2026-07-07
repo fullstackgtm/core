@@ -7,9 +7,11 @@ import {
   type MarketClaim,
   type MarketConfig,
   type MarketObservation,
+  type MarketStore,
   type ObservationSet,
   type SpanVerificationFailure,
 } from "./market.ts";
+import { MARKET_CAPTURE_STAGES, nullProgressEmitter, type ProgressEmitter } from "./progress.ts";
 
 /**
  * LLM intensity classification for the market map — the same
@@ -112,9 +114,16 @@ export type ClassifyMarketOptions = {
   vendors?: string[];
   /** Captures directory override (tests); defaults to the profile market home. */
   capturesDir?: string;
+  /** Storage seam: when given, captures are read through it instead of the file layout. */
+  store?: MarketStore;
   now?: () => Date;
   /** Per-vendor progress (presentation only — a throwing callback never fails the run). */
   onVendor?: (done: number, total: number, vendorId: string) => void;
+  /**
+   * Progress emission over MARKET_CAPTURE_STAGES (the "classify" stage, items
+   * per vendor). Presentation-only: a throwing listener never fails the run.
+   */
+  progress?: ProgressEmitter;
 };
 
 export type ClassifyMarketResult = {
@@ -129,7 +138,10 @@ export async function classifyMarket(
   options: ClassifyMarketOptions,
 ): Promise<ClassifyMarketResult> {
   const model = options.llm.model ?? DEFAULT_MODELS[options.llm.provider];
-  const { entries, textByHash } = loadCaptureTexts(config.category, options.capturesDir);
+  const progress = options.progress ?? nullProgressEmitter();
+  const { entries, textByHash } = options.store
+    ? await options.store.loadCaptureTexts()
+    : loadCaptureTexts(config.category, options.capturesDir);
   if (entries.length === 0) {
     throw new Error(`No captures for ${config.category} — run \`market capture\` first`);
   }
@@ -145,12 +157,14 @@ export async function classifyMarket(
   const observations: MarketObservation[] = [];
   const retriedVendorIds: string[] = [];
 
+  progress.stage(MARKET_CAPTURE_STAGES[2], 2, MARKET_CAPTURE_STAGES.length);
   for (const [vendorIndex, vendorId] of vendorIds.entries()) {
     try {
       options.onVendor?.(vendorIndex, vendorIds.length, vendorId);
     } catch {
       // progress is presentation-only
     }
+    progress.note(vendorId);
     const vendor = config.vendors.find((candidate) => candidate.id === vendorId);
     if (!vendor) throw new Error(`Unknown vendor "${vendorId}"`);
     const vendorEntries = runEntries.filter((entry) => entry.vendorId === vendorId);
@@ -174,6 +188,7 @@ export async function classifyMarket(
           evidence: [],
         });
       }
+      progress.items(vendorIndex + 1, vendorIds.length);
       continue;
     }
 
@@ -229,7 +244,9 @@ export async function classifyMarket(
       );
     }
     for (const reading of outcome.readings) observations.push(toObservation(reading, vendorId));
+    progress.items(vendorIndex + 1, vendorIds.length);
   }
+  progress.flush();
 
   return {
     set: {

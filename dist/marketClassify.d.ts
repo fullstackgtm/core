@@ -1,5 +1,6 @@
 import { type LlmCallOptions } from "./llm.ts";
-import { type CaptureEntry, type MarketClaim, type MarketConfig, type ObservationSet } from "./market.ts";
+import { type CaptureEntry, type MarketClaim, type MarketConfig, type MarketStore, type ObservationSet } from "./market.ts";
+import { type ProgressEmitter } from "./progress.ts";
 export type ClassifyMarketOptions = {
     llm: LlmCallOptions;
     /** Observation run label to produce; must be new (the store is append-only). */
@@ -10,9 +11,16 @@ export type ClassifyMarketOptions = {
     vendors?: string[];
     /** Captures directory override (tests); defaults to the profile market home. */
     capturesDir?: string;
+    /** Storage seam: when given, captures are read through it instead of the file layout. */
+    store?: MarketStore;
     now?: () => Date;
     /** Per-vendor progress (presentation only — a throwing callback never fails the run). */
     onVendor?: (done: number, total: number, vendorId: string) => void;
+    /**
+     * Progress emission over MARKET_CAPTURE_STAGES (the "classify" stage, items
+     * per vendor). Presentation-only: a throwing listener never fails the run.
+     */
+    progress?: ProgressEmitter;
 };
 export type ClassifyMarketResult = {
     set: ObservationSet;

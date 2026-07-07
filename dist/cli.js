@@ -1,22 +1,14 @@
 import { activeProfile, listProfiles, setActiveProfile } from "./credentials.js";
-import { audit, healthCommand, reportCommand, rulesCommand, snapshotCommand } from "./cli/audit.js";
-import { doctorCommand, login, logout } from "./cli/auth.js";
 import { capabilitiesCommand, printCommandHelpJson, robotDocsCommand, unknownCommandEnvelope } from "./cli/capabilities.js";
-import { callCommand } from "./cli/call.js";
-import { draftCommand } from "./cli/draft.js";
-import { enrichCommand } from "./cli/enrich.js";
-import { bulkUpdateCommand, dedupeCommand, fixCommand, reassignCommand, resolveCommand, suggest } from "./cli/fix.js";
 import { BESPOKE_HELP, commandHelp, HELP, shortUsage, stylizeShortUsage, usage } from "./cli/help.js";
-import { icpCommand } from "./cli/icp.js";
-import { initCommand } from "./cli/init.js";
-import { marketCommand } from "./cli/market.js";
-import { apply, auditLogCommand, diffCommand, mergeCommand, plansCommand } from "./cli/plans.js";
-import { scheduleCommand } from "./cli/schedule.js";
 import { readPackageInfo } from "./cli/shared.js";
 import { correctedCommand, detectFlagTypo, suggestCommand, unknownFlagEnvelope } from "./cli/suggest.js";
 import { colorEnabled, paint } from "./cli/ui.js";
-import { signalsCommand } from "./cli/signals.js";
-import { tamCommand } from "./cli/tam.js";
+// Verb modules load lazily inside their dispatch branch below. The dispatcher
+// used to import all of them eagerly, so `--version` compiled the full
+// 78-module graph (audit, market, enrich, signals, schedule, …) before
+// printing one line. Each branch now `await import()`s only its own module;
+// help/typo/error paths and the exports above stay eager and byte-identical.
 /**
  * Pull the global `--profile <name>` flag out of argv (it may appear before
  * or after the command) and activate it. Stripping it keeps positional
@@ -126,95 +118,99 @@ export async function runCli(argv) {
         return;
     }
     if (command === "login") {
-        await login(args);
+        await (await import("./cli/auth.js")).login(args);
         return;
     }
     if (command === "logout") {
-        logout(args);
+        (await import("./cli/auth.js")).logout(args);
         return;
     }
     if (command === "snapshot") {
-        await snapshotCommand(args);
+        await (await import("./cli/audit.js")).snapshotCommand(args);
         return;
     }
     if (command === "audit") {
-        await audit(args);
+        await (await import("./cli/audit.js")).audit(args);
         return;
     }
     if (command === "report") {
-        await reportCommand(args);
+        await (await import("./cli/audit.js")).reportCommand(args);
         return;
     }
     if (command === "rules") {
-        await rulesCommand(args);
+        await (await import("./cli/audit.js")).rulesCommand(args);
         return;
     }
     if (command === "doctor") {
-        await doctorCommand(args);
+        await (await import("./cli/auth.js")).doctorCommand(args);
         return;
     }
     if (command === "health") {
-        healthCommand(args);
+        (await import("./cli/audit.js")).healthCommand(args);
         return;
     }
     if (command === "suggest") {
-        await suggest(args);
+        await (await import("./cli/fix.js")).suggest(args);
         return;
     }
     if (command === "call") {
-        await callCommand(args);
+        await (await import("./cli/call.js")).callCommand(args);
         return;
     }
     if (command === "resolve") {
-        await resolveCommand(args);
+        await (await import("./cli/fix.js")).resolveCommand(args);
         return;
     }
     if (command === "bulk-update") {
-        await bulkUpdateCommand(args);
+        await (await import("./cli/fix.js")).bulkUpdateCommand(args);
         return;
     }
     if (command === "dedupe") {
-        await dedupeCommand(args);
+        await (await import("./cli/fix.js")).dedupeCommand(args);
         return;
     }
     if (command === "reassign") {
-        await reassignCommand(args);
+        await (await import("./cli/fix.js")).reassignCommand(args);
         return;
     }
     if (command === "fix") {
-        await fixCommand(args);
+        await (await import("./cli/fix.js")).fixCommand(args);
         return;
     }
     if (command === "market") {
-        await marketCommand(args);
+        await (await import("./cli/market.js")).marketCommand(args);
         return;
     }
     if (command === "enrich") {
-        await enrichCommand(args);
+        await (await import("./cli/enrich.js")).enrichCommand(args);
+        return;
+    }
+    if (command === "backfill") {
+        await (await import("./cli/backfill.js")).backfillCommand(args);
         return;
     }
     if (command === "init") {
-        initCommand(args);
+        (await import("./cli/init.js")).initCommand(args);
         return;
     }
     if (command === "tam") {
-        await tamCommand(args);
+        await (await import("./cli/tam.js")).tamCommand(args);
         return;
     }
     if (command === "icp") {
-        await icpCommand(args);
+        await (await import("./cli/icp.js")).icpCommand(args);
         return;
     }
     if (command === "signals") {
-        await signalsCommand(args);
+        await (await import("./cli/signals.js")).signalsCommand(args);
         return;
     }
     if (command === "draft") {
-        await draftCommand(args);
+        await (await import("./cli/draft.js")).draftCommand(args);
         return;
     }
     if (command === "schedule") {
-        await scheduleCommand(args);
+        await (await import("./cli/schedule.js")).scheduleCommand(args);
         return;
     }
     if (command === "profiles") {
@@ -222,23 +218,23 @@ export async function runCli(argv) {
         return;
     }
     if (command === "diff") {
-        await diffCommand(args);
+        await (await import("./cli/plans.js")).diffCommand(args);
         return;
     }
     if (command === "merge") {
-        await mergeCommand(args);
+        await (await import("./cli/plans.js")).mergeCommand(args);
         return;
     }
     if (command === "plans") {
-        await plansCommand(args);
+        await (await import("./cli/plans.js")).plansCommand(args);
         return;
     }
     if (command === "audit-log") {
-        await auditLogCommand(args);
+        await (await import("./cli/plans.js")).auditLogCommand(args);
         return;
     }
     if (command === "apply") {
-        await apply(args);
+        await (await import("./cli/plans.js")).apply(args);
         return;
     }
     // Machine callers get a structured envelope with a did-you-mean hint

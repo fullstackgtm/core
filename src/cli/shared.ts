@@ -2,19 +2,22 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createHubspotConnector } from "../connectors/hubspot.ts";
-import { createSalesforceConnector } from "../connectors/salesforce.ts";
-import { createStripeConnector } from "../connectors/stripe.ts";
 import { credentialsPath, getCredential, resolveHubspotConnection, resolveSalesforceConnection, storeCredential } from "../credentials.ts";
-import { generateDemoSnapshot } from "../demo.ts";
 import { builtinAuditRules } from "../rules.ts";
-import { sampleSnapshot } from "../sampleData.ts";
 import { detectProviderFromKey, resolveLlmCredential, validateLlmKey, type LlmProvider } from "../llm.ts";
 import { parseIcp, type Icp } from "../icp.ts";
 import { nearest } from "./suggest.ts";
 import type { FieldMappings } from "../mappings.ts";
-import type { CanonicalGtmSnapshot, GtmConnector, SnapshotProgress } from "../types.ts";
-import { createStatusLine, formatCount, formatDuration } from "./ui.ts";
+import type { CanonicalGtmSnapshot, GtmConnector } from "../types.ts";
+import {
+  composeListeners,
+  createProgressEmitter,
+  SNAPSHOT_PULL_STAGES,
+  STRIPE_SNAPSHOT_STAGES,
+  type ProgressEmitter,
+} from "../progress.ts";
+import { progressReporter } from "../runReport.ts";
+import { createProgressRenderer } from "./ui.ts";
 
 
 export function option(args: string[], name: string) {
@@ -112,27 +115,32 @@ async function salesforceConnection() {
 export async function connectorFor(
   provider: string,
   args: string[],
-  onProgress?: (progress: SnapshotProgress) => void,
+  progress?: ProgressEmitter,
 ): Promise<GtmConnector> {
+  // Connector modules are the two largest files in dist (~100KB together) and
+  // load lazily here: only live `--provider` runs pay for them, not --demo/
+  // --sample/--input runs or the always-eager help/version paths.
   if (provider === "hubspot") {
     const connection = await hubspotConnection(args);
+    const { createHubspotConnector } = await import("../connectors/hubspot.ts");
     return createHubspotConnector({
       getAccessToken: () => connection.accessToken,
       fieldMappings: (connection.fieldMappings as FieldMappings | undefined) ?? undefined,
       // Point at a mock/proxy HubSpot (tests, evals, request-recording).
       apiBaseUrl: process.env.HUBSPOT_API_BASE_URL,
-      onProgress,
+      progress,
     });
   }
   if (provider === "salesforce") {
     const connection = await salesforceConnection();
+    const { createSalesforceConnector } = await import("../connectors/salesforce.ts");
     return createSalesforceConnector({
       getConnection: () => connection,
       fieldMappings:
         ((connection as { fieldMappings?: unknown }).fieldMappings as
           | FieldMappings
           | undefined) ?? undefined,
-      onProgress,
+      progress,
     });
   }
   if (provider === "stripe") {
@@ -143,7 +151,8 @@ export async function connectorFor(
         "No Stripe credentials. Run `echo \"$STRIPE_KEY\" | fullstackgtm login stripe` or set STRIPE_SECRET_KEY. A restricted key with read access to Customers and Subscriptions is enough. (`fullstackgtm doctor` shows credential status.)",
       );
     }
-    return createStripeConnector({ getApiKey: () => key });
+    const { createStripeConnector } = await import("../connectors/stripe.ts");
+    return createStripeConnector({ getApiKey: () => key, progress });
   }
   const providerSuggestion = nearest(provider.toLowerCase(), ["hubspot", "salesforce", "stripe"], 3);
   throw new Error(
@@ -152,37 +161,45 @@ export async function connectorFor(
   );
 }
 
-export async function readSnapshot(args: string[]): Promise<CanonicalGtmSnapshot> {
+export async function readSnapshot(
+  args: string[],
+  progress?: ProgressEmitter,
+): Promise<CanonicalGtmSnapshot> {
   const provider = option(args, "--provider");
   if (provider) {
+    // A verb driving its own progress board (e.g. `backfill stripe`) passes
+    // its emitter through; the pull's stage/items events flow into it and no
+    // second board is painted.
+    if (progress) {
+      const connector = await connectorFor(provider, args, progress);
+      return connector.fetchSnapshot();
+    }
     // Live pulls can page for minutes with nothing on screen. On an
-    // interactive terminal, a stderr status line shows the running tally;
-    // piped/CI/agent runs get an inert no-op (zero bytes written).
-    const status = createStatusLine();
-    const startedAt = Date.now();
-    const connector = await connectorFor(
-      provider,
-      args,
-      status.active
-        ? (progress) =>
-            status.set(
-              `Pulling ${progress.objectType}s from ${provider}… ${formatCount(progress.fetched)} fetched · ${formatDuration(Date.now() - startedAt)}`,
-            )
-        : undefined,
+    // interactive terminal, a stderr checklist ticks through the pull stages
+    // with running tallies; piped/CI/agent runs render nothing (zero bytes
+    // written). Either way the emitter feeds the broker heartbeat when the
+    // CLI is paired, so long pulls tick live on the hosted dashboard too.
+    const renderer = createProgressRenderer(
+      provider === "stripe" ? STRIPE_SNAPSHOT_STAGES : SNAPSHOT_PULL_STAGES,
     );
+    const emitter = createProgressEmitter(
+      composeListeners(renderer.listener, progressReporter()),
+    );
+    const connector = await connectorFor(provider, args, emitter);
     try {
       return await connector.fetchSnapshot();
     } finally {
-      status.done();
+      renderer.done();
     }
   }
   if (args.includes("--demo")) {
+    const { generateDemoSnapshot } = await import("../demo.ts");
     return generateDemoSnapshot({
       seed: numericOption(args, "--seed"),
       today: option(args, "--today") ?? undefined,
     });
   }
-  if (args.includes("--sample")) return sampleSnapshot;
+  if (args.includes("--sample")) return (await import("../sampleData.ts")).sampleSnapshot;
   const input = option(args, "--input");
   if (!input) {
     throw new Error(

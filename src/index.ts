@@ -21,6 +21,20 @@ export {
   type LoadedConfig,
 } from "./config.ts";
 export { applyPatchPlan, type ApplyPatchPlanOptions } from "./connector.ts";
+export {
+  APPLY_STAGES,
+  BACKFILL_STRIPE_STAGES,
+  composeListeners,
+  createProgressEmitter,
+  CRM_SYNC_STAGES,
+  nullProgressEmitter,
+  SNAPSHOT_PULL_STAGES,
+  STRIPE_SNAPSHOT_STAGES,
+  type ProgressEmitter,
+  type ProgressEvent,
+  type ProgressListener,
+  type ProgressSnapshot,
+} from "./progress.ts";
 export { createHubspotConnector, type HubspotConnectorOptions } from "./connectors/hubspot.ts";
 export {
   DEFAULT_LOOPBACK_PORT,
@@ -45,7 +59,20 @@ export {
   type SalesforceDeviceAuthorization,
   type SalesforceTokenSet,
 } from "./connectors/salesforceAuth.ts";
-export { createStripeConnector, type StripeConnectorOptions } from "./connectors/stripe.ts";
+export {
+  createStripeConnector,
+  fetchStripePaidInvoices,
+  type StripeConnectorOptions,
+  type StripePaidInvoice,
+} from "./connectors/stripe.ts";
+export {
+  buildStripeBackfillPlan,
+  DEFAULT_BACKFILL_MATCH_PROPERTY,
+  type StripeBackfillCounts,
+  type StripeBackfillOptions,
+  type StripeBackfillResult,
+  type StripeBackfillUnmatched,
+} from "./backfill.ts";
 export {
   activeProfile,
   credentialsDir,

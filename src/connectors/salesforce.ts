@@ -19,6 +19,7 @@ import type {
   PatchOperationResult,
   SnapshotProgress,
 } from "../types.ts";
+import { SNAPSHOT_PULL_STAGES, type ProgressEmitter } from "../progress.ts";
 
 const DEFAULT_API_VERSION = "v59.0";
 
@@ -38,6 +39,12 @@ export type SalesforceConnectorOptions = {
   fetchImpl?: typeof fetch;
   /** Per-page snapshot-pull progress (presentation only — errors are swallowed). */
   onProgress?: (progress: SnapshotProgress) => void;
+  /**
+   * Shared progress vocabulary (src/progress.ts): the snapshot pull emits a
+   * `stage` per object type and an `items` heartbeat per page. Additive
+   * alongside the legacy `onProgress` callback; both are presentation-only.
+   */
+  progress?: ProgressEmitter;
 };
 
 const SOBJECT_TYPES: Partial<Record<GtmObjectType, string>> = {
@@ -54,6 +61,15 @@ const SOAP_MERGEABLE: Partial<Record<GtmObjectType, string>> = {
 };
 
 const MAPPING_OBJECT_TYPES: Partial<Record<GtmObjectType, Exclude<CrmObjectType, "owners">>> = {
+  account: "accounts",
+  contact: "contacts",
+  deal: "deals",
+};
+
+// SnapshotProgress object types → the shared SNAPSHOT_PULL_STAGES names, so
+// the CLI checklist and the app StageTimeline read the same stage labels.
+const PULL_STAGE_BY_TYPE: Record<SnapshotProgress["objectType"], (typeof SNAPSHOT_PULL_STAGES)[number]> = {
+  user: "owners",
   account: "accounts",
   contact: "contacts",
   deal: "deals",
@@ -202,8 +218,21 @@ export function createSalesforceConnector(
   }
 
   async function assembleSnapshot(whereClause: string): Promise<CanonicalGtmSnapshot> {
-    const progressFor = (objectType: SnapshotProgress["objectType"]) => (fetched: number) =>
+    // Per-page snapshot-pull progress: the legacy onProgress callback plus the
+    // shared emitter (stage on the first page of each object type, items per
+    // page). Both are presentation-only — `query` already swallows errors.
+    let lastPullStage: string | undefined;
+    const progressFor = (objectType: SnapshotProgress["objectType"]) => (fetched: number) => {
       options.onProgress?.({ objectType, fetched });
+      const emitter = options.progress;
+      if (!emitter) return;
+      const stage = PULL_STAGE_BY_TYPE[objectType];
+      if (stage !== lastPullStage) {
+        lastPullStage = stage;
+        emitter.stage(stage, SNAPSHOT_PULL_STAGES.indexOf(stage), SNAPSHOT_PULL_STAGES.length);
+      }
+      emitter.items(fetched);
+    };
     const sfUsers = await query(
       `SELECT ${selectFields("owners")} FROM User${whereClause}`,
       progressFor("user"),
@@ -321,6 +350,9 @@ export function createSalesforceConnector(
         raw: opportunity,
       };
     });
+
+    // Deliver any throttled trailing items heartbeat before the pull returns.
+    options.progress?.flush();
 
     return {
       generatedAt: new Date().toISOString(),
@@ -566,7 +598,7 @@ export function createSalesforceConnector(
       return { operationId: operation.id, status: "skipped", detail: "create_record needs a CreateRecordPayload afterValue." };
     }
     if (operation.objectType !== "contact" && operation.objectType !== "account") {
-      return { operationId: operation.id, status: "skipped", detail: "create_record supports contacts and accounts." };
+      return { operationId: operation.id, status: "skipped", detail: "create_record supports contacts and accounts on Salesforce (deal/Opportunity creation is HubSpot-only for now)." };
     }
     const matchValue = String(payload.matchValue ?? "").trim();
     if (!matchValue) {

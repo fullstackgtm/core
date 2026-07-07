@@ -9,6 +9,7 @@ import {
   loadCaptureTexts,
   type MarketClaim,
   type MarketConfig,
+  type MarketStore,
   type MarketVendor,
 } from "./market.ts";
 
@@ -44,6 +45,11 @@ export type SuggestTaxonomyOptions = {
   /** Test injectables. */
   fetchPage?: FetchPage;
   capturesDir?: string;
+  /**
+   * Storage seam for the bootstrap captures; defaults to the file layout.
+   * Pass createMemoryMarketStore for throwaway grounding (hosted flow).
+   */
+  store?: MarketStore;
   now?: () => Date;
 };
 
@@ -227,9 +233,11 @@ export async function suggestMarketConfig(options: SuggestTaxonomyOptions): Prom
   // fetched (the SSRF guard in captureMarket applies to these user-supplied URLs).
   await captureMarket(
     { category, vendors, claims: [] },
-    { dir: options.capturesDir, runLabel: "bootstrap", fetchPage: options.fetchPage, now: options.now },
+    { dir: options.capturesDir, store: options.store, runLabel: "bootstrap", fetchPage: options.fetchPage, now: options.now },
   );
-  const capture = loadCaptureTexts(category, options.capturesDir);
+  const capture = options.store
+    ? await options.store.loadCaptureTexts()
+    : loadCaptureTexts(category, options.capturesDir);
   const { dossier, unreadable } = buildDossier(vendors, capture, perVendorChars);
   if (!dossier.trim()) {
     throw new Error(

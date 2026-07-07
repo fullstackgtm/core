@@ -7,6 +7,7 @@ import type {
   PatchOperation,
   PatchOperationResult,
 } from "../types.ts";
+import { STRIPE_SNAPSHOT_STAGES, type ProgressEmitter } from "../progress.ts";
 
 const DEFAULT_API_BASE_URL = "https://api.stripe.com";
 
@@ -16,7 +17,58 @@ export type StripeConnectorOptions = {
   apiBaseUrl?: string;
   /** Injectable fetch for testing. */
   fetchImpl?: typeof fetch;
+  /**
+   * Shared progress vocabulary (src/progress.ts): the snapshot pull emits a
+   * `stage` per collection (customers, subscriptions) and an `items`
+   * heartbeat per page. Presentation-only — errors are swallowed.
+   */
+  progress?: ProgressEmitter;
 };
+
+// Module-scope request/list (parameterized by options) so the connector
+// factory and fetchStripePaidInvoices share one implementation.
+async function stripeRequest(options: StripeConnectorOptions, path: string): Promise<any> {
+  const baseUrl = (options.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, "");
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const apiKey = await options.getApiKey();
+  const response = await fetchImpl(`${baseUrl}${path}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) {
+    // Status line only — the body can echo request details bound to a live
+    // billing key, and these errors land in scheduled-run records.
+    await response.text().catch(() => undefined);
+    throw new Error(`Stripe API error ${response.status}. Check the restricted key and request.`);
+  }
+  return response.json();
+}
+
+/** Stripe list pagination: follow `has_more` with `starting_after=<last id>`. */
+async function stripeList(
+  options: StripeConnectorOptions,
+  path: string,
+  onPage?: (fetched: number) => void,
+): Promise<any[]> {
+  const results: any[] = [];
+  let startingAfter: string | undefined;
+  do {
+    const separator = path.includes("?") ? "&" : "?";
+    const data = await stripeRequest(
+      options,
+      `${path}${startingAfter ? `${separator}starting_after=${encodeURIComponent(startingAfter)}` : ""}`,
+    );
+    const page: any[] = data.data ?? [];
+    results.push(...page);
+    try {
+      onPage?.(results.length);
+    } catch {
+      // progress is presentation-only; never let it fail a pull
+    }
+    startingAfter =
+      data.has_more === true && page.length > 0 ? String(page.at(-1).id) : undefined;
+  } while (startingAfter);
+  return results;
+}
 
 /**
  * Read-only billing connector for Stripe — the first non-CRM connector,
@@ -37,46 +89,24 @@ export type StripeConnectorOptions = {
  *   collections are always empty.
  */
 export function createStripeConnector(options: StripeConnectorOptions): GtmConnector {
-  const baseUrl = (options.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, "");
-  const fetchImpl = options.fetchImpl ?? fetch;
-
-  async function request(path: string): Promise<any> {
-    const apiKey = await options.getApiKey();
-    const response = await fetchImpl(`${baseUrl}${path}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (!response.ok) {
-      // Status line only — the body can echo request details bound to a live
-      // billing key, and these errors land in scheduled-run records.
-      await response.text().catch(() => undefined);
-      throw new Error(`Stripe API error ${response.status}. Check the restricted key and request.`);
-    }
-    return response.json();
-  }
-
-  /** Stripe list pagination: follow `has_more` with `starting_after=<last id>`. */
-  async function list(path: string): Promise<any[]> {
-    const results: any[] = [];
-    let startingAfter: string | undefined;
-    do {
-      const separator = path.includes("?") ? "&" : "?";
-      const data = await request(
-        `${path}${startingAfter ? `${separator}starting_after=${encodeURIComponent(startingAfter)}` : ""}`,
-      );
-      const page: any[] = data.data ?? [];
-      results.push(...page);
-      startingAfter =
-        data.has_more === true && page.length > 0 ? String(page.at(-1).id) : undefined;
-    } while (startingAfter);
-    return results;
-  }
+  const list = (path: string, onPage?: (fetched: number) => void) =>
+    stripeList(options, path, onPage);
+  // Shared progress vocabulary: stage per collection, items per page.
+  const pullStage = (stage: (typeof STRIPE_SNAPSHOT_STAGES)[number]) =>
+    options.progress?.stage(
+      stage,
+      STRIPE_SNAPSHOT_STAGES.indexOf(stage),
+      STRIPE_SNAPSHOT_STAGES.length,
+    );
+  const pullItems = (fetched: number) => options.progress?.items(fetched);
 
   async function assembleSnapshot(createdGte?: number): Promise<CanonicalGtmSnapshot> {
     // Stripe filters list endpoints on the integer `created` field via
     // created[gte]=<unix seconds>; omitted on a full snapshot.
     const createdFilter =
       createdGte === undefined ? "" : `&created[gte]=${createdGte}`;
-    const customers = await list(`/v1/customers?limit=100${createdFilter}`);
+    pullStage("customers");
+    const customers = await list(`/v1/customers?limit=100${createdFilter}`, pullItems);
     const accounts: CanonicalAccount[] = [];
     const contacts: CanonicalContact[] = [];
     for (const customer of customers) {
@@ -111,8 +141,10 @@ export function createStripeConnector(options: StripeConnectorOptions): GtmConne
       }
     }
 
+    pullStage("subscriptions");
     const subscriptions = await list(
       `/v1/subscriptions?status=all&limit=100${createdFilter}`,
+      pullItems,
     );
     const deals: CanonicalDeal[] = subscriptions
       .filter((subscription) => subscription.id)
@@ -161,6 +193,9 @@ export function createStripeConnector(options: StripeConnectorOptions): GtmConne
         };
       });
 
+    // Deliver any throttled trailing items heartbeat before the pull returns.
+    options.progress?.flush();
+
     return {
       generatedAt: new Date().toISOString(),
       provider: "stripe",
@@ -203,6 +238,91 @@ export function createStripeConnector(options: StripeConnectorOptions): GtmConne
     fetchChanges,
     applyOperation,
   };
+}
+
+/**
+ * One PAID Stripe invoice, normalized for the backfill plan builder
+ * (`backfill stripe`). Amounts are major units (Stripe returns cents);
+ * `paidAt` is the payment date (YYYY-MM-DD) from status_transitions.paid_at.
+ */
+export type StripePaidInvoice = {
+  id: string;
+  number?: string;
+  customerId?: string;
+  customerName?: string;
+  customerEmail?: string;
+  /** Lowercased domain of the customer's billing email — the CRM match key. */
+  customerDomain?: string;
+  /** Major currency units (amount_paid / 100). */
+  amountPaid: number;
+  currency?: string;
+  /** YYYY-MM-DD from status_transitions.paid_at (unix seconds). */
+  paidAt?: string;
+  description?: string;
+};
+
+/**
+ * Read-only pull of PAID invoices (GET /v1/invoices?status=paid with the
+ * customer expanded), the revenue source of truth the backfill plan builder
+ * turns into closed-won deal proposals. Invoices with a zero amount_paid or
+ * no id are skipped — a $0 invoice is not a won deal.
+ */
+export async function fetchStripePaidInvoices(
+  options: StripeConnectorOptions,
+  opts: { sinceIso?: string; onPage?: (fetched: number) => void } = {},
+): Promise<StripePaidInvoice[]> {
+  let createdFilter = "";
+  if (opts.sinceIso !== undefined) {
+    const sinceMs = Date.parse(opts.sinceIso);
+    if (!Number.isFinite(sinceMs)) throw new Error(`Invalid since timestamp: ${opts.sinceIso}`);
+    createdFilter = `&created[gte]=${Math.floor(sinceMs / 1000)}`;
+  }
+  const invoices = await stripeList(
+    options,
+    `/v1/invoices?status=paid&limit=100&expand[]=data.customer${createdFilter}`,
+    opts.onPage,
+  );
+  const paid: StripePaidInvoice[] = [];
+  for (const invoice of invoices) {
+    if (!invoice?.id) continue;
+    const amountPaidCents = numberOrUndefined(invoice.amount_paid);
+    if (amountPaidCents === undefined || amountPaidCents <= 0) continue;
+    // customer is the expanded object when expand[]=data.customer was honored,
+    // else the plain id string — handle both.
+    const customer = invoice.customer;
+    const customerId =
+      typeof customer === "string" ? customer : stringOrUndefined(customer?.id);
+    // Invoices also carry flat customer_name/customer_email copies — use them
+    // when the customer object wasn't expanded (or lacks the field).
+    const customerName =
+      (typeof customer === "object" && customer !== null
+        ? stringOrUndefined(customer.name)
+        : undefined) ?? stringOrUndefined(invoice.customer_name);
+    const customerEmail =
+      typeof customer === "object" && customer !== null
+        ? stringOrUndefined(customer.email) ?? stringOrUndefined(invoice.customer_email)
+        : stringOrUndefined(invoice.customer_email);
+    const customerDomain = customerEmail?.includes("@")
+      ? customerEmail.split("@").at(-1)!.toLowerCase()
+      : undefined;
+    const paidAtSeconds = numberOrUndefined(invoice.status_transitions?.paid_at);
+    paid.push({
+      id: String(invoice.id),
+      number: stringOrUndefined(invoice.number),
+      customerId,
+      customerName,
+      customerEmail,
+      customerDomain,
+      amountPaid: amountPaidCents / 100,
+      currency: stringOrUndefined(invoice.currency)?.toUpperCase(),
+      paidAt:
+        paidAtSeconds !== undefined
+          ? new Date(paidAtSeconds * 1000).toISOString().split("T")[0]
+          : undefined,
+      description: stringOrUndefined(invoice.description),
+    });
+  }
+  return paid;
 }
 
 function stringOrUndefined(value: unknown): string | undefined {

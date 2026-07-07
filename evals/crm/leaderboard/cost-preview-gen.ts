@@ -15,6 +15,7 @@ const cells = aggregateCells(rows).filter((c) => c.arm === "raw" || c.arm === "f
 const frontier = paretoFrontier(cells, (c) => cellCost(c).dollarsPerSuccess);
 
 const SHORT: Record<string, string> = {
+  "anthropic/claude-fable-5": "Fable 5",
   "anthropic/claude-opus-4-8": "Opus 4.8",
   "anthropic/claude-sonnet-4-6": "Sonnet 4.6",
   "anthropic/claude-haiku-4-5": "Haiku 4.5",
@@ -27,6 +28,7 @@ const SHORT: Record<string, string> = {
 };
 // one distinct, muted colour per model
 const COLOR: Record<string, string> = {
+  "anthropic/claude-fable-5": "#6b4fa0",
   "anthropic/claude-opus-4-8": "#2d5840",
   "anthropic/claude-sonnet-4-6": "#2f6f8f",
   "anthropic/claude-haiku-4-5": "#b3651f",
@@ -150,7 +152,7 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
   <h1>Cost efficiency</h1>
   <p class="sub">$/safe-completion vs CuP, raw tools vs governed writes. Each line is one model, <strong>Raw</strong> (hollow) → <strong>Gated</strong> (filled). Up and to the left is better. Hover any point for detail.</p>
 
-  <svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Connected scatter of completion-under-policy versus cost per safe completion, raw versus gated, one line per model. For every model the gated point is higher (safer); ${frontierClause}.">
+  <svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Connected scatter of completion-under-policy versus cost per safe completion, raw versus gated, one line per model. For every model the gated point matches or exceeds the raw point on safe completion; ${frontierClause}.">
       ${grid}
       <rect x="${X0}" y="${Y0}" width="${PW}" height="${PH}" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
       ${lines}

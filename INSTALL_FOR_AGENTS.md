@@ -45,13 +45,15 @@ Credential resolution ladder, first match wins:
 
 1. `--token-env <NAME>` — explicit env var for one invocation
 2. Ambient env: `HUBSPOT_ACCESS_TOKEN`, or `SALESFORCE_ACCESS_TOKEN` + `SALESFORCE_INSTANCE_URL`, or `STRIPE_SECRET_KEY`
-3. Stored login: `fullstackgtm login <provider>` (interactive; a human runs this once)
-4. Broker pairing: `fullstackgtm login --via <hosted url>` (a human approves the pairing code)
+3. BYO direct login: advanced token/OAuth paths stored locally; these override hosted
+4. Hosted OAuth / broker: `fullstackgtm login hubspot` or `fullstackgtm login salesforce` (default browser OAuth; stores a broker credential and mints provider tokens server-side) or `login --via <hosted url>`
 
-In an agent sandbox, prefer rung 1 or 2. Never echo tokens into argv —
-`login` reads secrets from stdin only. Set `FSGTM_NO_BROWSER=1` in headless
+In an agent sandbox, prefer rung 1 or 2. If a human is at a browser, the next
+command is usually `fullstackgtm login hubspot --hosted` or
+`fullstackgtm login salesforce --hosted`. Never echo tokens into argv — BYO
+secret paths read from stdin only. Set `FSGTM_NO_BROWSER=1` in headless
 environments — login flows then print verification URLs instead of opening
-the OS browser.
+the OS browser. First-party app secrets never ship in the npm package.
 
 LLM calls (`call parse`, `call score`, `market classify`): set
 `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in the environment, or have the human
@@ -77,11 +79,11 @@ count and provider spend per day and per month. It still flows through
 dry-run → approve → apply and never auto-writes — expect it to refuse rather
 than silently exceed the meter.
 
-Provider prerequisites (what the human must create, and which scopes) are in
-the README's **"Connect your CRM"** section: HubSpot needs a private app with
-four `crm.objects.*.read` scopes (plus write scopes only for `apply`);
-Salesforce needs an admin-created Connected App with device flow enabled;
-Stripe works with a restricted key (Customers + Subscriptions read).
+Provider prerequisites for BYO fallback (what the human must create, and which
+scopes) are in the README's **"Connect your CRM"** section: HubSpot private app
+or BYO OAuth app scopes, Salesforce admin-created Connected App for device
+flow, and Stripe restricted key (Customers + Subscriptions read). Hosted
+HubSpot/Salesforce OAuth is the default when available.
 
 ```bash
 HUBSPOT_ACCESS_TOKEN=$TOKEN fullstackgtm audit --provider hubspot --json --out plan.json
@@ -140,6 +142,6 @@ stored captures before anything is appended).
 | Symptom | Fix |
 | --- | --- |
 | `fullstackgtm: command not found` | Re-run with `npx fullstackgtm`, or check global npm bin is on PATH |
-| `No HubSpot credentials` (exit 1) | Set `HUBSPOT_ACCESS_TOKEN` or have a human run `fullstackgtm login hubspot` |
+| `No HubSpot credentials` (exit 1) | Set `HUBSPOT_ACCESS_TOKEN` or have a human run `fullstackgtm login hubspot --hosted` |
 | MCP server prints peer-dependency help | Install `@modelcontextprotocol/sdk` and `zod` (see step 6) |
 | Need machine state for orchestration | `fullstackgtm doctor --json` |

@@ -194,13 +194,13 @@ test("cli login/logout manage stored credentials without any web flow", () => {
       );
 
     // The secret is piped on stdin — never passed as an argv flag.
-    const login = run(["login", "hubspot", "--no-validate"], "pat-cli-test\n");
+    const login = run(["login", "hubspot", "--private-token", "--no-validate"], "pat-cli-test\n");
     assert.equal(login.status, 0, login.stderr);
     const stored = JSON.parse(readFileSync(join(dir, "credentials.json"), "utf8"));
     assert.equal(stored.providers.hubspot.accessToken, "pat-cli-test");
 
     // Passing the secret as a flag is rejected outright.
-    const argvSecret = run(["login", "hubspot", "--token", "leaky", "--no-validate"], "");
+    const argvSecret = run(["login", "hubspot", "--private-token", "--token", "leaky", "--no-validate"], "");
     assert.equal(argvSecret.status, 1);
     assert.match(argvSecret.stderr, /no longer accepts a value on the command line/);
 

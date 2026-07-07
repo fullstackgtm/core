@@ -9,11 +9,15 @@ export function usage() {
 and apply only explicitly approved operations.
 
 Usage:
-  fullstackgtm login --via <hosted url>        pair with a team deployment (recommended)
-  fullstackgtm login hubspot [--no-validate]
-  fullstackgtm login hubspot --oauth --client-id <id> [--port ${DEFAULT_LOOPBACK_PORT}] [--scopes a,b]
-  fullstackgtm login salesforce --device --client-id <consumer key> [--login-url <url>]
-  fullstackgtm login salesforce --instance-url <url> [--no-validate]
+  fullstackgtm login hubspot                  hosted browser OAuth (default; no app needed)
+  fullstackgtm login salesforce               hosted browser OAuth (default; no app needed)
+  fullstackgtm login hubspot --hosted [--via <url>]
+  fullstackgtm login salesforce --hosted [--via <url>]
+  fullstackgtm login --via <hosted url>        pair with a team deployment (broker only)
+  fullstackgtm login hubspot --private-token [--no-validate]      advanced: paste private app token
+  fullstackgtm login hubspot --oauth --client-id <id> [--port ${DEFAULT_LOOPBACK_PORT}] [--scopes a,b]  advanced: BYO HubSpot app
+  fullstackgtm login salesforce --device --client-id <consumer key> [--login-url <url>]  advanced: BYO Connected App
+  fullstackgtm login salesforce --instance-url <url> [--no-validate]  advanced: paste access token
   fullstackgtm login stripe [--no-validate]
   fullstackgtm login anthropic | openai        store an LLM API key for call parse/score
   fullstackgtm login apollo                    store an Apollo API key for enrich pulls\n  fullstackgtm login pipe0 | explorium | theirstack  store a discovery-provider key (theirstack = technographic TAM)\n  fullstackgtm login heyreach                  store a HeyReach key for enrich acquire --source linkedin\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|pipe0|explorium|heyreach|broker>
@@ -21,7 +25,7 @@ Usage:
   Secrets (tokens, client secrets) are NEVER passed as flags — they leak via
   the process list and shell history. Pipe them on stdin or enter them at the
   interactive prompt:
-    echo "$HUBSPOT_TOKEN" | fullstackgtm login hubspot
+    echo "$HUBSPOT_TOKEN" | fullstackgtm login hubspot --private-token
   fullstackgtm init [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]
                                                cold start: scaffold icp.json + enrich.config.json + a
                                                PLAYBOOK wired for this workspace (the CLI ships primitives,
@@ -31,16 +35,18 @@ Usage:
   fullstackgtm report [source options] [audit options] [report options]
   fullstackgtm diff --before <a.json> --after <b.json> [--json] [--fail-on-new-findings]
   fullstackgtm merge --input <a.json> --input <b.json> [...] --out <merged.json> [--json]
-  fullstackgtm call parse --transcript <file> [--title t] [--source fathom|granola|...] [--model m] [--deterministic] [--json|--ndjson] [--out <path>]
+  fullstackgtm call parse --transcript <file> [--title t] [--source fathom|granola|...] [--model m] [--llm] [--heuristics] [--json|--ndjson] [--out <path>]
   fullstackgtm call classify --transcript <file>|--call <parsed.json> [--llm] [--deterministic] [--json]
   fullstackgtm call score --transcript <file>|--call <parsed.json> [--call-type <t>] [--rubric <rubric.json>] [--model m] [--json|--out <path>]
   fullstackgtm call link --attendees <a@x.com,...> | --domain <x.com>  [source options] [--json]
   fullstackgtm call plan --transcript <file>|--call <parsed.json> --deal <id> [source options] [--save|--json]
-                                               calls become evidence: LLM extraction by default (bring your own
-                                               Anthropic or OpenAI key — captured once on first use, or
-                                               ANTHROPIC_API_KEY/OPENAI_API_KEY, or \`login anthropic|openai\`);
-                                               --deterministic uses the free keyword baseline. Then link the call
-                                               to its deal and propose governed next-step writes.
+                                               calls become evidence: chunked LLM extraction by default when a
+                                               key resolves (ANTHROPIC_API_KEY/OPENAI_API_KEY or \`login
+                                               anthropic|openai\`), free deterministic fallback when none does;
+                                               --heuristics (alias --deterministic) forces the deterministic
+                                               engine, --llm forces the LLM path. Model: --model, else env
+                                               FSGTM_INSIGHTS_MODEL. Then link the call to its deal and propose
+                                               governed next-step writes.
   fullstackgtm resolve <account|contact|deal> [--name N] [--domain D] [--email E] [--account-id A] [source options] [--json]
                                                the create gate: exit 0 = safe to create, exit 2 = match
                                                found (exists/ambiguous) — call before ANY record creation
@@ -80,6 +86,15 @@ Usage:
                                                fill-blanks-only patch plan through the normal dry-run →
                                                approve → apply gate. refresh re-checks stale stamped fields
                                                and proposes updates only where the source value changed.
+  fullstackgtm backfill stripe|runs [--since <iso>] [--pipeline <id|label>] [--match-property <name>] [--skip-unmatched] [source options] [--save] [--dry-run] [--json]
+                                               revenue truth backfill: one closed-won deal per PAID Stripe
+                                               invoice (amount = invoice total, close date = paid date,
+                                               associated to the matched customer account, deduped by
+                                               invoice id). Reads Stripe + the CRM snapshot, emits a
+                                               dry-run create_record plan through the normal approve →
+                                               apply gate; unmatched customers get a proposed NEW account
+                                               in the same plan (freemail domains never used;
+                                               --skip-unmatched = report-only). HubSpot-only for now.
   fullstackgtm signals fetch [--bucket job,…] [--source greenhouse,lever,ashby] [--watchlist <path|crm:seg>] [--keywords …] [--from <file.json|spool.jsonl|spool-dir>] [--save]
   fullstackgtm signals list [--since 7d] [--bucket b] [--account d] [--unjudged]
   fullstackgtm signals outcome --account <d> [--touch <id>] --result replied|meeting|bounced|no_reply
@@ -188,13 +203,14 @@ Authentication (checked in order):
   1. --token-env <name>        explicit env var for this invocation (hubspot)
   2. ambient env               HUBSPOT_ACCESS_TOKEN, or SALESFORCE_ACCESS_TOKEN +
                                SALESFORCE_INSTANCE_URL (CI, agent sandboxes)
-  3. stored provider login     fullstackgtm login <provider>; kept in ~/.fullstackgtm
-                               (hubspot: private app token or loopback OAuth;
-                               salesforce: device flow — code on any device, no
-                               secret, silent refresh)
-  4. broker pairing            fullstackgtm login --via <url>: the team connects the
-                               CRM once in the hosted dashboard; every paired CLI
-                               uses those stored sync credentials from then on
+  3. stored provider login     BYO direct credentials kept in ~/.fullstackgtm
+                               (hubspot: --private-token or loopback OAuth;
+                               salesforce: pasted token or device flow). These
+                               direct credentials override broker-hosted tokens.
+  4. hosted/broker login        fullstackgtm login hubspot|salesforce (or --hosted):
+                               hosted browser OAuth stores a broker credential;
+                               provider tokens are minted server-side. \`login --via
+                               <url>\` pairs with an existing team deployment broker.
 
 Source options (snapshot and audit):
   --sample               Built-in minimal mock CRM data (default)
@@ -280,12 +296,13 @@ export const HELP: Record<string, HelpEntry> = {
     summary: "connect a provider or LLM key (secrets via stdin/env, never argv)",
     phase: "Setup",
     synopsis: [
+      "fullstackgtm login hubspot | salesforce          hosted browser OAuth (default)",
       "fullstackgtm login --via <hosted url>            pair with a team deployment",
-      "fullstackgtm login hubspot | salesforce | stripe",
+      "fullstackgtm login stripe",
       "fullstackgtm login anthropic | openai | apollo",
     ],
     detail:
-      "Secrets are NEVER passed as flags (they leak via the process list and shell history) — pipe on stdin or enter at the prompt: `echo \"$TOKEN\" | fullstackgtm login hubspot`.",
+      "HubSpot/Salesforce use hosted browser OAuth by default; BYO app/token paths are advanced. Secrets are NEVER passed as flags — pipe on stdin or enter at the prompt: `echo \"$TOKEN\" | fullstackgtm login hubspot --private-token`.",
     seeAlso: ["doctor", "logout", "profiles"],
   },
   logout: {
@@ -442,6 +459,27 @@ export const HELP: Record<string, HelpEntry> = {
       "Extra `--where` scoping is account-lifted for deals/contacts. `--except-deal-stage <stage>` excludes that stage and any record whose account has an open deal in it, re-verified per record at apply.",
     seeAlso: ["bulk-update", "plans", "apply"],
   },
+  backfill: {
+    summary: "Stripe paid invoices → closed-won deal proposals (governed)",
+    phase: "Remediate",
+    synopsis: [
+      "fullstackgtm backfill stripe|runs [--since <iso>] [--pipeline <id|label>] [--match-property <name>] [--skip-unmatched] [source options] [--save] [--dry-run] [--json]",
+    ],
+    detail:
+      "`backfill runs` replays LOCAL execution history to the paired hosted app (idempotent: deterministic run ids + server-side dedupe): every stored plan's apply runs and the health.jsonl timeline, so the hosted feed and Home health trend cover the engagement from its CLI-only beginning. Requires `login --via`; only what live reporting sends leaves the machine (statuses, counts, timestamps, scores — never CRM field values). `backfill stripe`: billing is the revenue source of truth — proposes ONE closed-won deal per paid Stripe invoice (amount = invoice total, close date = paid date, associated to the matched customer account, deduped by invoice id). Customers are matched to CRM accounts by domain, then exact name; a customer the CRM doesn't know gets an explicit proposed ACCOUNT create in the same plan (billing-email domain used unless it is freemail; a customer with no usable name/domain stays report-only; `--skip-unmatched` restores report-only for all unmatched). Emits a dry-run create_record plan — nothing is written until `plans approve` → `apply`, where the connector re-resolves each invoice id (and each account by domain/name) and creates only on a confirmed miss. Deal creation is HubSpot-only for now.",
+    options: [
+      ["--since <iso>", "only invoices created on/after this timestamp"],
+      ["--pipeline <id|label>", "target deal pipeline (default: the portal's default pipeline)"],
+      ["--match-property <name>", "deal dedupe property stamped with the invoice id (default stripe_invoice_id)"],
+      ["--skip-unmatched", "do not propose accounts for unmatched customers (report-only, the pre-1.3 behavior)"],
+      ["--provider <name>", "CRM snapshot to match against: hubspot | salesforce"],
+      ["--input <path>", "match against a saved snapshot JSON instead of a live pull"],
+      ["--save", "persist the dry-run plan for approve → apply"],
+      ["--json", "machine-readable {plan, counts, unmatched, proposedAccounts} (stripe) or replay summary (runs)"],
+      ["--dry-run", "(runs) count what would be replayed without sending anything"],
+    ],
+    seeAlso: ["enrich", "plans", "apply", "resolve"],
+  },
   enrich: {
     summary: "governed third-party enrichment (Apollo/Clay), fill-blanks-only",
     phase: "Remediate",
@@ -457,7 +495,7 @@ export const HELP: Record<string, HelpEntry> = {
     phase: "Remediate",
     synopsis: ["fullstackgtm call parse|classify|score|link|plan …  (run `call --help` for full options)"],
     detail:
-      "`parse` normalizes any transcript into canonical segments + evidence (LLM by default, bring your own key; `--deterministic` for the free baseline). `classify` picks the call type, `score` rates it against the type's rubric, `link` finds the deal, `plan` proposes governed next-step writes.",
+      "`parse` normalizes any transcript into canonical segments + evidence — chunked LLM extraction by default when a key resolves (ANTHROPIC_API_KEY/OPENAI_API_KEY or `login anthropic|openai`), free deterministic fallback when none does; `--heuristics` forces the deterministic engine, `--llm` forces the LLM path, model via `--model` or env FSGTM_INSIGHTS_MODEL. `classify` picks the call type, `score` rates it against the type's rubric, `link` finds the deal, `plan` proposes governed next-step writes.",
     seeAlso: ["plans", "apply"],
   },
 
@@ -585,7 +623,7 @@ export function shortUsage() {
     ["Setup & health", ["login", "logout", "doctor", "capabilities", "robot-docs", "profiles", "health"]],
     ["Detect — read-only", ["audit", "report", "snapshot", "diff", "rules"]],
     ["Prevent — gate writes", ["resolve"]],
-    ["Remediate — governed writes", ["fix", "bulk-update", "dedupe", "reassign", "enrich"]],
+    ["Remediate — governed writes", ["fix", "bulk-update", "dedupe", "reassign", "enrich", "backfill"]],
     ["Calls → evidence", ["call"]],
     ["Govern — the plan/apply spine", ["suggest", "plans", "apply", "audit-log", "merge"]],
     ["Market intelligence", ["market", "tam"]],

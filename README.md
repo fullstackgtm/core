@@ -8,7 +8,7 @@ Think `terraform plan` for your CRM: agents and scripts may *read* everything, b
 
 Licensed under [Apache-2.0](./LICENSE). The boundary is deliberate and stable: the framework, CLI, and MCP server are open source; the hosted Full Stack GTM application (dashboard, sync backend, broker service, team workflows) is a separate, proprietary product built on top of this package. Features never move from open to closed. See [CONTRIBUTING.md](./CONTRIBUTING.md) for how development and mirroring work.
 
-**Status: beta (0.x).** The surfaces in [docs/api.md](./docs/api.md) — the canonical model, rule interface, plan/apply contract, connector contract, merge/diff, config, CLI, and MCP tools — are settling but may still break in minor releases until 1.0; the path there is [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md). The safety invariants (read-only audits, approval-gated writes, placeholder refusal) are not beta and do not change. Connectors: HubSpot (read/write), Salesforce (read/write), Stripe (read-only billing).
+**Status: beta (0.x).** The surfaces in [docs/api.md](./docs/api.md) — the canonical model, rule interface, plan/apply contract, connector contract, merge/diff, config, CLI, and MCP tools — are settling but may still break in minor releases until 1.0. The safety invariants (read-only audits, approval-gated writes, placeholder refusal) are not beta and do not change. Connectors: HubSpot (read/write), Salesforce (read/write), Stripe (read-only billing).
 
 ## Install
 
@@ -136,7 +136,10 @@ fullstackgtm dedupe account --key domain --keep richest --save   # one merge_rec
 fullstackgtm reassign --from 411 --to 902 --except-deal-stage closing --save   # ownership handoff playbook
 fullstackgtm reassign --assign-unowned --to 902 --save          # claim every ownerless record for an owner
 fullstackgtm fix --rule missing-deal-owner --provider hubspot --yes  # audit one rule → suggest → approve → apply, one command
+fullstackgtm backfill stripe --save     # paid Stripe invoices → proposed closed-won deals, deduped by invoice id
 ```
+
+`backfill stripe` makes the CRM honest when Stripe is the revenue source of truth: one closed-won deal per paid invoice (amount = invoice total, close date = paid date, company association by billing-email domain). A customer the CRM doesn't know gets a proposed account create in the same approval-gated plan (freemail billing domains are never used as a company domain; `--skip-unmatched` keeps them report-only), and apply re-resolves each invoice id so re-running never double-creates.
 
 `bulk-update` filters the snapshot (`=`, `!=`, `~` substring, `!~` not-substring, `:empty`/`:notempty`, type-aware comparisons `<` `>` `<=` `>=` where `today` resolves to the policy date — e.g. `closeDate<today` — and date/numeric fields coerce by value form, `|` any-of, relational pseudo-fields like `account.domain` or `openDealStages`) into a dry-run patch plan — and **the full filter is re-verified per record at apply time**, with mid-apply rechecks, so a record that stopped matching between audit and apply is skipped, not clobbered. For date/count hygiene (past close dates, stale deals, missing accounts, duplicates), prefer the rule-backed `fix --rule <id>` — the rule encodes the open-deal + date logic deterministically; use `bulk-update` only when no rule covers the task. Equality filters double as preconditions; `--require` adds explicit ones; `--guard` asserts cross-record conditions; `--max-operations` caps blast radius. `--set field=from:<sourceField>` derives values per record; `--create-task <text>` is the third change mode, emitting approval-gated `create_task` operations instead of field writes; `--archive` refuses records whose identity key (account domain, contact email) is shared with another record — that's a duplicate, and duplicates are merged with `dedupe`, not archived around (`--force-archive-duplicates` overrides that refusal explicitly).
 
@@ -260,7 +263,7 @@ fullstackgtm schedule status --runs 5            # last runs, exit codes, artifa
 fullstackgtm schedule uninstall                  # remove the managed block, touch nothing else
 ```
 
-**Scheduling never auto-approves.** Schedulable commands are read/plan-side only — `audit`, `snapshot`, `enrich append|refresh`, `market capture|refresh`, `signals fetch`, `icp judge`, `icp eval`, `draft`, `suggest`, `report`, `doctor` — so unattended runs accumulate *proposals* (plans in the queue, run records, reports), never CRM writes. `apply` is schedulable only as `apply --plan-id <id>`, and every firing re-checks the plan's status is approved: an unapproved plan records a `plan_not_approved` no-op run instead of executing, and no flag relaxes this. Arbitrary shell is not schedulable — an entry's argv must resolve to a known fullstackgtm command (validated at `add` time and re-checked at run time), and the timer line you audit — crontab entry or LaunchAgent `ProgramArguments` — is always `fullstackgtm schedule run <id>` and nothing else.
+**Scheduling never auto-approves.** Schedulable commands are read/plan-side only — `audit`, `snapshot`, `enrich append|refresh`, `enrich acquire --save`, `market capture|refresh`, `signals fetch`, `icp judge`, `icp eval`, `draft`, `suggest`, `report`, `doctor` — so unattended runs accumulate *proposals* (plans in the queue, run records, reports), never CRM writes. `apply` is schedulable only as `apply --plan-id <id>`, and every firing re-checks the plan's status is approved: an unapproved plan records a `plan_not_approved` no-op run instead of executing, and no flag relaxes this. Arbitrary shell is not schedulable — an entry's argv must resolve to a known fullstackgtm command (validated at `add` time and re-checked at run time), and the timer line you audit — crontab entry or LaunchAgent `ProgramArguments` — is always `fullstackgtm schedule run <id>` and nothing else.
 
 `install` materializes enabled entries into the system timer; `--timer` defaults by platform. On macOS it writes one LaunchAgent plist per entry (`com.fullstackgtm.<profile>.<id>` in `~/Library/LaunchAgents`, loaded via `launchctl bootstrap`) — macOS gates `crontab` writes behind Full Disk Access, a permission no program can request, while LaunchAgents need none; launchd also coalesces firings missed during sleep into one run on wake. Re-install replaces the profile's plist fleet wholesale and never touches foreign plists. Elsewhere (or with `--timer crontab`) it renders a sentinel-delimited block (`# >>> fullstackgtm <profile> >>>` … `# <<< fullstackgtm <profile> <<<`) in your user crontab; re-install replaces the block wholesale and never touches lines outside it. Honest limitation: cron has no catch-up — a laptop asleep at firing time means a missed run. `schedule status` surfaces missed firings by comparing expected-vs-actual run history, so the gap is at least visible. Entries are provider-agnostic; cloud providers (Modal, AWS) arrive as scaffold generators that call the same `schedule run <id>` contract, and are refused as "not yet implemented" until then.
 
@@ -312,7 +315,9 @@ fullstackgtm diff --before old.json --after new.json --fail-on-new-findings
 - `--demo` (with `--seed`) generates a realistic mid-market CRM with injected real-world failure modes — departed owners, unlinked deals, orphan accounts, stale pipeline — so agents and CI can exercise the full snapshot → audit → apply pipeline with zero credentials.
 - Exit codes: `0` success, `1` error, `2` findings at/above `--fail-on`.
 
-"Built for agents" is measured, not asserted: a 1,892-run benchmark (20 scenarios = 17 synthetic + 3 seeded from an anonymized real portal, × 3 tool-surface arms × up to 4 trials, across nine models from six vendors, deterministic graders over final CRM state, τ-bench-style pass^k) shows the gated CLI surface beating raw CRM-API access on completion-under-policy for every model tested — and the tool-surface effect is monotonic and vendor-independent. Full matrix and methodology: [the leaderboard](./evals/crm/leaderboard/RESULTS.md).
+"Built for agents" is measured, not asserted: a 1,904-run benchmark (17 CRM-operations scenarios × 3 tool-surface arms × up to 4 trials, across ten models from six vendors, deterministic graders over final CRM state, τ-bench-style pass^k) shows the gated CLI surface matching or beating raw CRM-API access on completion-under-policy for every model tested — strictly better in nine of ten — and the effect is vendor-independent. Full matrix and methodology: [the leaderboard](./evals/crm/leaderboard/RESULTS.md).
+
+Caveat: the leaderboard documents the Opus reduced protocol and mixed-version Informed arms; treat the headline as a pointer to those exact RESULTS.md conditions.
 
 The design is **deterministic apply, governed suggest**: the parts that touch your CRM — the audit rules, the plan/apply contract, compare-and-set, the survivor/merge logic — are deterministic and replayable; the parts that read free text (`call parse`/`score`, `market classify`) are LLM-powered but bounded, with every quoted span mechanically verified against the source before it can drive a writeback. Nondeterministic suggestion, deterministic governance.
 
@@ -321,9 +326,9 @@ The design is **deterministic apply, governed suggest**: the parts that touch yo
 Credential resolution is a ladder — the first rung that yields a token wins:
 
 1. **`--token-env <NAME>`** — explicit env var for one invocation (agent sandboxes, scripts)
-2. **`HUBSPOT_ACCESS_TOKEN`** — ambient env (CI)
-3. **Stored login** — `fullstackgtm login hubspot`, kept in `~/.fullstackgtm/credentials.json` (0600; override location with `FSGTM_HOME`)
-4. **Broker pairing** — `fullstackgtm login --via <hosted url>`: the team's deployment holds the CRM credentials; the CLI holds only a revocable pairing token
+2. **`HUBSPOT_ACCESS_TOKEN` / Salesforce env** — ambient env (CI)
+3. **BYO direct login** — advanced token/OAuth paths stored in `~/.fullstackgtm/credentials.json` (0600; override location with `FSGTM_HOME`); these override hosted
+4. **Hosted OAuth / broker** — `fullstackgtm login hubspot` or `fullstackgtm login salesforce` opens hosted browser OAuth by default, stores only a broker credential locally, and mints provider tokens server-side
 
 ### Teams: auth once, point every CLI at the stored sync credentials
 
@@ -337,22 +342,26 @@ An admin connects HubSpot **once** in the hosted dashboard (the org's OAuth toke
 
 **Run observability (paired CLIs).** Once paired, each command best-effort reports a run record — command, status (`success`/`partial`/`error`), duration, headline counts (e.g. ops emitted, leads created, est. cost), and structured events (plan saved, meter charged) — to the deployment's **run timeline** in the dashboard. It's opt-in by pairing (an unpaired CLI sends nothing), a 4-second-capped POST that swallows every error, and never changes the command's exit code. Setup/inspection verbs (`login`, `doctor`, `help`, `--version`) are skipped.
 
-### Individuals: no deployment needed
+### Individuals: hosted OAuth by default, BYO still available
 
 ```bash
-# HubSpot, zero web flow: paste a private app token once (validated, then stored)
+# Default: hosted first-party OAuth. No provider app or provider secret in the npm package.
 fullstackgtm login hubspot
+fullstackgtm login salesforce
+# optional: point at a self-hosted/team deployment
+fullstackgtm login hubspot --hosted --via https://gtm.yourco.com
 
-# HubSpot, bring-your-own-app OAuth. The browser is used exactly once — the
-# consent grant — captured on a 127.0.0.1 loopback (RFC 8252); the CLI
-# exchanges the code itself and refreshes silently from then on. The client
-# secret is read from stdin or an interactive prompt — never as a flag.
+# Advanced HubSpot private app token (validated, then stored; token on stdin).
+# Note: hosted HubSpot OAuth covers reads and object writes but cannot create
+# tasks (HubSpot exposes no tasks scope to public apps) — use a private-app
+# token if your workflow relies on `create_task` proposals.
+echo "$HUBSPOT_TOKEN" | fullstackgtm login hubspot --private-token
+
+# Advanced HubSpot BYO-app OAuth. Client secret is read from stdin/prompt — never a flag.
 echo "$CLIENT_SECRET" | fullstackgtm login hubspot --oauth --client-id <id>
 #   (register http://localhost:8763/callback as a redirect URL on your app)
 
-# Salesforce: native device flow — confirm a code on any device, no localhost
-# server, no client secret, silent refresh. Needs a Connected App consumer key
-# with device flow enabled (see "Connect your CRM" below).
+# Advanced Salesforce BYO Connected App device flow.
 fullstackgtm login salesforce --device --client-id <consumer key>
 # ...or a session token directly (token on stdin, never as a flag):
 echo "$SF_SESSION_TOKEN" | fullstackgtm login salesforce --instance-url https://yourorg.my.salesforce.com
@@ -360,7 +369,7 @@ echo "$SF_SESSION_TOKEN" | fullstackgtm login salesforce --instance-url https://
 fullstackgtm logout hubspot   # or: salesforce | broker
 ```
 
-A direct `login hubspot` always wins over a broker pairing, so an operator can override the team default. HubSpot does not support the device-authorization grant or secretless public clients, which is why the bring-your-own-app OAuth path requires client credentials; they are stored locally for silent refresh, the same model as `gcloud` and `aws` CLI profiles.
+BYO direct credentials always win over a hosted broker pairing, so an operator can override the team default. First-party app secrets never ship in the npm package; hosted login stores a local broker token and mints provider tokens server-side. HubSpot does not support the device-authorization grant or secretless public clients, which is why the bring-your-own-app OAuth path requires client credentials; they are stored locally for silent refresh, the same model as `gcloud` and `aws` CLI profiles.
 
 ## Connect your CRM
 
@@ -389,7 +398,7 @@ Connectors differ in what the provider's API allows — stated up front so nothi
    - `crm.objects.contacts.read`
    - `crm.objects.deals.read`
 3. If you plan to **apply** approved operations (not just audit), also grant write scopes for the objects you'll let it touch: `crm.objects.deals.write` (covers `deal.next_step` and other deal fields), plus `crm.objects.contacts.write` / `crm.objects.companies.write` for contact/company patches, and the **Tasks** write scope for `create_task` operations (search "tasks" in the scope picker; naming varies by portal).
-4. Create the app, copy the token (`pat-...`), then: `echo "$TOKEN" | fullstackgtm login hubspot`.
+4. Create the app, copy the token (`pat-...`), then: `echo "$TOKEN" | fullstackgtm login hubspot --private-token`.
 
 If a scope is missing you'll see a `403` mid-run whose body names the exact missing scope (`requiredGranularScopes`) — add it to the private app and re-run. Note that `login` only validates the token itself; it can't tell whether every scope you'll need is granted.
 
@@ -418,7 +427,7 @@ This is a **short-lived session token with no refresh** — ideal for a one-off 
 
 ### Stripe: a restricted key is enough (read-only connector)
 
-The Stripe connector only reads customers and subscriptions, and `apply` is read-only by construction. Create a **restricted key** with just **Customers: Read** and **Subscriptions: Read** (Developers → API keys → Create restricted key) instead of pasting a full-access secret key: `echo "$KEY" | fullstackgtm login stripe`.
+The Stripe connector reads customers, subscriptions, and paid invoices (`backfill stripe` calls `/v1/invoices`), and `apply` is read-only by construction. Create a **restricted key** with just **Customers: Read**, **Subscriptions: Read**, and **Invoices: Read** (Developers → API keys → Create restricted key) instead of pasting a full-access secret key: `echo "$KEY" | fullstackgtm login stripe`.
 
 ## Concepts
 

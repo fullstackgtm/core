@@ -206,6 +206,190 @@ test("ndjson rows carry extractor provenance; score-specific no-key error; call 
   }
 });
 
+// ---------------------------------------------------------------------------
+// Engine parity with the hosted app: `call parse` defaults to the chunked LLM
+// pipeline when a key resolves, falls back to deterministic heuristics (with a
+// stderr hint) when none does, and --heuristics forces the old default.
+
+const anthropicToolResponse = (input: unknown) =>
+  new Response(JSON.stringify({ content: [{ type: "tool_use", input }] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+
+// Long enough to exceed the 1500-char chunk budget several times over, so the
+// default path demonstrably makes multiple per-chunk LLM calls.
+function longSpeakerTranscript(): { transcript: string; painPhrase: string } {
+  const filler = Array.from(
+    { length: 60 },
+    (_, i) => `Rep: filler agenda recap line ${i} covering nothing decision-relevant at all today.`,
+  );
+  const painPhrase = "our ops team rebuilds the renewal spreadsheet from scratch every month";
+  const transcript = [
+    ...filler.slice(0, 30),
+    `Prospect: honestly the big blocker is that ${painPhrase}, easily six hours.`,
+    ...filler.slice(30),
+  ].join("\n");
+  return { transcript, painPhrase };
+}
+
+type EnvOverrides = Record<string, string | undefined>;
+
+// Run with env vars (and a fresh FSGTM_HOME) pinned, restoring afterwards so
+// concurrent suites that set real keys are unaffected.
+async function withCallEnv(
+  overrides: EnvOverrides,
+  fn: (home: string) => Promise<void>,
+): Promise<void> {
+  const home = mkdtempSync(join(tmpdir(), "fsgtm-calls-parity-"));
+  const managed = ["FSGTM_HOME", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "FSGTM_INSIGHTS_MODEL", ...Object.keys(overrides)];
+  const saved = new Map(managed.map((key) => [key, process.env[key]]));
+  process.env.FSGTM_HOME = home;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.FSGTM_INSIGHTS_MODEL;
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    await fn(home);
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+async function captureParse(argv: string[]): Promise<{ out: string; err: string }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = (msg: unknown) => out.push(String(msg));
+  console.error = (msg: unknown) => err.push(String(msg));
+  try {
+    await runCli(argv);
+  } finally {
+    console.log = origLog;
+    console.error = origErr;
+  }
+  return { out: out.join("\n"), err: err.join("\n") };
+}
+
+test("call parse defaults to the chunked LLM pipeline when a key resolves", async () => {
+  await withCallEnv({ ANTHROPIC_API_KEY: "sk-ant-test" }, async (home) => {
+    const { transcript, painPhrase } = longSpeakerTranscript();
+    const transcriptPath = join(home, "long-call.txt");
+    writeFileSync(transcriptPath, transcript);
+
+    const bodies: Array<{ model?: string; messages: Array<{ content: string }> }> = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      const prompt: string = body.messages[0].content;
+      const insights = prompt.includes(painPhrase)
+        ? [{
+            type: "pain_point",
+            text: "Ops rebuilds the renewal spreadsheet from scratch monthly (~6 hours).",
+            evidence: painPhrase,
+            importance: 4,
+            confidence: 0.9,
+          }]
+        : [];
+      return anthropicToolResponse({ insights });
+    }) as typeof fetch;
+
+    try {
+      const { out, err } = await captureParse(["call", "parse", "--transcript", transcriptPath, "--json"]);
+      const parsed = JSON.parse(out);
+      assert.match(parsed.extractor, /^llm:anthropic:/, "extractor labels the LLM engine");
+      assert.ok(bodies.length > 1, `multiple per-chunk LLM calls (got ${bodies.length})`);
+      assert.equal(parsed.insights.length, 1);
+      assert.equal(parsed.insights[0].type, "pain_point");
+      assert.doesNotMatch(err, /No LLM key/);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+
+test("call parse without a key falls back to heuristics with a one-line stderr hint", async () => {
+  await withCallEnv({}, async (home) => {
+    const transcriptPath = join(home, "call.txt");
+    writeFileSync(transcriptPath, SPEAKER_TRANSCRIPT);
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("no-key fallback must not call an LLM");
+    }) as typeof fetch;
+    try {
+      const { out, err } = await captureParse(["call", "parse", "--transcript", transcriptPath, "--json"]);
+      const parsed = JSON.parse(out);
+      assert.equal(parsed.extractor, "deterministic");
+      assert.ok(parsed.insights.length > 0, "heuristic engine still extracts");
+      assert.match(err, /No LLM key — using deterministic extraction/);
+      assert.match(err, /login anthropic\|openai/);
+      assert.match(err, /ANTHROPIC_API_KEY\/OPENAI_API_KEY/);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+
+test("call parse --heuristics forces the deterministic engine even with a key (no hint)", async () => {
+  await withCallEnv({ ANTHROPIC_API_KEY: "sk-ant-test" }, async (home) => {
+    const transcriptPath = join(home, "call.txt");
+    writeFileSync(transcriptPath, SPEAKER_TRANSCRIPT);
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("--heuristics must not call an LLM");
+    }) as typeof fetch;
+    try {
+      const { out, err } = await captureParse(["call", "parse", "--heuristics", "--transcript", transcriptPath, "--json"]);
+      const parsed = JSON.parse(out);
+      assert.equal(parsed.extractor, "deterministic");
+      assert.doesNotMatch(err, /No LLM key/);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+
+test("FSGTM_INSIGHTS_MODEL sets the default model; --model still wins", async () => {
+  await withCallEnv(
+    { ANTHROPIC_API_KEY: "sk-ant-test", FSGTM_INSIGHTS_MODEL: "claude-insights-env" },
+    async (home) => {
+      const transcriptPath = join(home, "call.txt");
+      writeFileSync(transcriptPath, SPEAKER_TRANSCRIPT);
+
+      const models: string[] = [];
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        models.push(JSON.parse(String(init?.body)).model);
+        return anthropicToolResponse({ insights: [] });
+      }) as typeof fetch;
+      try {
+        const envRun = await captureParse(["call", "parse", "--transcript", transcriptPath, "--json"]);
+        assert.equal(JSON.parse(envRun.out).extractor, "llm:anthropic:claude-insights-env");
+        assert.deepEqual([...new Set(models)], ["claude-insights-env"], "env model reaches the request body");
+
+        models.length = 0;
+        const flagRun = await captureParse([
+          "call", "parse", "--transcript", transcriptPath, "--model", "claude-flag-model", "--json",
+        ]);
+        assert.equal(JSON.parse(flagRun.out).extractor, "llm:anthropic:claude-flag-model");
+        assert.deepEqual([...new Set(models)], ["claude-flag-model"], "--model overrides FSGTM_INSIGHTS_MODEL");
+      } finally {
+        globalThis.fetch = origFetch;
+      }
+    },
+  );
+});
+
 test("suggestCallDeal surfaces resolvedVia + matched contacts (be clear which join matched)", () => {
   const base: CanonicalGtmSnapshot = {
     generatedAt: "t",

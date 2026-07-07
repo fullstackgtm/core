@@ -1,3 +1,4 @@
+import type { ProgressListener } from "../progress.ts";
 type StreamLike = {
     isTTY?: boolean;
     columns?: number;
@@ -100,6 +101,26 @@ export declare function createChecklist(items: Array<{
     id: string;
     label: string;
 }>, stream?: StreamLike, env?: UiEnv): Checklist;
+export type ProgressRenderer = {
+    /**
+     * Feed to `createProgressEmitter` (compose with the broker streaming
+     * listener via `composeListeners` when the run should also heartbeat).
+     */
+    listener: ProgressListener;
+    /** Stop animating and erase the board (callers print their own summary). */
+    done(): void;
+    readonly active: boolean;
+};
+/**
+ * Adapter from the shared progress vocabulary (src/progress.ts) to the
+ * existing TTY primitives: `stage` events advance a live checklist (○ → ⠹ →
+ * ✓), while `items` / `note` / `opResult` / `meter` events annotate the
+ * running stage ("contacts 1,200/4,800", the apply ticker tallies, a fuel
+ * gauge). Outside an interactive TTY this is an inert no-op — piped/CI/agent
+ * output stays byte-identical (streaming listeners composed alongside still
+ * run; rendering is presentation only).
+ */
+export declare function createProgressRenderer(stages: readonly string[], stream?: StreamLike, env?: UiEnv): ProgressRenderer;
 /** Truncate to `max` display characters, ending in "…" when cut. */
 export declare function truncateToWidth(text: string, max: number): string;
 /** critical → red, warning → yellow, info → dim. */

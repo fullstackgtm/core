@@ -47,6 +47,7 @@ export function assertSecureBrokerUrl(raw) {
     throw new Error(`Refusing to pair over ${url.protocol}//${url.host}: the broker exchanges a long-lived token and mints live CRM ` +
         "credentials, so it must use https (http is allowed only for localhost dev).");
 }
+const DEFAULT_HOSTED_BASE_URL = "https://app.fullstackgtm.com";
 async function brokerLogin(baseUrl) {
     const viaUrl = assertSecureBrokerUrl(baseUrl);
     const base = baseUrl.replace(/\/$/, "");
@@ -118,12 +119,115 @@ async function brokerLogin(baseUrl) {
     }
     throw new Error("Pairing timed out before it was approved.");
 }
+export async function hostedProviderLogin(provider, baseUrl) {
+    const viaUrl = assertSecureBrokerUrl(baseUrl);
+    const base = baseUrl.replace(/\/$/, "");
+    const os = await import("node:os");
+    const requesterLabel = `${os.hostname()} (${process.platform}, ${os.userInfo().username})`;
+    let startResponse;
+    try {
+        startResponse = await fetch(`${base}/api/cli/oauth/start`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider, requesterLabel }),
+        });
+    }
+    catch (error) {
+        const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+        throw new Error(`Cannot reach the hosted deployment at ${base}${cause}. Check the --via URL and network access.`);
+    }
+    if (!startResponse.ok) {
+        throw new Error(`Could not start ${provider} OAuth with ${base} (${startResponse.status}). Is this a FullStackGTM deployment?`);
+    }
+    const start = await startResponse.json();
+    let sameOrigin = false;
+    try {
+        sameOrigin = new URL(start.verificationUrl).origin === viaUrl.origin;
+    }
+    catch {
+        sameOrigin = false;
+    }
+    console.error(`\n${provider} OAuth code: ${start.userCode}\n\nApprove this CLI ("${requesterLabel}") in your hosted FullStackGTM dashboard:\n\n  ${start.verificationUrl}\n`);
+    if (sameOrigin) {
+        void openInBrowser(start.verificationUrl);
+    }
+    else {
+        console.error(`(Not auto-opening: the verification URL is not on ${viaUrl.origin}. Open it manually only if you trust it.)`);
+    }
+    const deadline = Date.now() + (start.expiresInSeconds ?? 600) * 1000;
+    const intervalMs = Math.max(0, (start.intervalSeconds ?? 3) * 1000);
+    while (Date.now() < deadline) {
+        await new Promise((resolveSleep) => setTimeout(resolveSleep, intervalMs));
+        const pollResponse = await fetch(`${base}/api/cli/auth/poll`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ deviceCode: start.deviceCode }),
+        });
+        if (!pollResponse.ok)
+            throw new Error(`Pairing poll failed (${pollResponse.status}).`);
+        const poll = await pollResponse.json();
+        if (poll.status === "pending")
+            continue;
+        if (poll.status === "approved" && poll.cliToken) {
+            const now = new Date().toISOString();
+            storeCredential("broker", {
+                kind: "broker",
+                accessToken: poll.cliToken,
+                baseUrl: base,
+                createdAt: now,
+                updatedAt: now,
+            });
+            console.log(`Logged in to ${provider} via hosted OAuth at ${base}. Credentials stored in ${credentialsPath()}.`);
+            console.log("Provider tokens are minted server-side by the hosted app; no provider app secret is stored in this CLI.");
+            return;
+        }
+        throw new Error(`Pairing was ${poll.status}.`);
+    }
+    throw new Error("Pairing timed out before it was approved.");
+}
+function hostedBase(args) {
+    return option(args, "--via") ?? process.env.FULLSTACKGTM_HOSTED_URL ?? DEFAULT_HOSTED_BASE_URL;
+}
+async function guidedProviderLogin(provider, args, reason) {
+    const command = `fullstackgtm login ${provider} --hosted`;
+    if (!process.stdin.isTTY || process.env.CI) {
+        console.error(`${reason}\nNext command: ${command}`);
+        throw new Error(reason);
+    }
+    console.error(`\n${provider} login options:\n` +
+        `  1) Hosted OAuth (default): no provider app needed; browser approval via FullStackGTM.\n` +
+        `  2) BYO ${provider === "salesforce" ? "Connected App" : "HubSpot app"}: advanced OAuth/device flow.\n` +
+        `  3) Paste token: read from stdin/prompt; never from argv.\n`);
+    const readline = await import("node:readline/promises");
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    const answer = (await rl.question("Choose [1]: ")).trim();
+    rl.close();
+    if (answer === "" || answer === "1")
+        return hostedProviderLogin(provider, hostedBase(args));
+    if (answer === "2") {
+        throw new Error(provider === "salesforce"
+            ? "Advanced BYO Salesforce: run `fullstackgtm login salesforce --device --client-id <consumer key>` or pipe a token with `--instance-url <url>`."
+            : `Advanced BYO HubSpot: run \`fullstackgtm login hubspot --oauth --client-id <id>\` (redirect http://localhost:${numericOption(args, "--port") ?? DEFAULT_LOOPBACK_PORT}/callback).`);
+    }
+    if (answer === "3") {
+        throw new Error(provider === "salesforce"
+            ? "Paste-token Salesforce: pipe the token with `fullstackgtm login salesforce --instance-url <url>`."
+            : "Paste-token HubSpot: pipe the token with `fullstackgtm login hubspot --private-token`.");
+    }
+    return hostedProviderLogin(provider, hostedBase(args));
+}
 async function salesforceLogin(args) {
     const now = new Date().toISOString();
+    rejectArgvSecret(args, "--token");
+    if (args.includes("--hosted") || (!args.includes("--device") && !args.includes("--instance-url"))) {
+        await hostedProviderLogin("salesforce", hostedBase(args));
+        return;
+    }
     if (args.includes("--device")) {
         const clientId = option(args, "--client-id");
         if (!clientId) {
-            throw new Error("--device requires --client-id (the consumer key of a Connected App with device flow enabled).");
+            await guidedProviderLogin("salesforce", args, "--device requires --client-id (the consumer key of a Connected App with device flow enabled).");
+            return;
         }
         const loginUrl = option(args, "--login-url") ?? undefined;
         const authorization = await startSalesforceDeviceLogin({ clientId, loginUrl });
@@ -150,11 +254,10 @@ async function salesforceLogin(args) {
         console.log("Tokens refresh silently; no further browser interaction is needed.");
         return;
     }
-    rejectArgvSecret(args, "--token");
     const instanceUrl = option(args, "--instance-url");
     if (!instanceUrl) {
-        throw new Error("Salesforce login needs --device --client-id <consumer key>, or --instance-url " +
-            "<https://yourorg.my.salesforce.com> with the access token piped on stdin.");
+        await guidedProviderLogin("salesforce", args, "Salesforce login needs hosted OAuth, --device --client-id <consumer key>, or --instance-url <https://yourorg.my.salesforce.com> with the access token piped on stdin.");
+        return;
     }
     const token = await readSecret("Salesforce access token");
     if (!token)
@@ -175,12 +278,12 @@ async function salesforceLogin(args) {
     console.log(`Logged in to Salesforce. Credentials stored in ${credentialsPath()}.`);
 }
 export async function login(args) {
+    const provider = args.find((arg) => !arg.startsWith("--") && !isOptionValue(args, arg));
     const via = option(args, "--via");
-    if (via) {
+    if (via && !provider) {
         await brokerLogin(via);
         return;
     }
-    const provider = args.find((arg) => !arg.startsWith("--") && !isOptionValue(args, arg));
     if (provider === "salesforce") {
         await salesforceLogin(args);
         return;
@@ -261,13 +364,18 @@ export async function login(args) {
         throw new Error("login supports: hubspot, salesforce, stripe, anthropic, openai, apollo, pipe0, explorium, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com");
     }
     const now = new Date().toISOString();
+    rejectArgvSecret(args, "--token");
+    if (args.includes("--hosted") || (!args.includes("--oauth") && !args.includes("--private-token"))) {
+        await hostedProviderLogin("hubspot", hostedBase(args));
+        return;
+    }
     if (args.includes("--oauth")) {
         rejectArgvSecret(args, "--client-secret");
         const clientId = option(args, "--client-id");
         if (!clientId) {
-            throw new Error("--oauth requires --client-id from your own HubSpot app " +
-                `(register http://localhost:${numericOption(args, "--port") ?? DEFAULT_LOOPBACK_PORT}/callback as a redirect URL). ` +
-                "The client secret is read from stdin or an interactive prompt.");
+            await guidedProviderLogin("hubspot", args, "--oauth requires --client-id from your own HubSpot app " +
+                `(register http://localhost:${numericOption(args, "--port") ?? DEFAULT_LOOPBACK_PORT}/callback as a redirect URL).`);
+            return;
         }
         const clientSecret = await readSecret("HubSpot app client secret");
         if (!clientSecret)
@@ -294,7 +402,6 @@ export async function login(args) {
         console.log("Tokens refresh silently; no further browser interaction is needed.");
         return;
     }
-    rejectArgvSecret(args, "--token");
     const token = await readSecret("HubSpot private app token");
     if (!token)
         throw new Error("No token provided.");
@@ -354,7 +461,7 @@ export function doctorReport(env = process.env) {
     const nextSteps = connected.length === 0
         ? [
             "fullstackgtm audit --demo            # no credentials needed",
-            "fullstackgtm login hubspot           # connect your CRM (or: login --via <hosted url>)",
+            "fullstackgtm login hubspot           # hosted browser OAuth (default; or: login salesforce)",
         ]
         : [`fullstackgtm audit --provider ${connected[0][0]}`];
     return {
@@ -380,7 +487,7 @@ function providerStatus(provider, broker) {
     if (broker) {
         return { source: "broker", detail: `via ${broker.baseUrl ?? "hosted deployment"}` };
     }
-    return { source: "none", detail: `fullstackgtm login ${provider}` };
+    return { source: "none", detail: provider === "hubspot" || provider === "salesforce" ? `fullstackgtm login ${provider} (hosted OAuth default)` : `fullstackgtm login ${provider}` };
 }
 /**
  * The workspace slice of doctor: current health + plans awaiting approval.

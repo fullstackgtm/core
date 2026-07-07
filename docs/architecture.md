@@ -72,6 +72,8 @@ provider  ──fetchSnapshot()──►  CanonicalGtmSnapshot
 - `market*.ts` (`market.ts`, `marketClassify.ts`, `marketAxes.ts`,
   `marketOverlay.ts`, `marketScale.ts`, `marketReport.ts`) — the competitive
   market-map layer; classifications are verbatim-verified against captures.
+- `backfill.ts` — Stripe paid invoices → proposed closed-won deal creates
+  (domain-then-name account matching; unmatched reported, never auto-created).
 - `enrich.ts` + `enrichApollo.ts` — third-party data enrichment (fill-blanks),
   plus `buildAcquirePlan` / `builtinAcquirePreset` for net-new lead generation.
 - `icp.ts` — the Ideal Customer Profile artifact: per-provider discovery-filter

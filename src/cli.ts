@@ -1,22 +1,15 @@
 import { activeProfile, listProfiles, setActiveProfile } from "./credentials.ts";
-import { audit, healthCommand, reportCommand, rulesCommand, snapshotCommand } from "./cli/audit.ts";
-import { doctorCommand, login, logout } from "./cli/auth.ts";
 import { capabilitiesCommand, printCommandHelpJson, robotDocsCommand, unknownCommandEnvelope } from "./cli/capabilities.ts";
-import { callCommand } from "./cli/call.ts";
-import { draftCommand } from "./cli/draft.ts";
-import { enrichCommand } from "./cli/enrich.ts";
-import { bulkUpdateCommand, dedupeCommand, fixCommand, reassignCommand, resolveCommand, suggest } from "./cli/fix.ts";
 import { BESPOKE_HELP, commandHelp, HELP, shortUsage, stylizeShortUsage, usage } from "./cli/help.ts";
-import { icpCommand } from "./cli/icp.ts";
-import { initCommand } from "./cli/init.ts";
-import { marketCommand } from "./cli/market.ts";
-import { apply, auditLogCommand, diffCommand, mergeCommand, plansCommand } from "./cli/plans.ts";
-import { scheduleCommand } from "./cli/schedule.ts";
 import { readPackageInfo } from "./cli/shared.ts";
 import { correctedCommand, detectFlagTypo, suggestCommand, unknownFlagEnvelope } from "./cli/suggest.ts";
 import { colorEnabled, paint } from "./cli/ui.ts";
-import { signalsCommand } from "./cli/signals.ts";
-import { tamCommand } from "./cli/tam.ts";
+
+// Verb modules load lazily inside their dispatch branch below. The dispatcher
+// used to import all of them eagerly, so `--version` compiled the full
+// 78-module graph (audit, market, enrich, signals, schedule, …) before
+// printing one line. Each branch now `await import()`s only its own module;
+// help/typo/error paths and the exports above stay eager and byte-identical.
 
 
 /**
@@ -129,95 +122,99 @@ export async function runCli(argv: string[]) {
     return;
   }
   if (command === "login") {
-    await login(args);
+    await (await import("./cli/auth.ts")).login(args);
     return;
   }
   if (command === "logout") {
-    logout(args);
+    (await import("./cli/auth.ts")).logout(args);
     return;
   }
   if (command === "snapshot") {
-    await snapshotCommand(args);
+    await (await import("./cli/audit.ts")).snapshotCommand(args);
     return;
   }
   if (command === "audit") {
-    await audit(args);
+    await (await import("./cli/audit.ts")).audit(args);
     return;
   }
   if (command === "report") {
-    await reportCommand(args);
+    await (await import("./cli/audit.ts")).reportCommand(args);
     return;
   }
   if (command === "rules") {
-    await rulesCommand(args);
+    await (await import("./cli/audit.ts")).rulesCommand(args);
     return;
   }
   if (command === "doctor") {
-    await doctorCommand(args);
+    await (await import("./cli/auth.ts")).doctorCommand(args);
     return;
   }
   if (command === "health") {
-    healthCommand(args);
+    (await import("./cli/audit.ts")).healthCommand(args);
     return;
   }
   if (command === "suggest") {
-    await suggest(args);
+    await (await import("./cli/fix.ts")).suggest(args);
     return;
   }
   if (command === "call") {
-    await callCommand(args);
+    await (await import("./cli/call.ts")).callCommand(args);
     return;
   }
   if (command === "resolve") {
-    await resolveCommand(args);
+    await (await import("./cli/fix.ts")).resolveCommand(args);
     return;
   }
   if (command === "bulk-update") {
-    await bulkUpdateCommand(args);
+    await (await import("./cli/fix.ts")).bulkUpdateCommand(args);
     return;
   }
   if (command === "dedupe") {
-    await dedupeCommand(args);
+    await (await import("./cli/fix.ts")).dedupeCommand(args);
     return;
   }
   if (command === "reassign") {
-    await reassignCommand(args);
+    await (await import("./cli/fix.ts")).reassignCommand(args);
     return;
   }
   if (command === "fix") {
-    await fixCommand(args);
+    await (await import("./cli/fix.ts")).fixCommand(args);
     return;
   }
   if (command === "market") {
-    await marketCommand(args);
+    await (await import("./cli/market.ts")).marketCommand(args);
     return;
   }
   if (command === "enrich") {
-    await enrichCommand(args);
+    await (await import("./cli/enrich.ts")).enrichCommand(args);
+    return;
+  }
+  if (command === "backfill") {
+    await (await import("./cli/backfill.ts")).backfillCommand(args);
     return;
   }
   if (command === "init") {
-    initCommand(args);
+    (await import("./cli/init.ts")).initCommand(args);
     return;
   }
   if (command === "tam") {
-    await tamCommand(args);
+    await (await import("./cli/tam.ts")).tamCommand(args);
     return;
   }
   if (command === "icp") {
-    await icpCommand(args);
+    await (await import("./cli/icp.ts")).icpCommand(args);
     return;
   }
   if (command === "signals") {
-    await signalsCommand(args);
+    await (await import("./cli/signals.ts")).signalsCommand(args);
     return;
   }
   if (command === "draft") {
-    await draftCommand(args);
+    await (await import("./cli/draft.ts")).draftCommand(args);
     return;
   }
   if (command === "schedule") {
-    await scheduleCommand(args);
+    await (await import("./cli/schedule.ts")).scheduleCommand(args);
     return;
   }
   if (command === "profiles") {
@@ -225,23 +222,23 @@ export async function runCli(argv: string[]) {
     return;
   }
   if (command === "diff") {
-    await diffCommand(args);
+    await (await import("./cli/plans.ts")).diffCommand(args);
     return;
   }
   if (command === "merge") {
-    await mergeCommand(args);
+    await (await import("./cli/plans.ts")).mergeCommand(args);
     return;
   }
   if (command === "plans") {
-    await plansCommand(args);
+    await (await import("./cli/plans.ts")).plansCommand(args);
     return;
   }
   if (command === "audit-log") {
-    await auditLogCommand(args);
+    await (await import("./cli/plans.ts")).auditLogCommand(args);
     return;
   }
   if (command === "apply") {
-    await apply(args);
+    await (await import("./cli/plans.ts")).apply(args);
     return;
   }
 

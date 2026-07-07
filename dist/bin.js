@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import { runCli } from "./cli.js";
-import { flushRunReport } from "./runReport.js";
+import { beginRunReport, flushRunReport } from "./runReport.js";
 const args = process.argv.slice(2);
 const startedAt = Date.now();
+// Arm live progress heartbeats (paired CLIs stream long runs to the hosted
+// app under the same clientRunId the final flush below will upsert).
+beginRunReport(args, startedAt);
 runCli(args)
     .then(async () => {
     // exitCode 2 (audit findings / create-gate) or 1 (no value) = "partial":

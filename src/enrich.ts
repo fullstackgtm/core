@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { credentialsDir, ensureSecureHomeDir, writeSecureFile } from "./credentials.ts";
 import { HUBSPOT_DEFAULT_FIELD_MAPPINGS } from "./mappings.ts";
 import type { AcquireBudget } from "./acquireMeter.ts";
+import type { ProgressEmitter } from "./progress.ts";
 import { parseAssignmentPolicy, resolveAssignment } from "./assign.ts";
 import type { AssignmentContext, AssignmentPolicy } from "./assign.ts";
 import type {
@@ -1028,6 +1029,12 @@ export type BuildAcquirePlanOptions = {
   /** Meter ceiling: max create ops to emit. null/undefined = unlimited. */
   maxRecords?: number | null;
   now?: () => Date;
+  /**
+   * Shared progress vocabulary (src/progress.ts): `items` over the candidate
+   * rows as they are routed, plus a `meter` reading of creates vs the meter
+   * ceiling. Presentation-only — never changes what the plan proposes.
+   */
+  progress?: ProgressEmitter;
 };
 
 /** First non-empty value among several candidate paths in a source payload. */
@@ -1120,7 +1127,10 @@ export function buildAcquirePlan(options: BuildAcquirePlanOptions): AcquirePlanR
     }
   }
 
+  let routed = 0;
   for (const record of records) {
+    // Progress heartbeat over the candidate rows (throttled by the emitter).
+    options.progress?.items((routed += 1), records.length);
     const createMap = acquire.create[record.objectType];
     const match = config.match[record.objectType];
     // No create mapping or no match config for this type — can neither create
@@ -1235,6 +1245,9 @@ export function buildAcquirePlan(options: BuildAcquirePlanOptions): AcquirePlanR
     counts.created += 1;
     estCostUsd += costPerRecord;
   }
+  options.progress?.flush();
+  // Meter reading: creates proposed this run against the meter's ceiling.
+  if (cap !== null) options.progress?.meter(counts.created, cap, "creates");
 
   const plan: PatchPlan = {
     id: `patch_plan_acq_${fnv1a(`${source}:${runLabel}:${nowIso}`)}`,

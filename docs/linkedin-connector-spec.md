@@ -75,7 +75,7 @@ unstable base. Therefore:
    fake.
 2. **After the acquire workstream commits/lands:** wire `enrich acquire --source
    linkedin` end-to-end and add the dry-run integration test.
-3. **Live validation** needs a HeyReach trial API key (Ryan provides) — the fake
+3. **Live validation** needs a HeyReach trial API key supplied by the operator — the fake
    covers everything up to the real network call.
 
 ## Phase 2 (future, recorded for continuity)

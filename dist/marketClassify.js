@@ -1,5 +1,6 @@
 import { DEFAULT_MODELS, forcedToolCall } from "./llm.js";
 import { loadCaptureTexts, observationId, verifyEvidenceSpans, } from "./market.js";
+import { MARKET_CAPTURE_STAGES, nullProgressEmitter } from "./progress.js";
 /**
  * LLM intensity classification for the market map — the same
  * semi-deterministic posture as call extraction, with one upgrade calls
@@ -78,7 +79,10 @@ function claimsBlock(claims) {
 }
 export async function classifyMarket(config, options) {
     const model = options.llm.model ?? DEFAULT_MODELS[options.llm.provider];
-    const { entries, textByHash } = loadCaptureTexts(config.category, options.capturesDir);
+    const progress = options.progress ?? nullProgressEmitter();
+    const { entries, textByHash } = options.store
+        ? await options.store.loadCaptureTexts()
+        : loadCaptureTexts(config.category, options.capturesDir);
     if (entries.length === 0) {
         throw new Error(`No captures for ${config.category} — run \`market capture\` first`);
     }
@@ -92,6 +96,7 @@ export async function classifyMarket(config, options) {
     const claimIds = config.claims.map((claim) => claim.id);
     const observations = [];
     const retriedVendorIds = [];
+    progress.stage(MARKET_CAPTURE_STAGES[2], 2, MARKET_CAPTURE_STAGES.length);
     for (const [vendorIndex, vendorId] of vendorIds.entries()) {
         try {
             options.onVendor?.(vendorIndex, vendorIds.length, vendorId);
@@ -99,6 +104,7 @@ export async function classifyMarket(config, options) {
         catch {
             // progress is presentation-only
         }
+        progress.note(vendorId);
         const vendor = config.vendors.find((candidate) => candidate.id === vendorId);
         if (!vendor)
             throw new Error(`Unknown vendor "${vendorId}"`);
@@ -120,6 +126,7 @@ export async function classifyMarket(config, options) {
                     evidence: [],
                 });
             }
+            progress.items(vendorIndex + 1, vendorIds.length);
             continue;
         }
         const prompt = (feedback) => `${CLASSIFY_INSTRUCTIONS}\n\nSurface rule for this category:\n${config.surfaceRule ?? "(default rule above)"}\n\nClaims to classify (all of them):\n${claimsBlock(config.claims)}\n${feedback}\nVendor: ${vendor.name}\nCaptured pages:\n${dossier}`;
@@ -165,7 +172,9 @@ export async function classifyMarket(config, options) {
         }
         for (const reading of outcome.readings)
             observations.push(toObservation(reading, vendorId));
+        progress.items(vendorIndex + 1, vendorIds.length);
     }
+    progress.flush();
     return {
         set: {
             id: `set_${config.category}_${options.runLabel}`,

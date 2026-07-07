@@ -1,3 +1,4 @@
+import { type ProgressEmitter } from "./progress.ts";
 import type { GtmEvidence } from "./types.ts";
 /**
  * The Market Map: a live model of the competitive category a company sells
@@ -163,12 +164,24 @@ export type FetchPage = (url: string) => Promise<{
 }>;
 export declare function assertPublicUrl(rawUrl: string): Promise<URL>;
 export type CaptureOptions = {
-    /** Directory for captures; defaults to <marketHome>/captures. */
+    /** Directory for captures; defaults to <marketHome>/captures. Ignored when `store` is given. */
     dir?: string;
     runLabel?: string;
     /** Injectable for tests; defaults to global fetch. */
     fetchPage?: FetchPage;
     now?: () => Date;
+    /**
+     * Storage seam (see MarketStore below). Defaults to the profile-home file
+     * store; the hosted app passes a Convex-backed store. Same engine, same
+     * evidence chain, different persistence.
+     */
+    store?: MarketStore;
+    /**
+     * Progress emission over MARKET_CAPTURE_STAGES ("sources" → "capture" →
+     * "persist" here; "classify" belongs to classifyMarket). Presentation-only:
+     * a throwing listener never fails the capture.
+     */
+    progress?: ProgressEmitter;
 };
 export type CaptureResult = {
     entries: CaptureEntry[];
@@ -197,6 +210,31 @@ export declare function loadCaptureTexts(category: string, directory?: string): 
     entries: CaptureEntry[];
     textByHash: Map<string, string>;
 };
+export interface MarketStore {
+    /** Operator-facing location of the capture manifest (file path or logical label). */
+    captureLocation(): string;
+    /** Persist one page's extracted text under its content hash (idempotent). */
+    saveCaptureText(captureHash: string, text: string): Promise<void>;
+    /** Append one capture pass's manifest entries (append-only; never rewrites history). */
+    appendCaptureEntries(entries: CaptureEntry[]): Promise<void>;
+    /** Full manifest + resolvable texts — the evidence-verification input. */
+    loadCaptureTexts(): Promise<{
+        entries: CaptureEntry[];
+        textByHash: Map<string, string>;
+    }>;
+    /** Append-only observation runs (the same ObservationStore contract as before). */
+    observations: ObservationStore;
+}
+/** The CLI's store: captures + observations under the profile market home. */
+export declare function createFileMarketStore(category: string, options?: {
+    capturesDir?: string;
+    observationsDir?: string;
+}): MarketStore;
+/**
+ * In-memory store: seam tests, and throwaway grounding captures (e.g. the
+ * taxonomy proposer's bootstrap pass) that should never persist anywhere.
+ */
+export declare function createMemoryMarketStore(category: string): MarketStore;
 /**
  * Whitespace-only normalization for span matching, plus one extraction
  * artifact: the HTML-to-text step can emit a line break before punctuation

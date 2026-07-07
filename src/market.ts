@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { isIP } from "node:net";
 import { join } from "node:path";
 import { credentialsDir } from "./credentials.ts";
+import { MARKET_CAPTURE_STAGES, nullProgressEmitter, type ProgressEmitter } from "./progress.ts";
 import type { GtmEvidence } from "./types.ts";
 
 /**
@@ -445,12 +446,24 @@ const defaultFetchPage: FetchPage = async (url) => {
 };
 
 export type CaptureOptions = {
-  /** Directory for captures; defaults to <marketHome>/captures. */
+  /** Directory for captures; defaults to <marketHome>/captures. Ignored when `store` is given. */
   dir?: string;
   runLabel?: string;
   /** Injectable for tests; defaults to global fetch. */
   fetchPage?: FetchPage;
   now?: () => Date;
+  /**
+   * Storage seam (see MarketStore below). Defaults to the profile-home file
+   * store; the hosted app passes a Convex-backed store. Same engine, same
+   * evidence chain, different persistence.
+   */
+  store?: MarketStore;
+  /**
+   * Progress emission over MARKET_CAPTURE_STAGES ("sources" → "capture" →
+   * "persist" here; "classify" belongs to classifyMarket). Presentation-only:
+   * a throwing listener never fails the capture.
+   */
+  progress?: ProgressEmitter;
 };
 
 export type CaptureResult = {
@@ -459,57 +472,55 @@ export type CaptureResult = {
 };
 
 export async function captureMarket(config: MarketConfig, options: CaptureOptions = {}): Promise<CaptureResult> {
-  const dir = options.dir ?? join(marketHome(config.category), "captures");
+  const store = options.store ?? createFileMarketStore(config.category, { capturesDir: options.dir });
+  const progress = options.progress ?? nullProgressEmitter();
   const runLabel = options.runLabel ?? "run-1";
   const fetchPage = options.fetchPage ?? defaultFetchPage;
   const fetchedAt = (options.now ?? (() => new Date()))().toISOString();
-  mkdirSync(dir, { recursive: true });
 
-  const manifestPath = join(dir, "manifest.json");
-  const manifest: CaptureEntry[] = existsSync(manifestPath)
-    ? (JSON.parse(readFileSync(manifestPath, "utf8")) as CaptureEntry[])
-    : [];
-
-  const entries: CaptureEntry[] = [];
+  progress.stage(MARKET_CAPTURE_STAGES[0], 0, MARKET_CAPTURE_STAGES.length);
+  const targets: Array<{ vendorId: string; kind: CaptureEntry["kind"]; url: string }> = [];
   for (const vendor of config.vendors) {
-    const targets: Array<{ kind: CaptureEntry["kind"]; url: string }> = [
-      { kind: "home", url: vendor.urls.home },
-    ];
-    if (vendor.urls.pricing) targets.push({ kind: "pricing", url: vendor.urls.pricing });
-    for (const url of vendor.urls.product) targets.push({ kind: "product", url });
-
-    for (const target of targets) {
-      let status: number | null = null;
-      let text = "";
-      try {
-        const page = await fetchPage(target.url);
-        status = page.status;
-        if (page.status === 200) text = extractReadableText(page.body);
-      } catch {
-        status = null;
-      }
-      let captureHash: string | null = null;
-      if (text) {
-        captureHash = createHash("sha256").update(text).digest("hex");
-        // Content-addressed: an unchanged page dedupes to the same file.
-        writeFileSync(join(dir, `${captureHash}.txt`), text);
-      }
-      const entry: CaptureEntry = {
-        runLabel,
-        vendorId: vendor.id,
-        kind: target.kind,
-        url: target.url,
-        fetchedAt,
-        httpStatus: status,
-        captureHash,
-        textChars: text.length,
-      };
-      manifest.push(entry);
-      entries.push(entry);
-    }
+    targets.push({ vendorId: vendor.id, kind: "home", url: vendor.urls.home });
+    if (vendor.urls.pricing) targets.push({ vendorId: vendor.id, kind: "pricing", url: vendor.urls.pricing });
+    for (const url of vendor.urls.product) targets.push({ vendorId: vendor.id, kind: "product", url });
   }
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  return { entries, manifestPath };
+  progress.note(`${config.vendors.length} vendor(s), ${targets.length} page(s)`);
+
+  progress.stage(MARKET_CAPTURE_STAGES[1], 1, MARKET_CAPTURE_STAGES.length);
+  const entries: CaptureEntry[] = [];
+  for (const target of targets) {
+    let status: number | null = null;
+    let text = "";
+    try {
+      const page = await fetchPage(target.url);
+      status = page.status;
+      if (page.status === 200) text = extractReadableText(page.body);
+    } catch {
+      status = null;
+    }
+    let captureHash: string | null = null;
+    if (text) {
+      captureHash = createHash("sha256").update(text).digest("hex");
+      // Content-addressed: an unchanged page dedupes to the same key.
+      await store.saveCaptureText(captureHash, text);
+    }
+    entries.push({
+      runLabel,
+      vendorId: target.vendorId,
+      kind: target.kind,
+      url: target.url,
+      fetchedAt,
+      httpStatus: status,
+      captureHash,
+      textChars: text.length,
+    });
+    progress.items(entries.length, targets.length);
+  }
+  progress.stage(MARKET_CAPTURE_STAGES[3], 3, MARKET_CAPTURE_STAGES.length);
+  await store.appendCaptureEntries(entries);
+  progress.flush();
+  return { entries, manifestPath: store.captureLocation() };
 }
 
 // ---------------------------------------------------------------------------
@@ -649,6 +660,108 @@ export function loadCaptureTexts(
     }
   }
   return { entries, textByHash };
+}
+
+// ---------------------------------------------------------------------------
+// MarketStore — the storage seam for the whole market workspace (captures +
+// observation runs), mirroring the PlanStore precedent: the profile-home file
+// layout and the hosted app's Convex tables are two implementations of the
+// same contract. Engines never touch storage directly — captureMarket and
+// classifyMarket take a store — and the default file store preserves the
+// on-disk layout exactly, so the CLI's behavior is unchanged.
+//
+// loadConfig is deliberately NOT part of the store: the config is a reviewed
+// input (a versioned file, or a hosted map document) that callers load and
+// hand to the engines. The store owns only what the engines write.
+
+export interface MarketStore {
+  /** Operator-facing location of the capture manifest (file path or logical label). */
+  captureLocation(): string;
+  /** Persist one page's extracted text under its content hash (idempotent). */
+  saveCaptureText(captureHash: string, text: string): Promise<void>;
+  /** Append one capture pass's manifest entries (append-only; never rewrites history). */
+  appendCaptureEntries(entries: CaptureEntry[]): Promise<void>;
+  /** Full manifest + resolvable texts — the evidence-verification input. */
+  loadCaptureTexts(): Promise<{ entries: CaptureEntry[]; textByHash: Map<string, string> }>;
+  /** Append-only observation runs (the same ObservationStore contract as before). */
+  observations: ObservationStore;
+}
+
+/** The CLI's store: captures + observations under the profile market home. */
+export function createFileMarketStore(
+  category: string,
+  options: { capturesDir?: string; observationsDir?: string } = {},
+): MarketStore {
+  const dir = options.capturesDir ?? join(marketHome(category), "captures");
+  const manifestPath = join(dir, "manifest.json");
+  return {
+    captureLocation: () => manifestPath,
+    async saveCaptureText(captureHash, text) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${captureHash}.txt`), text);
+    },
+    async appendCaptureEntries(entries) {
+      mkdirSync(dir, { recursive: true });
+      const manifest: CaptureEntry[] = existsSync(manifestPath)
+        ? (JSON.parse(readFileSync(manifestPath, "utf8")) as CaptureEntry[])
+        : [];
+      manifest.push(...entries);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    },
+    async loadCaptureTexts() {
+      return loadCaptureTexts(category, dir);
+    },
+    observations: createFileObservationStore(category, options.observationsDir),
+  };
+}
+
+/**
+ * In-memory store: seam tests, and throwaway grounding captures (e.g. the
+ * taxonomy proposer's bootstrap pass) that should never persist anywhere.
+ */
+export function createMemoryMarketStore(category: string): MarketStore {
+  const entries: CaptureEntry[] = [];
+  const textByHash = new Map<string, string>();
+  const sets = new Map<string, ObservationSet>();
+  const sorted = () => [...sets.values()].sort((a, b) => a.runAt.localeCompare(b.runAt));
+  return {
+    captureLocation: () => `memory://${category}/captures`,
+    async saveCaptureText(captureHash, text) {
+      textByHash.set(captureHash, text);
+    },
+    async appendCaptureEntries(newEntries) {
+      entries.push(...newEntries);
+    },
+    async loadCaptureTexts() {
+      return { entries: [...entries], textByHash: new Map(textByHash) };
+    },
+    observations: {
+      async append(set) {
+        if (set.category !== category) {
+          throw new Error(`Observation set category "${set.category}" does not match store "${category}"`);
+        }
+        if (sets.has(set.runLabel)) {
+          throw new Error(`Run "${set.runLabel}" already exists — observations are append-only; use a new run label`);
+        }
+        sets.set(set.runLabel, set);
+        return set;
+      },
+      async get(runLabel) {
+        return sets.get(runLabel) ?? null;
+      },
+      async list() {
+        return sorted().map((set) => ({
+          runLabel: set.runLabel,
+          runAt: set.runAt,
+          observations: set.observations.length,
+        }));
+      },
+      async latest() {
+        const all = sorted();
+        return all.length ? all[all.length - 1] : null;
+      },
+    },
+  };
 }
 
 /**

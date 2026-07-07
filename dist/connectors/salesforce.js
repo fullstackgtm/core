@@ -1,4 +1,5 @@
 import { SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, readMappedValue, } from "../mappings.js";
+import { SNAPSHOT_PULL_STAGES } from "../progress.js";
 const DEFAULT_API_VERSION = "v59.0";
 const SOBJECT_TYPES = {
     account: "Account",
@@ -12,6 +13,14 @@ const SOAP_MERGEABLE = {
     contact: "Contact",
 };
 const MAPPING_OBJECT_TYPES = {
+    account: "accounts",
+    contact: "contacts",
+    deal: "deals",
+};
+// SnapshotProgress object types → the shared SNAPSHOT_PULL_STAGES names, so
+// the CLI checklist and the app StageTimeline read the same stage labels.
+const PULL_STAGE_BY_TYPE = {
+    user: "owners",
     account: "accounts",
     contact: "contacts",
     deal: "deals",
@@ -144,7 +153,22 @@ export function createSalesforceConnector(options) {
         return mappedFields(mappings, objectType, SALESFORCE_DEFAULT_FIELD_MAPPINGS[objectType]).join(", ");
     }
     async function assembleSnapshot(whereClause) {
-        const progressFor = (objectType) => (fetched) => options.onProgress?.({ objectType, fetched });
+        // Per-page snapshot-pull progress: the legacy onProgress callback plus the
+        // shared emitter (stage on the first page of each object type, items per
+        // page). Both are presentation-only — `query` already swallows errors.
+        let lastPullStage;
+        const progressFor = (objectType) => (fetched) => {
+            options.onProgress?.({ objectType, fetched });
+            const emitter = options.progress;
+            if (!emitter)
+                return;
+            const stage = PULL_STAGE_BY_TYPE[objectType];
+            if (stage !== lastPullStage) {
+                lastPullStage = stage;
+                emitter.stage(stage, SNAPSHOT_PULL_STAGES.indexOf(stage), SNAPSHOT_PULL_STAGES.length);
+            }
+            emitter.items(fetched);
+        };
         const sfUsers = await query(`SELECT ${selectFields("owners")} FROM User${whereClause}`, progressFor("user"));
         const users = sfUsers.map((user) => {
             const id = String(readMapped(user, "owners", "id", "Id"));
@@ -235,6 +259,8 @@ export function createSalesforceConnector(options) {
                 raw: opportunity,
             };
         });
+        // Deliver any throttled trailing items heartbeat before the pull returns.
+        options.progress?.flush();
         return {
             generatedAt: new Date().toISOString(),
             provider: "salesforce",
@@ -451,7 +477,7 @@ export function createSalesforceConnector(options) {
             return { operationId: operation.id, status: "skipped", detail: "create_record needs a CreateRecordPayload afterValue." };
         }
         if (operation.objectType !== "contact" && operation.objectType !== "account") {
-            return { operationId: operation.id, status: "skipped", detail: "create_record supports contacts and accounts." };
+            return { operationId: operation.id, status: "skipped", detail: "create_record supports contacts and accounts on Salesforce (deal/Opportunity creation is HubSpot-only for now)." };
         }
         const matchValue = String(payload.matchValue ?? "").trim();
         if (!matchValue) {

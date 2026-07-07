@@ -1,4 +1,5 @@
 import { dedupeKey } from "./dedupe.ts";
+import { APPLY_STAGES, type ProgressEmitter } from "./progress.ts";
 import { requiresHumanInput } from "./rules.ts";
 import type {
   CanonicalGtmSnapshot,
@@ -112,6 +113,13 @@ export type ApplyPatchPlanOptions = {
    * full operation count.
    */
   onOperation?: (progress: ApplyProgress) => void;
+  /**
+   * Shared progress vocabulary (src/progress.ts): the run emits the
+   * APPLY_STAGES (preflight → operations → results), one `opResult` per
+   * resolved operation (id + status only — no values), and `items` over the
+   * plan's operations. Additive alongside `onOperation`; presentation only.
+   */
+  progress?: ProgressEmitter;
 };
 
 export type ApplyProgress = {
@@ -148,6 +156,9 @@ export async function applyPatchPlan(
   }
 
   const startedAt = new Date().toISOString();
+  const emitStage = (stage: (typeof APPLY_STAGES)[number]) =>
+    options.progress?.stage(stage, APPLY_STAGES.indexOf(stage), APPLY_STAGES.length);
+  emitStage("preflight");
   const approved = new Set(options.approvedOperationIds);
   const checkConflicts =
     options.checkConflicts ?? typeof connector.readField === "function";
@@ -224,6 +235,7 @@ export async function applyPatchPlan(
           : "Operation was not approved.",
       });
     }
+    emitStage("results");
     return {
       planId: plan.id,
       provider: connector.provider,
@@ -336,24 +348,31 @@ export async function applyPatchPlan(
   const resultsBefore = results.length;
   let lastNotified = results.length;
   const notifyProgress = () => {
-    if (!options.onOperation || results.length === lastNotified) return;
+    if ((!options.onOperation && !options.progress) || results.length === lastNotified) return;
     lastNotified = results.length;
     const last = results[results.length - 1];
     if (last.status === "applied") progressCounts.applied += 1;
     else if (last.status === "failed") progressCounts.failed += 1;
     else if (last.status === "conflict") progressCounts.conflicts += 1;
     else progressCounts.skipped += 1;
-    try {
-      options.onOperation({
-        completed: results.length - resultsBefore,
-        total: plan.operations.length,
-        ...progressCounts,
-      });
-    } catch {
-      // progress is presentation-only
+    // Shared vocabulary: operation id + status only — a conflict/failure
+    // detail can echo field values, which never leave the machine.
+    options.progress?.opResult(last.operationId, last.status);
+    options.progress?.items(results.length - resultsBefore, plan.operations.length);
+    if (options.onOperation) {
+      try {
+        options.onOperation({
+          completed: results.length - resultsBefore,
+          total: plan.operations.length,
+          ...progressCounts,
+        });
+      } catch {
+        // progress is presentation-only
+      }
     }
   };
 
+  emitStage("operations");
   for (const operation of plan.operations) {
     // Report the previous iteration's result (guarded: no-op if it pushed
     // nothing). One-iteration lag keeps this a two-line hook instead of a
@@ -449,6 +468,7 @@ export async function applyPatchPlan(
     }
   }
   notifyProgress();
+  emitStage("results");
 
   return {
     planId: plan.id,

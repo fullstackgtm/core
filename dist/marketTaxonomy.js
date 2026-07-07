@@ -147,8 +147,10 @@ export async function suggestMarketConfig(options) {
     const anchorId = anchorSeed ? vendors[options.vendors.indexOf(anchorSeed)]?.id : undefined;
     // Capture the seed homepages so the proposer only sees text we actually
     // fetched (the SSRF guard in captureMarket applies to these user-supplied URLs).
-    await captureMarket({ category, vendors, claims: [] }, { dir: options.capturesDir, runLabel: "bootstrap", fetchPage: options.fetchPage, now: options.now });
-    const capture = loadCaptureTexts(category, options.capturesDir);
+    await captureMarket({ category, vendors, claims: [] }, { dir: options.capturesDir, store: options.store, runLabel: "bootstrap", fetchPage: options.fetchPage, now: options.now });
+    const capture = options.store
+        ? await options.store.loadCaptureTexts()
+        : loadCaptureTexts(category, options.capturesDir);
     const { dossier, unreadable } = buildDossier(vendors, capture, perVendorChars);
     if (!dossier.trim()) {
         throw new Error(`market init --auto: none of the ${vendors.length} seed pages returned readable text — check the URLs are public homepages.`);

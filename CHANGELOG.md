@@ -3,7 +3,115 @@
 All notable changes to the `fullstackgtm` package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
-The path to 1.0 is planned in [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md).
+The path to 1.0 is planned in the roadmap doc in the repository.
+
+## [Unreleased]
+
+## [0.46.0] — 2026-07-06
+
+### Fixed — launch hardening
+
+- **`fullstackgtm-mcp --help`/`--version` now work without optional peers.**
+  The MCP entrypoint parsed argv before importing `@modelcontextprotocol/sdk`
+  and `zod`, so on a clean install `fullstackgtm-mcp --help` exited 1. It now
+  prints usage (and the `npx -y -p fullstackgtm -p @modelcontextprotocol/sdk
+  -p zod fullstackgtm-mcp` invocation) and exits 0.
+- **Packaging hygiene.** Narrowed `files` so internal planning docs
+  (`dx-punch-list`, `perf-notes`, `roadmap-to-1.0`) no longer ship in the npm
+  tarball; strengthened `prepublishOnly` to also run `npm pack --dry-run` and
+  smoke both bin `--help` paths.
+- **Doc accuracy.** README Stripe restricted-key guidance now includes
+  Invoices:Read (required by `backfill stripe`); schedule allowlist lists
+  `enrich acquire --save`; benchmark headline points to the leaderboard
+  caveats; `llms.txt` clarifies Stripe is read-only and fixes broken public
+  mirror links; CHANGELOG clarifies unmatched Stripe customers get a proposed,
+  approval-gated account-create (not silent auto-create).
+- **Public-surface scrub.** Replaced realistic fake LinkedIn prospect fixtures
+  with clearly-synthetic example identities and removed private-context
+  wording from shipped source/docs.
+
+### Added
+
+- **Hosted first-party CRM OAuth for the CLI.** `fullstackgtm login hubspot` and
+  `fullstackgtm login salesforce` now default to hosted browser OAuth (explicit
+  `--hosted`, `--via`/`FULLSTACKGTM_HOSTED_URL` override), storing the same local
+  broker credential used by team pairing while provider tokens are minted
+  server-side. BYO app/token paths remain as advanced fallbacks, secrets still
+  never travel via argv, and first-party app secrets never ship in the npm
+  package. Non-TTY missing-BYO-flag errors print a deterministic hosted-login
+  next command.
+
+- **Chunked LLM insight extraction (`extractInsightsChunked`) — the TamTone
+  "langextract" method.** Transcripts are never sent whole: they are chopped
+  into ~1,500-char speaker-turn-respecting chunks (the tested quality lever —
+  small chunks yielded ~95% more grounded signals than large ones) and each
+  chunk gets its own focused few-shot extraction call. Per-chunk results pass
+  the SAME verbatim-evidence and next-step-grounding gates as before (checked
+  against the chunk they came from — a quote from another chunk is treated as
+  a hallucination), then a quality gate
+  (0.25·length + 0.40·specificity + 0.35·confidence, reject < 0.15) filters
+  filler before per-call dedupe (richer statement wins) and ranking.
+  `call parse --llm` now uses this pipeline; single-shot remains for
+  one-chunk transcripts. Bounded: ≤80 chunks/call, 4 concurrent, a failed
+  chunk is skipped (all-failed throws).
+
+- **`backfill runs` — replay local execution history to the paired hosted
+  app.** An engagement that started CLI-only gets its full trail on pairing:
+  every stored plan's apply runs (with per-op result counts and ORIGINAL
+  timestamps) and the `health.jsonl` hygiene timeline (seeding the hosted
+  health trend). Idempotent by construction — deterministic per-run
+  `clientRunId`s and server-side timestamp dedupe make re-running safe.
+  `--dry-run` counts without sending. Privacy unchanged: only what live
+  reporting sends leaves the machine (statuses, counts, timestamps,
+  scores — never CRM field values). Live run reports also carry a stable
+  `clientRunId` now, so retried reports never duplicate.
+
+- **`backfill stripe` — paid Stripe invoices become closed-won CRM deals,
+  through the normal governed flow.** For a business whose revenue source of
+  truth is Stripe, the CRM can now be retroactively made honest: one
+  closed-won deal per paid invoice (amount = invoice total, close date = paid
+  date, associated to the customer's company), matched to CRM accounts by
+  billing-email domain first, then exact name. Unmatched customers are either
+  report-only (when they lack a usable name/domain, or with `--skip-unmatched`)
+  or an explicit proposed ACCOUNT create in the same `needs_approval` plan. The
+  command only ever proposes: `--save` persists the plan and writes happen
+  through `plans approve` → `apply`, where the connector re-resolves each
+  invoice id and creates only on a confirmed miss — re-running never
+  double-creates. Proposed account creates are one op per customer, use the
+  billing-email domain unless freemail, and stay approval-gated like every
+  other write.
+- **HubSpot deal creation in `create_record`.** `CreateRecordPayload` gains
+  `dealStage: "closed_won"` (a provider-neutral sentinel resolved to the
+  target pipeline's real closed-won stage id from pipeline metadata — never
+  substring guessing) and `dealPipeline` (id or label; default pipeline when
+  absent). The dedupe key is a custom deal property (default
+  `stripe_invoice_id`), ensured on demand; if it can't be ensured the create
+  is skipped rather than performed without its dedupe key. Salesforce deal
+  creation stays explicitly skipped for now.
+- **`fetchStripePaidInvoices`** on the Stripe connector: paginated
+  `status=paid` invoice reads with `created[gte]` incremental support,
+  cents→major conversion, and paid-date extraction.
+- **Node-free health scoring (`src/healthScore.ts`).** `computeHealth` /
+  `summarizeHealth` / `healthToMarkdown` split out of `health.ts` (which keeps
+  the fs-backed profile timeline and re-exports everything) so V8 runtimes —
+  the hosted app's Convex functions — can score CRM hygiene with the exact
+  same deterministic curve the CLI uses.
+
+### Changed
+
+- **CLI startup is ~20–30% faster (p50), with zero output changes.** The
+  dispatcher now loads verb modules lazily instead of compiling the full
+  78-module graph on every invocation, `node:http` (which transitively
+  compiles node's bundled undici on Node 22) is deferred to the OAuth
+  loopback login that actually starts a server, and the CRM connector /
+  demo-data modules load only when that data source is selected. Measured
+  p50 over interleaved A/B runs: `--version` −31%, `capabilities --json`
+  −30%, `audit --demo --json` −23%. Every output is byte-identical to the
+  previous build (verified against 57 golden outputs across help, audit,
+  doctor, rules, dedupe, resolve, snapshot, and error paths) and the public
+  import surface of `cli.ts` is unchanged. Profiling method, opportunity
+  matrix, and honest non-wins are documented in
+  [docs/perf-notes.md](./docs/perf-notes.md).
 
 ## [0.45.0] — 2026-07-02
 

@@ -1,3 +1,4 @@
+import type { ProgressListener } from "./progress.ts";
 /**
  * Per-row finding for the hosted run timeline. IDs + issue type ONLY — no field
  * values ever leave the CLI, keeping the audit's row data on the operator's side
@@ -28,6 +29,29 @@ export declare function reportFindings(values: RunFinding[]): void;
 export declare function reportCrm(value: RunCrm): void;
 /** A command annotates a structured event (plan saved, meter charged, …). */
 export declare function reportEvent(type: string, detail?: string): void;
+/**
+ * Arm heartbeat streaming for this invocation. Call once from the entry point
+ * (alongside capturing `startedAt`); without it, progress listeners from
+ * `progressReporter()` are inert. Safe to call for any command — skip-listed
+ * commands simply never stream.
+ */
+export declare function beginRunReport(args: string[], startedAt: number): void;
+/**
+ * A ProgressListener that streams the run's progress snapshot to the paired
+ * hosted app. Verbs compose it with their local renderer:
+ *
+ *   createProgressEmitter(composeListeners(renderer.listener, progressReporter()))
+ *
+ * Throttled to one POST per ~5s, first no earlier than ~5s into the run,
+ * 2s-capped and fire-and-forget. Privacy: stage names and counts only — notes
+ * must stay generic ("batch 4/12"); CRM field values never leave the machine.
+ */
+export declare function progressReporter(overrides?: {
+    now?: () => number;
+    intervalMs?: number;
+    minRunMs?: number;
+    fetchImpl?: typeof fetch;
+}): ProgressListener;
 /**
  * Send the run record if the CLI is paired. Best-effort: a 4s-capped POST that
  * swallows every error. Call once per process from the entry point.

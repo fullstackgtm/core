@@ -9,7 +9,8 @@ import { buildAcquirePlan, buildEnrichPlan, createFileEnrichRunStore, DEFAULT_ST
 import { loadMeter, remaining, type AcquireRemaining } from "../acquireMeter.ts";
 import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspects, partitionFreshProspects, pipe0ResolveCompanyDomains, pipe0ResolveWorkEmails, prospectIdentityKeys, type Prospect } from "../connectors/prospectSources.ts";
 import { loadSeen, recordSeen } from "../acquireSeen.ts";
-import { reportCounts, reportEvent } from "../runReport.ts";
+import { progressReporter, reportCounts, reportEvent } from "../runReport.ts";
+import { ACQUIRE_STAGES, composeListeners, createProgressEmitter } from "../progress.ts";
 import { createLinkedInProvider, discoverLinkedInProspects } from "../acquireLinkedIn.ts";
 import { fitThreshold, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp, type Icp } from "../icp.ts";
 import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, type ApolloPullKey } from "../enrichApollo.ts";
@@ -18,7 +19,7 @@ import { isSpoolPath, readSpoolPath } from "../spoolFiles.ts";
 import { isOptionValue, loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.ts";
 import { providerKey } from "./tam.ts";
 import { unknownSubcommandError } from "./suggest.ts";
-import { colorEnabled, createStatusLine, formatBar, formatDuration, paint, type Paint } from "./ui.ts";
+import { colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, type Paint } from "./ui.ts";
 import type { AcquireBudget } from "../acquireMeter.ts";
 
 
@@ -224,14 +225,36 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
       }
     }
 
-    const result = buildAcquirePlan({
-      config,
-      source,
-      snapshot,
-      records,
-      runLabel: option(rest, "--run-label") ?? `acquire-${source}-${today}`,
-      maxRecords: cap,
-    });
+    // Progress: candidate rows tick on an interactive stderr board (inert when
+    // piped) and, via the composed reporter, heartbeat to a paired hosted app.
+    // The meter reading (creates vs headroom + budget burn) rides the same
+    // emitter, feeding the dashboard's gauge without printing anything new.
+    const renderer = createProgressRenderer(ACQUIRE_STAGES);
+    const acquireProgress = createProgressEmitter(
+      composeListeners(renderer.listener, progressReporter()),
+    );
+    let result: ReturnType<typeof buildAcquirePlan>;
+    try {
+      acquireProgress.stage(ACQUIRE_STAGES[0], 0, ACQUIRE_STAGES.length);
+      if (config.acquire.budget?.records?.perDay && headroom.records.day !== null) {
+        acquireProgress.meter(
+          config.acquire.budget.records.perDay - headroom.records.day,
+          config.acquire.budget.records.perDay,
+          "records/day",
+        );
+      }
+      result = buildAcquirePlan({
+        config,
+        source,
+        snapshot,
+        records,
+        runLabel: option(rest, "--run-label") ?? `acquire-${source}-${today}`,
+        maxRecords: cap,
+        progress: acquireProgress,
+      });
+    } finally {
+      renderer.done();
+    }
 
     if (result.counts.unassigned > 0 && result.counts.created > 0) {
       console.error(

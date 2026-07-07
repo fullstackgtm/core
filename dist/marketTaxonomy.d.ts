@@ -1,5 +1,5 @@
 import { type LlmCallOptions } from "./llm.ts";
-import { type FetchPage, type MarketConfig } from "./market.ts";
+import { type FetchPage, type MarketConfig, type MarketStore } from "./market.ts";
 /**
  * Cold-start taxonomy bootstrap. `market init` writes a stub for a human
  * analyst to fill in; the self-serve hosted map has no analyst in the loop, so
@@ -30,6 +30,11 @@ export type SuggestTaxonomyOptions = {
     /** Test injectables. */
     fetchPage?: FetchPage;
     capturesDir?: string;
+    /**
+     * Storage seam for the bootstrap captures; defaults to the file layout.
+     * Pass createMemoryMarketStore for throwaway grounding (hosted flow).
+     */
+    store?: MarketStore;
     now?: () => Date;
 };
 export type SuggestTaxonomyResult = {

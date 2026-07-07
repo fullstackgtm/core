@@ -367,3 +367,209 @@ export async function validateLlmKey(provider, apiKey, fetchImpl = fetch) {
         ? { ok: true, detail: `Key accepted by the ${provider} API.` }
         : { ok: false, detail: `HTTP ${response.status} ${response.statusText}`.trim() };
 }
+// ── Chunked extraction (the TamTone "langextract" method) ───────────────────
+//
+// The quality property this encodes, validated on real call corpora in
+// TamTone: transcripts are never sent whole. They are chopped into small
+// (~1,500-char) speaker-turn-respecting chunks and each chunk gets its own
+// focused extraction call — small chunks yielded ~95% more grounded signals
+// than 4,000-char chunks in TamTone's testing, and whole-transcript passes
+// (this module's original extractInsightsLlm, kept for tiny inputs) are the
+// worst case: truncation drops the tail and one context window extracts
+// shallowly. Per-chunk results pass the SAME verbatim-evidence and
+// next-step-grounding gates as the single-shot path (checked against the
+// chunk they came from), then a TamTone-style quality score
+// (0.25·length + 0.40·specificity + 0.35·confidence, reject < 0.15) filters
+// filler before per-call dedupe and ranking.
+const CHUNK_MAX_CHARS = 1500;
+const CHUNK_CONCURRENCY = 4;
+const MAX_CHUNKS_PER_CALL = 80; // cost bound ≈ 120K chars of transcript
+const MAX_INSIGHTS_PER_CALL = 40;
+/**
+ * Chop a "Speaker: text" transcript into ≤maxChars chunks on speaker-turn
+ * (line) boundaries; a single oversize turn splits on sentence boundaries.
+ * No overlap (per-chunk extraction + downstream dedupe make it unnecessary).
+ */
+export function chunkTranscript(transcript, maxChars = CHUNK_MAX_CHARS) {
+    const lines = transcript.split("\n").filter((line) => line.trim().length > 0);
+    const pieces = [];
+    for (const line of lines) {
+        if (line.length <= maxChars) {
+            pieces.push(line);
+            continue;
+        }
+        // Oversize turn: split on sentence boundaries within the budget.
+        let rest = line;
+        while (rest.length > maxChars) {
+            const window = rest.slice(0, maxChars);
+            const cut = Math.max(window.lastIndexOf(". "), window.lastIndexOf("? "), window.lastIndexOf("! "));
+            const at = cut >= maxChars * 0.4 ? cut + 1 : maxChars;
+            pieces.push(rest.slice(0, at).trim());
+            rest = rest.slice(at).trim();
+        }
+        if (rest)
+            pieces.push(rest);
+    }
+    const chunks = [];
+    let current = "";
+    for (const piece of pieces) {
+        if (current && current.length + piece.length + 1 > maxChars) {
+            chunks.push(current);
+            current = piece;
+        }
+        else {
+            current = current ? `${current}\n${piece}` : piece;
+        }
+    }
+    if (current)
+        chunks.push(current);
+    return chunks;
+}
+// Few-shot examples are load-bearing (TamTone's extractor refuses to run
+// without an example set): they anchor the "verbatim span, not paraphrase"
+// contract and calibrate what NOT to extract far better than instructions.
+const CHUNK_FEW_SHOT = `Examples:
+
+Excerpt: "Prospect: honestly the big blocker is that our reps spend every Friday cleaning the pipeline by hand. Rep: how long does that take? Prospect: most of the day, easily five or six hours."
+→ [{"type":"pain_point","text":"Reps lose ~5-6 hours every Friday manually cleaning the pipeline.","evidence":"our reps spend every Friday cleaning the pipeline by hand","speaker":"Prospect","importance":4,"confidence":0.9}]
+
+Excerpt: "Prospect: we're also looking at Clari for this. Their forecasting is strong but the rollout quote scared us. Rep: what was the number? Prospect: about eighty thousand a year."
+→ [{"type":"competitor_mention","text":"Evaluating Clari; strong forecasting but ~$80K/yr rollout quote is a concern.","evidence":"we're also looking at Clari for this","speaker":"Prospect","importance":4,"confidence":0.9},{"type":"pricing","text":"Clari quoted about $80K per year.","evidence":"about eighty thousand a year","speaker":"Prospect","importance":3,"confidence":0.85}]
+
+Excerpt: "Rep: I'll send the security questionnaire answers by Thursday. Prospect: perfect, and I'll get you time with our CFO next week."
+→ [{"type":"next_step","text":"Rep to send security questionnaire answers by Thursday.","evidence":"I'll send the security questionnaire answers by Thursday","speaker":"Rep","importance":4,"confidence":0.95,"owner":"Rep","deadline":"Thursday","commitment":"firm"},{"type":"next_step","text":"Prospect to schedule time with their CFO next week.","evidence":"I'll get you time with our CFO next week","speaker":"Prospect","importance":4,"confidence":0.9,"owner":"Prospect","deadline":"next week","commitment":"firm"}]
+
+Excerpt: "Rep: how was the long weekend? Prospect: great, we took the kids camping. Rep: nice! okay, let me share my screen."
+→ []
+
+Do NOT extract: greetings, scheduling chatter, filler ("yeah", "makes sense"), screen-share logistics, or anything you cannot quote verbatim from THIS excerpt.`;
+function chunkInstructions(index, total, title) {
+    return `${EXTRACT_INSTRUCTIONS}
+
+You are seeing excerpt ${index + 1} of ${total} from a longer call${title ? ` ("${title}")` : ""}.
+Extract ONLY what this excerpt itself grounds — the other excerpts are handled separately.
+evidence MUST be a verbatim span of THIS excerpt.
+
+${CHUNK_FEW_SHOT}`;
+}
+// TamTone quality gate (analysis/quality_scorer.py):
+// 0.25·length + 0.40·specificity + 0.35·confidence, hard caps for
+// stopword-only/too-short, reject below 0.15. Specificity rewards the
+// concrete: numbers, money, dates/durations, named things.
+const STOPWORDS = new Set("a an and are as at be but by for from had has have i if in into is it its me my not of on or our so that the their them they this to was we were what when which who will with you your yeah okay right sure like just really kind sort".split(" "));
+export function scoreInsightQuality(insight) {
+    const text = `${insight.text} ${insight.evidence}`.trim();
+    const words = text.toLowerCase().split(/[^a-z0-9$%']+/).filter(Boolean);
+    if (text.length < 5)
+        return 0.1;
+    const nonStop = words.filter((word) => !STOPWORDS.has(word));
+    if (nonStop.length === 0)
+        return 0.1;
+    const lengthScore = Math.min(1, words.length / 20);
+    let specificity = 0;
+    if (/\d/.test(text))
+        specificity += 0.3; // numbers/amounts/dates
+    if (/[$€£]|\b(dollars?|thousand|million|percent|%)\b/i.test(text))
+        specificity += 0.2;
+    if (/\b(q[1-4]|january|february|march|april|may|june|july|august|september|october|november|december|week|month|quarter|year|monday|tuesday|wednesday|thursday|friday)\b/i.test(text))
+        specificity += 0.2;
+    if (/\b[A-Z][a-z]{2,}/.test(insight.text.slice(1)))
+        specificity += 0.15; // named things
+    specificity += Math.min(0.3, nonStop.length / 40);
+    specificity = Math.min(1, specificity);
+    return 0.25 * lengthScore + 0.4 * specificity + 0.35 * Math.min(1, Math.max(0, insight.confidence));
+}
+const QUALITY_REJECT_BELOW = 0.15;
+/**
+ * The chunked pipeline: chunk → per-chunk forced-tool extraction (bounded
+ * concurrency) → per-chunk verbatim + grounding gates → quality gate →
+ * per-call dedupe → rank. A failed chunk is skipped (best-effort); only
+ * all-chunks-failed throws.
+ */
+export async function extractInsightsChunked(transcript, options) {
+    const model = options.model ?? DEFAULT_MODELS[options.provider];
+    const allChunks = chunkTranscript(transcript);
+    const chunks = allChunks.slice(0, options.maxChunks ?? MAX_CHUNKS_PER_CALL);
+    if (chunks.length <= 1) {
+        // Tiny transcript: the single-shot path is identical work with one call.
+        const single = await extractInsightsLlm(transcript, options);
+        return { ...single, chunks: allChunks.length, chunksUsed: chunks.length, chunksFailed: 0 };
+    }
+    const concurrency = Math.max(1, options.concurrency ?? CHUNK_CONCURRENCY);
+    const perChunk = new Array(chunks.length);
+    let failed = 0;
+    let cursor = 0;
+    async function worker() {
+        while (cursor < chunks.length) {
+            const index = cursor;
+            cursor += 1;
+            const chunk = chunks[index];
+            try {
+                const result = (await forcedToolCall(`${chunkInstructions(index, chunks.length, options.title)}\n\nExcerpt:\n${chunk}`, "extract_call_insights", EXTRACT_SCHEMA, model, options));
+                const normalizedChunk = normalizeSpan(chunk);
+                perChunk[index] = (result.insights ?? [])
+                    .filter((insight) => INSIGHT_TYPES.includes(insight.type))
+                    // The SAME gates as the single-shot path, applied per chunk: the
+                    // evidence must be a verbatim span of the chunk it came from, and a
+                    // next_step's written action must be grounded in that evidence.
+                    .filter((insight) => {
+                    const quote = normalizeSpan(insight.evidence ?? "");
+                    return quote.length >= 12 && normalizedChunk.includes(quote);
+                })
+                    .filter((insight) => insight.type !== "next_step" ||
+                    actionGroundedInEvidence(insight.text, insight.evidence ?? ""))
+                    .map((insight) => ({
+                    ...insight,
+                    title: insight.type.replace(/_/g, " "),
+                    importance: clamp(Math.round(insight.importance ?? 3), 1, 5),
+                    confidence: clamp(insight.confidence ?? 0.7, 0, 1),
+                }))
+                    .filter((insight) => scoreInsightQuality(insight) >= QUALITY_REJECT_BELOW);
+            }
+            catch {
+                failed += 1;
+                perChunk[index] = [];
+            }
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, chunks.length) }, worker));
+    if (failed === chunks.length) {
+        throw new Error(`LLM extraction failed for all ${chunks.length} chunks.`);
+    }
+    // Per-call dedupe: exact on (type, normalized evidence), then near-dup on
+    // (type, normalized text) containment — chunks don't overlap, so dupes are
+    // the model restating the same fact from adjacent context.
+    const seen = new Map();
+    const richness = (insight) => insight.confidence +
+        (insight.owner ? 0.05 : 0) +
+        (insight.deadline ? 0.05 : 0) +
+        (insight.speaker ? 0.02 : 0);
+    for (const insights of perChunk) {
+        for (const insight of insights ?? []) {
+            const key = `${insight.type}:${normalizeSpan(insight.evidence ?? "")}`;
+            const kept = seen.get(key);
+            // Same grounded fact stated twice: keep the richer statement (owner/
+            // deadline/speaker attached, higher confidence), not the first seen.
+            if (!kept || richness(insight) > richness(kept))
+                seen.set(key, insight);
+        }
+    }
+    const merged = [];
+    for (const insight of seen.values()) {
+        const text = normalizeSpan(insight.text);
+        const dupe = merged.find((kept) => kept.type === insight.type &&
+            (normalizeSpan(kept.text).includes(text) || text.includes(normalizeSpan(kept.text))));
+        if (!dupe)
+            merged.push(insight);
+        else if (insight.importance > dupe.importance)
+            merged[merged.indexOf(dupe)] = insight;
+    }
+    merged.sort((a, b) => b.importance - a.importance || b.confidence - a.confidence);
+    return {
+        insights: merged.slice(0, MAX_INSIGHTS_PER_CALL),
+        model,
+        chunks: allChunks.length,
+        chunksUsed: chunks.length,
+        chunksFailed: failed,
+    };
+}

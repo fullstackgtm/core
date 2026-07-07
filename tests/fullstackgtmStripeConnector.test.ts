@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 // createStripeConnector is not exported from the package index yet, so import
 // it from the module directly.
-import { createStripeConnector } from "../src/connectors/stripe.ts";
+import {
+  createStripeConnector,
+  fetchStripePaidInvoices,
+} from "../src/connectors/stripe.ts";
 import { mergeSnapshots, type CanonicalGtmSnapshot } from "../src/index.ts";
 
 type StubCall = { url: string; init?: RequestInit };
@@ -220,6 +223,142 @@ test("stripe fetchSnapshot does not send a created filter", async () => {
   assert.equal(
     calls.every((call) => !call.url.includes("created")),
     true,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// fetchStripePaidInvoices (the `backfill stripe` read path)
+
+function stubInvoiceFetch() {
+  const calls: StubCall[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init });
+    const respond = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    if (!url.includes("/v1/invoices")) return new Response("no stub", { status: 404 });
+    if (url.includes("starting_after=in_2")) {
+      // Second page.
+      return respond({
+        data: [
+          {
+            id: "in_3",
+            number: null,
+            amount_paid: 250000,
+            currency: "eur",
+            // Expand missing: customer is a plain id string; the flat
+            // customer_name/customer_email invoice fields fill in.
+            customer: "cus_9",
+            customer_name: "Initech",
+            customer_email: "billing@Initech.com",
+            status_transitions: { paid_at: 1769904000 }, // 2026-02-01
+          },
+          // Zero amount_paid: a $0 invoice is not a won deal — skipped.
+          {
+            id: "in_zero",
+            amount_paid: 0,
+            customer: { id: "cus_9", name: "Initech" },
+            status_transitions: { paid_at: 1769904000 },
+          },
+          // Missing id — skipped.
+          { amount_paid: 100, customer: "cus_9" },
+        ],
+        has_more: false,
+      });
+    }
+    return respond({
+      data: [
+        {
+          id: "in_1",
+          number: "INV-0042",
+          amount_paid: 109990, // cents → 1099.90 major units
+          currency: "usd",
+          description: "Annual plan",
+          customer: { id: "cus_1", name: "Globex Billing", email: "hank@Globex.com" },
+          status_transitions: { paid_at: 1767225600 }, // 2026-01-01T00:00:00Z
+        },
+        {
+          id: "in_2",
+          number: "INV-0043",
+          amount_paid: 5000,
+          currency: "usd",
+          // No paid_at → paidAt undefined; no email → no domain.
+          customer: { id: "cus_2", name: "NoMail Co", email: null },
+          status_transitions: {},
+        },
+      ],
+      has_more: true,
+    });
+  }) as typeof fetch;
+  return { fetchImpl, calls };
+}
+
+test("fetchStripePaidInvoices paginates, maps cents→major and paid_at→date, and skips $0/id-less invoices", async () => {
+  const { fetchImpl, calls } = stubInvoiceFetch();
+  const invoices = await fetchStripePaidInvoices({ getApiKey: () => "sk_test_123", fetchImpl });
+
+  // has_more pagination followed with starting_after=<last id>.
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].url, /starting_after=in_2/);
+  // status=paid and the customer expand ride every list call.
+  for (const call of calls) {
+    const decoded = decodeURIComponent(call.url);
+    assert.ok(decoded.includes("status=paid"), decoded);
+    assert.ok(decoded.includes("expand[]=data.customer"), decoded);
+    assert.ok(!decoded.includes("created["), "no created filter without sinceIso");
+  }
+
+  // in_zero and the id-less invoice are dropped.
+  assert.deepEqual(invoices.map((invoice) => invoice.id), ["in_1", "in_2", "in_3"]);
+
+  const [first, second, third] = invoices;
+  assert.equal(first.number, "INV-0042");
+  assert.equal(first.customerId, "cus_1");
+  assert.equal(first.customerName, "Globex Billing");
+  assert.equal(first.customerEmail, "hank@Globex.com");
+  assert.equal(first.customerDomain, "globex.com"); // lowercased email domain
+  assert.equal(first.amountPaid, 1099.9); // 109990 cents
+  assert.equal(first.currency, "USD");
+  assert.equal(first.paidAt, "2026-01-01"); // unix seconds → YYYY-MM-DD
+  assert.equal(first.description, "Annual plan");
+
+  assert.equal(second.paidAt, undefined);
+  assert.equal(second.customerDomain, undefined);
+  assert.equal(second.amountPaid, 50);
+
+  // Expand missing: id from the string, name/email from the flat invoice fields.
+  assert.equal(third.customerId, "cus_9");
+  assert.equal(third.customerName, "Initech");
+  assert.equal(third.customerDomain, "initech.com");
+  assert.equal(third.amountPaid, 2500);
+  assert.equal(third.currency, "EUR");
+  assert.equal(third.paidAt, "2026-02-01");
+});
+
+test("fetchStripePaidInvoices sends created[gte] in unix seconds for --since", async () => {
+  const { fetchImpl, calls } = stubInvoiceFetch();
+  await fetchStripePaidInvoices(
+    { getApiKey: () => "sk_test_123", fetchImpl },
+    { sinceIso: "2026-01-01T00:00:00.000Z" },
+  );
+  for (const call of calls) {
+    assert.ok(
+      decodeURIComponent(call.url).includes("created[gte]=1767225600"),
+      decodeURIComponent(call.url),
+    );
+  }
+});
+
+test("fetchStripePaidInvoices rejects an invalid since timestamp before any network call", async () => {
+  const fetchBomb = (async () => {
+    throw new Error("must not be called");
+  }) as unknown as typeof fetch;
+  await assert.rejects(
+    fetchStripePaidInvoices({ getApiKey: () => "sk_test_123", fetchImpl: fetchBomb }, { sinceIso: "not-a-date" }),
+    /Invalid since timestamp/,
   );
 });
 

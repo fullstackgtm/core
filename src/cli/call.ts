@@ -6,7 +6,7 @@ import { patchPlanToMarkdown } from "../format.ts";
 import { createFilePlanStore } from "../planStore.ts";
 import { normalizeTranscript, parseCall, suggestCallDeal, type ExtractedCallInsight, type ParsedCall } from "../calls.ts";
 import { classifyCall, rubricForCallType, rubricPresets, CALL_TYPES, CALL_TYPE_IDS, type CallType } from "../callTypes.ts";
-import { DEFAULT_RUBRIC, classifyCallLlm, extractInsightsLlm, parseRubric, resolveLlmCredential, scoreCallLlm, type CallScorecard, type Rubric } from "../llm.ts";
+import { DEFAULT_RUBRIC, classifyCallLlm, extractInsightsChunked, parseRubric, resolveLlmCredential, scoreCallLlm, type CallScorecard, type Rubric } from "../llm.ts";
 import type { PatchPlan } from "../types.ts";
 import { option, readSnapshot, requireLlmCredential, saveRequested } from "./shared.ts";
 import { startElapsedStatus } from "./ui.ts";
@@ -15,7 +15,7 @@ import { startElapsedStatus } from "./ui.ts";
 export async function callCommand(args: string[]) {
   const [subcommand, ...rest] = args;
   if (args.includes("--help") || args.includes("-h")) {
-    console.log(`call parse    --transcript <file> [--title t] [--source s] [--model m] [--deterministic] [--json|--ndjson] [--out <path>]
+    console.log(`call parse    --transcript <file> [--title t] [--source s] [--model m] [--llm] [--heuristics] [--json|--ndjson] [--out <path>]
 call classify --transcript <file>|--call <parsed.json> [--llm] [--deterministic] [--json] [--list]
 call score    --transcript <file>|--call <parsed.json> [--call-type <t>] [--rubric <rubric.json>] [--model m] [--json|--out <path>] [--list-rubrics]
 call link     --attendees <a@x.com,...> | --domain <x.com>  [source options] [--json]
@@ -25,9 +25,12 @@ classify picks the call type (deterministic signals; --llm for a model tiebreak)
 score auto-selects the type-specific rubric from that classification unless you
 pass --call-type or --rubric. Call types: ${CALL_TYPE_IDS.join(", ")}.
 
-parse/score default to LLM extraction (Anthropic or OpenAI key via env,
-\`login anthropic|openai\`, or a one-time prompt). parse --deterministic is the
-free keyword baseline and classify --deterministic needs no key.
+parse defaults to chunked LLM extraction when a key resolves (ANTHROPIC_API_KEY/
+OPENAI_API_KEY or \`login anthropic|openai\`) and falls back to the free
+deterministic engine when none does. --heuristics (alias --deterministic)
+forces the deterministic engine; --llm forces the LLM path (one-time key prompt
+on a TTY). Model: --model, else env FSGTM_INSIGHTS_MODEL, else the provider
+default. classify --deterministic needs no key.
 score always needs a key (scoring is LLM work).`);
     return;
   }
@@ -46,21 +49,34 @@ score always needs a key (scoring is LLM work).`);
       sourceSystem: source,
       capturedAt: new Date().toISOString(),
     };
-    if (rest.includes("--deterministic")) {
+    if (rest.includes("--heuristics") || rest.includes("--deterministic")) {
       return parseCall(raw, base);
     }
-    // LLM extraction is the default: bring-your-own-key (Anthropic or OpenAI).
+    // Engine parity with the hosted app: the chunked LLM pipeline runs by
+    // default whenever a key resolves (env or stored login), and the free
+    // deterministic engine runs when none does. --llm keeps the strict path
+    // for scripts (one-time TTY key prompt / actionable error, never silent).
+    if (!rest.includes("--llm") && !resolveLlmCredential()) {
+      console.error(
+        "No LLM key — using deterministic extraction. `fullstackgtm login anthropic|openai` or set ANTHROPIC_API_KEY/OPENAI_API_KEY for chunked LLM insights.",
+      );
+      return parseCall(raw, base);
+    }
     const credential = await requireLlmCredential();
     const normalized = normalizeTranscript(raw);
     // Elapsed-time spinner on interactive terminals while the model works.
     const wait = startElapsedStatus(
       (elapsed) => `Extracting insights · ${credential.provider} · ${elapsed}`,
     );
-    let extraction: Awaited<ReturnType<typeof extractInsightsLlm>>;
+    let extraction: Awaited<ReturnType<typeof extractInsightsChunked>>;
     try {
-      extraction = await extractInsightsLlm(normalized, {
+      // Chunked langextract-style pipeline: small per-chunk extraction calls
+      // beat one whole-transcript pass on long calls (single-shot truncates).
+      extraction = await extractInsightsChunked(normalized, {
         ...credential,
-        model: option(rest, "--model") ?? undefined,
+        // --model wins, then the hosted app's env contract
+        // (FSGTM_INSIGHTS_MODEL), then the provider default downstream.
+        model: option(rest, "--model") ?? (process.env.FSGTM_INSIGHTS_MODEL || undefined),
         title: base.title,
       });
     } finally {

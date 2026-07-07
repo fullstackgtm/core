@@ -1,4 +1,5 @@
 import { dedupeKey } from "./dedupe.js";
+import { APPLY_STAGES } from "./progress.js";
 import { requiresHumanInput } from "./rules.js";
 const IRREVERSIBLE_OPERATIONS = new Set(["merge_records", "archive_record"]);
 const IDENTITY_KEY_BY_TYPE = {
@@ -83,6 +84,8 @@ export async function applyPatchPlan(connector, plan, options) {
         throw new Error(`The ${connector.provider} connector is read-only.`);
     }
     const startedAt = new Date().toISOString();
+    const emitStage = (stage) => options.progress?.stage(stage, APPLY_STAGES.indexOf(stage), APPLY_STAGES.length);
+    emitStage("preflight");
     const approved = new Set(options.approvedOperationIds);
     const checkConflicts = options.checkConflicts ?? typeof connector.readField === "function";
     const results = [];
@@ -157,6 +160,7 @@ export async function applyPatchPlan(connector, plan, options) {
                     : "Operation was not approved.",
             });
         }
+        emitStage("results");
         return {
             planId: plan.id,
             provider: connector.provider,
@@ -260,7 +264,7 @@ export async function applyPatchPlan(connector, plan, options) {
     const resultsBefore = results.length;
     let lastNotified = results.length;
     const notifyProgress = () => {
-        if (!options.onOperation || results.length === lastNotified)
+        if ((!options.onOperation && !options.progress) || results.length === lastNotified)
             return;
         lastNotified = results.length;
         const last = results[results.length - 1];
@@ -272,17 +276,24 @@ export async function applyPatchPlan(connector, plan, options) {
             progressCounts.conflicts += 1;
         else
             progressCounts.skipped += 1;
-        try {
-            options.onOperation({
-                completed: results.length - resultsBefore,
-                total: plan.operations.length,
-                ...progressCounts,
-            });
-        }
-        catch {
-            // progress is presentation-only
+        // Shared vocabulary: operation id + status only — a conflict/failure
+        // detail can echo field values, which never leave the machine.
+        options.progress?.opResult(last.operationId, last.status);
+        options.progress?.items(results.length - resultsBefore, plan.operations.length);
+        if (options.onOperation) {
+            try {
+                options.onOperation({
+                    completed: results.length - resultsBefore,
+                    total: plan.operations.length,
+                    ...progressCounts,
+                });
+            }
+            catch {
+                // progress is presentation-only
+            }
         }
     };
+    emitStage("operations");
     for (const operation of plan.operations) {
         // Report the previous iteration's result (guarded: no-op if it pushed
         // nothing). One-iteration lag keeps this a two-line hook instead of a
@@ -377,6 +388,7 @@ export async function applyPatchPlan(connector, plan, options) {
         }
     }
     notifyProgress();
+    emitStage("results");
     return {
         planId: plan.id,
         provider: connector.provider,

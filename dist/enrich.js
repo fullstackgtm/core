@@ -816,7 +816,10 @@ export function buildAcquirePlan(options) {
             }
         }
     }
+    let routed = 0;
     for (const record of records) {
+        // Progress heartbeat over the candidate rows (throttled by the emitter).
+        options.progress?.items((routed += 1), records.length);
         const createMap = acquire.create[record.objectType];
         const match = config.match[record.objectType];
         // No create mapping or no match config for this type — can neither create
@@ -923,6 +926,10 @@ export function buildAcquirePlan(options) {
         counts.created += 1;
         estCostUsd += costPerRecord;
     }
+    options.progress?.flush();
+    // Meter reading: creates proposed this run against the meter's ceiling.
+    if (cap !== null)
+        options.progress?.meter(counts.created, cap, "creates");
     const plan = {
         id: `patch_plan_acq_${fnv1a(`${source}:${runLabel}:${nowIso}`)}`,
         title: `Acquire leads — ${source}`,

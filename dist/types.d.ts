@@ -15,7 +15,8 @@ export type PatchOperationType = "set_field" | "clear_field" | "link_record" | "
  * The afterValue of a `create_record` operation. The connector re-resolves on
  * `matchKey`/`matchValue` at apply time and creates only on a confirmed miss.
  * `estCostUsd` is the acquire meter's per-record charge, recorded against the
- * budget on a successful create.
+ * budget on a successful create. Emitted by `enrich acquire` (metered) and
+ * `backfill stripe` (closed-won deals from paid invoices, unmetered).
  */
 export type CreateRecordPayload = {
     properties: Record<string, string>;
@@ -39,6 +40,22 @@ export type CreateRecordPayload = {
     ownerId?: string;
     /** Audit label for how the owner was chosen (e.g. "fixed", "territory:0"). */
     assignedBy?: string;
+    /**
+     * Deal creates only: provider-neutral stage sentinel. "closed_won" tells the
+     * connector to resolve the target pipeline's REAL closed-won stage id from
+     * the provider's pipeline metadata at apply time (HubSpot: stage with
+     * `metadata.isClosed` true and probability 1) — never by substring-guessing
+     * a stage name. If no such stage is resolvable the operation is skipped.
+     * Plain deal properties (amount, closedate, dealname, …) travel in
+     * `properties` as provider property names, like every other create.
+     */
+    dealStage?: "closed_won";
+    /**
+     * Deal creates only: which pipeline to create the deal in — a pipeline id
+     * or a case-insensitive pipeline label. Absent = the portal's default
+     * pipeline (lowest displayOrder).
+     */
+    dealPipeline?: string;
 };
 export type AuditFindingSeverity = "info" | "warning" | "critical";
 /**

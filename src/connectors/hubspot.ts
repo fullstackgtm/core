@@ -20,6 +20,7 @@ import type {
   PatchOperationResult,
   SnapshotProgress,
 } from "../types.ts";
+import { SNAPSHOT_PULL_STAGES, type ProgressEmitter } from "../progress.ts";
 
 const DEFAULT_API_BASE_URL = "https://api.hubapi.com";
 
@@ -33,6 +34,12 @@ export type HubspotConnectorOptions = {
   fetchImpl?: typeof fetch;
   /** Per-page snapshot-pull progress (presentation only — errors are swallowed). */
   onProgress?: (progress: SnapshotProgress) => void;
+  /**
+   * Shared progress vocabulary (src/progress.ts): the snapshot pull emits a
+   * `stage` per object type and an `items` heartbeat per page. Additive
+   * alongside the legacy `onProgress` callback; both are presentation-only.
+   */
+  progress?: ProgressEmitter;
 };
 
 const OBJECT_PATHS: Partial<Record<GtmObjectType, string>> = {
@@ -42,6 +49,15 @@ const OBJECT_PATHS: Partial<Record<GtmObjectType, string>> = {
 };
 
 const MAPPING_OBJECT_TYPES: Partial<Record<GtmObjectType, Exclude<CrmObjectType, "owners">>> = {
+  account: "accounts",
+  contact: "contacts",
+  deal: "deals",
+};
+
+// SnapshotProgress object types → the shared SNAPSHOT_PULL_STAGES names, so
+// the CLI checklist and the app StageTimeline read the same stage labels.
+const PULL_STAGE_BY_TYPE: Record<SnapshotProgress["objectType"], (typeof SNAPSHOT_PULL_STAGES)[number]> = {
+  user: "owners",
   account: "accounts",
   contact: "contacts",
   deal: "deals",
@@ -67,6 +83,32 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
   // match value (email): HubSpot search is eventually consistent, so a contact
   // created earlier in this apply run is invisible to a later search.
   const createdContactsByMatch = new Map<string, string>();
+  // Same-run dedup for `create_record` deal creates, keyed by
+  // matchKey:matchValue (e.g. stripe_invoice_id:in_123) — same
+  // eventual-consistency rationale as the contact cache.
+  const createdDealsByMatch = new Map<string, string>();
+  // One /crm/v3/pipelines/deals read per connector lifetime (one apply run):
+  // pipeline/stage metadata doesn't change mid-run, and deal creates resolve
+  // the closed-won stage from it per operation.
+  let dealPipelinesCache: Promise<any[]> | undefined;
+  // Custom deal dedupe properties ensured (or confirmed missing) this run.
+  const ensuredDealProperties = new Map<string, boolean>();
+
+  // Per-page snapshot-pull progress: the legacy onProgress callback plus the
+  // shared emitter (stage on the first page of each object type, items per
+  // page). Both are presentation-only — callers already swallow errors.
+  let lastPullStage: string | undefined;
+  const pullProgress = (objectType: SnapshotProgress["objectType"], fetched: number) => {
+    options.onProgress?.({ objectType, fetched });
+    const emitter = options.progress;
+    if (!emitter) return;
+    const stage = PULL_STAGE_BY_TYPE[objectType];
+    if (stage !== lastPullStage) {
+      lastPullStage = stage;
+      emitter.stage(stage, SNAPSHOT_PULL_STAGES.indexOf(stage), SNAPSHOT_PULL_STAGES.length);
+    }
+    emitter.items(fetched);
+  };
 
   async function request(path: string, init: RequestInit = {}): Promise<any> {
     const token = await options.getAccessToken();
@@ -158,7 +200,7 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
     ) => Promise<any[]>,
   ): Promise<CanonicalGtmSnapshot> {
     const owners = await list("/crm/v3/owners?limit=100", (fetched) =>
-      options.onProgress?.({ objectType: "user", fetched }),
+      pullProgress("user", fetched),
     );
     const users: CanonicalUser[] = owners
       .filter((owner) => owner.id)
@@ -306,6 +348,9 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
         };
       });
 
+    // Deliver any throttled trailing items heartbeat before the pull returns.
+    options.progress?.flush();
+
     return {
       generatedAt: new Date().toISOString(),
       provider: "hubspot",
@@ -324,7 +369,7 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
     return assembleSnapshot((objectType, properties, withAssociations) =>
       list(
         `/crm/v3/objects/${objectType}?limit=100&properties=${properties}${withAssociations ? "&associations=companies" : ""}`,
-        (fetched) => options.onProgress?.({ objectType: canonicalType[objectType], fetched }),
+        (fetched) => pullProgress(canonicalType[objectType], fetched),
       ),
     );
   }
@@ -609,12 +654,215 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
     return id;
   }
 
+  /** Exact-value deal lookup (by any searchable property) for resolve-first creates. */
+  async function searchDealsBy(property: string, value: string): Promise<string[]> {
+    const data = await request(`/crm/v3/objects/deals/search`, {
+      method: "POST",
+      body: JSON.stringify({
+        filterGroups: [{ filters: [{ propertyName: property, operator: "EQ", value }] }],
+        properties: [property],
+        limit: 3,
+      }),
+    });
+    return ((data?.results ?? []) as Array<{ id: string }>).map((row) => String(row.id));
+  }
+
   /**
-   * Create a NET-NEW record (a sourced lead). Resolve-first: re-checks the
-   * dedupe key against the live CRM (the plan-time snapshot can be stale) and
-   * creates ONLY on a confirmed miss — a record a concurrent writer already
-   * added is returned as `skipped`, never duplicated. Contacts can be linked
-   * to a resolved-or-created company in the same step.
+   * Make sure the deal dedupe property (e.g. "stripe_invoice_id") exists so
+   * both the resolve-first search and the stamped value are real. Best-effort
+   * create on a confirmed miss; returns false when the property can neither
+   * be read nor created — the caller must SKIP then (creating a deal without
+   * its dedupe key would make every replay a duplicate).
+   */
+  async function ensureDealProperty(name: string): Promise<boolean> {
+    const cached = ensuredDealProperties.get(name);
+    if (cached !== undefined) return cached;
+    let ok: boolean;
+    try {
+      await request(`/crm/v3/properties/deals/${encodeURIComponent(name)}`);
+      ok = true;
+    } catch {
+      // Missing (404) or unreadable — try to create it; a failure here means
+      // we cannot guarantee the dedupe key, so report false.
+      try {
+        await request(`/crm/v3/properties/deals`, {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            label: name,
+            type: "string",
+            fieldType: "text",
+            groupName: "dealinformation",
+            hasUniqueValue: false,
+          }),
+        });
+        ok = true;
+      } catch {
+        ok = false;
+      }
+    }
+    ensuredDealProperties.set(name, ok);
+    return ok;
+  }
+
+  /**
+   * Resolve the target pipeline and its closed-won stage from the portal's
+   * own pipeline metadata (one read per run). The pipeline is picked by id or
+   * case-insensitive label (`hint`), else the default (lowest displayOrder);
+   * the closed-won stage is the one whose metadata says isClosed with
+   * probability 1 — NEVER a substring guess against stage names. Returns null
+   * when either is unresolvable so the caller skips instead of guessing.
+   */
+  async function resolveClosedWonStage(
+    hint: string | undefined,
+  ): Promise<{ pipelineId: string; stageId: string } | null> {
+    if (!dealPipelinesCache) {
+      dealPipelinesCache = request("/crm/v3/pipelines/deals").then(
+        (data) => (data?.results ?? []) as any[],
+      );
+      // A failed read must not poison the cache for the rest of the run.
+      dealPipelinesCache = dealPipelinesCache.catch(() => []);
+    }
+    const pipelines = await dealPipelinesCache;
+    if (pipelines.length === 0) return null;
+    let pipeline: any | undefined;
+    if (hint) {
+      const wanted = hint.trim().toLowerCase();
+      pipeline = pipelines.find(
+        (candidate) =>
+          String(candidate?.id ?? "").toLowerCase() === wanted ||
+          String(candidate?.label ?? "").trim().toLowerCase() === wanted,
+      );
+      if (!pipeline) return null; // an explicit hint that matches nothing is an error, not "use default"
+    } else {
+      pipeline = [...pipelines].sort(
+        (a, b) => Number(a?.displayOrder ?? 0) - Number(b?.displayOrder ?? 0),
+      )[0];
+    }
+    if (!pipeline?.id) return null;
+    const stage = (pipeline.stages ?? []).find((candidate: any) => {
+      const meta = candidate?.metadata ?? {};
+      return (
+        candidate?.id &&
+        String(meta.isClosed).toLowerCase() === "true" &&
+        Number(meta.probability) === 1
+      );
+    });
+    if (!stage) return null;
+    return { pipelineId: String(pipeline.id), stageId: String(stage.id) };
+  }
+
+  /**
+   * Deal branch of create_record (backfill: one closed-won deal per paid
+   * invoice). Resolve-first on the custom dedupe property (ensured to exist
+   * first), stage resolved from pipeline metadata, company association
+   * best-effort — same contract as the contact branch.
+   */
+  async function createDealRecord(
+    operation: PatchOperation,
+    payload: CreateRecordPayload,
+    matchValue: string,
+  ): Promise<PatchOperationResult> {
+    const matchKey = String(payload.matchKey ?? "").trim();
+    if (!matchKey) {
+      return { operationId: operation.id, status: "skipped", detail: "create_record for deals needs a matchKey (the dedupe property, e.g. stripe_invoice_id)." };
+    }
+    const dedupeKey = `${matchKey}:${matchValue.toLowerCase()}`;
+    const alreadyCreated = createdDealsByMatch.get(dedupeKey);
+    if (alreadyCreated) {
+      return { operationId: operation.id, status: "skipped", detail: `Deal ${matchKey}=${matchValue} already created earlier in this run; not duplicating.`, providerData: { id: alreadyCreated, existing: true } };
+    }
+
+    // The dedupe property is usually CUSTOM — ensure it exists before the
+    // search; searching a property HubSpot doesn't have 400s, and creating a
+    // deal without the key stamped would defeat every future resolve-first.
+    const propertyOk = await ensureDealProperty(matchKey);
+    if (!propertyOk) {
+      return { operationId: operation.id, status: "skipped", detail: `Deal dedupe property "${matchKey}" does not exist and could not be created; refusing to create a deal without its dedupe key.` };
+    }
+
+    const existing = await searchDealsBy(matchKey, matchValue);
+    if (existing.length > 0) {
+      createdDealsByMatch.set(dedupeKey, existing[0]);
+      return { operationId: operation.id, status: "skipped", detail: `Deal ${matchKey}=${matchValue} already exists (${existing.join(", ")}); resolve-first declined to create.`, providerData: { id: existing[0], existing: true } };
+    }
+
+    // Stage: only the provider-neutral "closed_won" sentinel is understood,
+    // and it must resolve to a real stage id from pipeline metadata.
+    if (payload.dealStage !== "closed_won") {
+      return { operationId: operation.id, status: "skipped", detail: 'create_record for deals needs dealStage "closed_won" (the connector resolves the real stage id from pipeline metadata).' };
+    }
+    const resolved = await resolveClosedWonStage(payload.dealPipeline);
+    if (!resolved) {
+      return {
+        operationId: operation.id,
+        status: "skipped",
+        detail: payload.dealPipeline
+          ? `Could not resolve pipeline "${payload.dealPipeline}" (by id or label) to a closed-won stage; not guessing a stage.`
+          : "Could not resolve the default deal pipeline's closed-won stage (isClosed + probability 1) from pipeline metadata; not guessing a stage.",
+      };
+    }
+
+    const properties: Record<string, string> = {
+      ...payload.properties,
+      [matchKey]: matchValue,
+      pipeline: resolved.pipelineId,
+      dealstage: resolved.stageId,
+    };
+    if (payload.ownerId && !properties.hubspot_owner_id) {
+      properties.hubspot_owner_id = String(payload.ownerId);
+    }
+    let created;
+    try {
+      created = await request(`/crm/v3/objects/deals`, {
+        method: "POST",
+        body: JSON.stringify({ properties: { ...properties, hs_object_source_detail_2: `fullstackgtm backfill (${operation.id})` } }),
+      });
+    } catch {
+      // Some portals reject writes to source-detail properties — the provenance
+      // stamp is best-effort, the create is not.
+      created = await request(`/crm/v3/objects/deals`, {
+        method: "POST",
+        body: JSON.stringify({ properties }),
+      });
+    }
+    const dealId = String(created.id);
+    createdDealsByMatch.set(dedupeKey, dealId);
+
+    let companyNote = "";
+    if (payload.associateCompanyName) {
+      try {
+        const companyId = await resolveOrCreateCompany(payload.associateCompanyName, payload.associateCompanyDomain, operation.id);
+        if (companyId) {
+          await request(
+            `/crm/v4/objects/deals/${encodeURIComponent(dealId)}/associations/default/companies/${encodeURIComponent(companyId)}`,
+            { method: "PUT" },
+          );
+          const domainNote = payload.associateCompanyDomain ? ` (${payload.associateCompanyDomain})` : "";
+          companyNote = ` Linked to company "${payload.associateCompanyName}"${domainNote} (${companyId}).`;
+        } else {
+          companyNote = ` Company "${payload.associateCompanyName}" was ambiguous; left unlinked.`;
+        }
+      } catch (error) {
+        // Association is best-effort — the deal create already succeeded.
+        companyNote = ` (company link failed: ${error instanceof Error ? error.message : String(error)})`;
+      }
+    }
+    return {
+      operationId: operation.id,
+      status: "applied",
+      detail: `Created deal ${matchKey}=${matchValue} (${dealId}) in stage ${resolved.stageId}.${companyNote}`,
+      providerData: { id: dealId, created: true, pipelineId: resolved.pipelineId, stageId: resolved.stageId },
+    };
+  }
+
+  /**
+   * Create a NET-NEW record (a sourced lead, or a backfilled deal).
+   * Resolve-first: re-checks the dedupe key against the live CRM (the
+   * plan-time snapshot can be stale) and creates ONLY on a confirmed miss — a
+   * record a concurrent writer already added is returned as `skipped`, never
+   * duplicated. Contacts and deals can be linked to a resolved-or-created
+   * company in the same step.
    */
   async function createRecord(operation: PatchOperation): Promise<PatchOperationResult> {
     const payload = operation.afterValue as CreateRecordPayload | undefined;
@@ -622,12 +870,16 @@ export function createHubspotConnector(options: HubspotConnectorOptions): Requir
       return { operationId: operation.id, status: "skipped", detail: "create_record needs a CreateRecordPayload afterValue." };
     }
     const objectPath = OBJECT_PATHS[operation.objectType];
-    if (operation.objectType !== "contact" && operation.objectType !== "account") {
-      return { operationId: operation.id, status: "skipped", detail: "create_record supports contacts and accounts." };
+    if (operation.objectType !== "contact" && operation.objectType !== "account" && operation.objectType !== "deal") {
+      return { operationId: operation.id, status: "skipped", detail: "create_record supports contacts, accounts, and deals." };
     }
     const matchValue = String(payload.matchValue ?? "").trim();
     if (!matchValue) {
       return { operationId: operation.id, status: "skipped", detail: "create_record needs a non-empty matchValue to resolve-first." };
+    }
+
+    if (operation.objectType === "deal") {
+      return createDealRecord(operation, payload, matchValue);
     }
 
     if (operation.objectType === "account") {

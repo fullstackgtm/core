@@ -134,3 +134,32 @@ export declare function validateLlmKey(provider: LlmProvider, apiKey: string, fe
     ok: boolean;
     detail: string;
 }>;
+/**
+ * Chop a "Speaker: text" transcript into ≤maxChars chunks on speaker-turn
+ * (line) boundaries; a single oversize turn splits on sentence boundaries.
+ * No overlap (per-chunk extraction + downstream dedupe make it unnecessary).
+ */
+export declare function chunkTranscript(transcript: string, maxChars?: number): string[];
+export declare function scoreInsightQuality(insight: {
+    text: string;
+    evidence: string;
+    confidence: number;
+}): number;
+export type ChunkedExtractResult = {
+    insights: LlmExtractedInsight[];
+    model: string;
+    chunks: number;
+    chunksUsed: number;
+    chunksFailed: number;
+};
+/**
+ * The chunked pipeline: chunk → per-chunk forced-tool extraction (bounded
+ * concurrency) → per-chunk verbatim + grounding gates → quality gate →
+ * per-call dedupe → rank. A failed chunk is skipped (best-effort); only
+ * all-chunks-failed throws.
+ */
+export declare function extractInsightsChunked(transcript: string, options: LlmCallOptions & {
+    title?: string;
+    maxChunks?: number;
+    concurrency?: number;
+}): Promise<ChunkedExtractResult>;

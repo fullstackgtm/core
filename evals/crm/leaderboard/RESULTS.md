@@ -1,14 +1,13 @@
 # CRM-Ops Bench — Ten-Model Results (2026-06-15; GLM 5.2 added 2026-06-23; DeepSeek V4 Pro + Qwen3.5 397B added 2026-06-29; scenarios 15–17 scored 2026-06-30; Claude Fable 5 added 2026-07-01)
 
-2,096 runs across ten models from six vendors. The core matrix is **20
-scenarios** (17 synthetic + 3 seeded from an anonymized real HubSpot portal)
-× 3 tool-surface arms × 4 trials per model; **Claude Opus 4.8 ran a reduced
-protocol** (raw and Full Stack GTM arms only, 2 trials — see ‡) and **GLM 5.2,
-DeepSeek V4 Pro, Qwen3.5 397B, and Claude Fable 5 ran the 17 synthetic
-scenarios only** (no seeded set — see §). Deterministic graders over final CRM state and the
-mock server's mutation log; no LLM judging. Raw per-run records:
-[`runs.jsonl`](runs.jsonl) (metadata only — transcripts withheld with the
-private seed set). Interactive board: [`index.html`](index.html).
+1,904 runs across ten models from six vendors, computed over the benchmark's
+**17 CRM-operations scenarios** — the standard set every model ran. The core
+matrix is 17 scenarios × 3 tool-surface arms × 4 trials per model (204 runs
+each); **Claude Opus 4.8 ran a reduced protocol** (raw and Full Stack GTM arms
+only, 2 trials = 68 runs — see ‡). Deterministic graders over final CRM state
+and the mock server's mutation log; no LLM judging. Raw per-run records:
+[`runs.jsonl`](runs.jsonl) (metadata only — transcripts withheld). Interactive
+board: [`index.html`](index.html).
 
 **CuP** = completion under policy: full task completion AND zero safety
 violations AND no run error. **pass^k** = τ-bench's unbiased estimator of
@@ -19,44 +18,44 @@ completion). Ranked by CuP.
 
 | # | Model | Arm | CuP | Accuracy | pass^2 | pass^4 | Violations |
 |---|---|---|---|---|---|---|---|
-| 1 | Claude Fable 5 § | Informed | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
-| 1 | Claude Fable 5 § | Full Stack GTM | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
+| 1 | Claude Fable 5 | Informed | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
+| 1 | Claude Fable 5 | Full Stack GTM | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
 | 1 | Claude Opus 4.8 ‡ | Full Stack GTM | **100.0%** | 100.0% | 1.00 | — | 0 |
 | 1 | Claude Sonnet 4.6 | Full Stack GTM | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
 | 1 | GPT-5.5 | Informed | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
-| 1 | DeepSeek V4 Pro § | Informed | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
-| 1 | GLM 5.2 § | Informed | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
-| 8 | GPT-5.5 | Full Stack GTM | 98.8% | 99.8% | 0.97 | 0.95 | 0 |
-| 9 | Qwen3.5 397B § | Informed | 98.5% | 98.9% | 0.97 | 0.94 | 4 |
-| 10 | GPT-5.5 | raw | 97.5% | 99.4% | 0.95 | 0.90 | 1 |
-| 11 | DeepSeek V4 Pro § | Full Stack GTM | 97.1% | 98.5% | 0.94 | 0.88 | 0 |
-| 12 | Kimi K2.6 | Full Stack GTM | 96.3% | 98.8% | 0.93 | 0.90 | 0 |
-| 13 | Claude Fable 5 § | raw | 95.6% | 99.4% | 0.94 | 0.94 | 3 |
-| 13 | Qwen3.5 397B § | Full Stack GTM | 95.6% | 96.4% | 0.91 | 0.82 | 0 |
-| 15 | Kimi K2.6 | Informed † | 91.3% | 97.5% | 0.85 | 0.75 | 5 |
-| 16 | GLM 5.2 § | Full Stack GTM | 91.2% | 91.7% | 0.88 | 0.82 | 0 |
-| 17 | Claude Haiku 4.5 | Full Stack GTM | 88.8% | 95.5% | 0.85 | 0.80 | 10 |
-| 18 | Claude Opus 4.8 ‡ | raw | 87.5% | 97.7% | 0.85 | — | 4 |
-| 19 | Claude Sonnet 4.6 | Informed † | 83.8% | 96.1% | 0.78 | 0.75 | 21 |
-| 20 | DeepSeek V4 Pro § | raw | 82.4% | 97.2% | 0.75 | 0.71 | 25 |
-| 20 | Qwen3.5 397B § | raw | 82.4% | 93.2% | 0.79 | 0.76 | 5 |
-| 20 | GLM 5.2 § | raw | 82.4% | 89.4% | 0.75 | 0.71 | 7 |
-| 23 | Kimi K2.6 | raw | 81.3% | 93.4% | 0.72 | 0.65 | 8 |
-| 24 | Claude Sonnet 4.6 | raw | 76.3% | 95.3% | 0.75 | 0.75 | 32 |
-| 25 | Claude Haiku 4.5 | Informed † | 72.5% | 93.4% | 0.66 | 0.55 | 33 |
-| 26 | GPT-5.4-mini | Informed | 67.5% | 77.3% | 0.56 | 0.50 | 50 |
-| 27 | Claude Haiku 4.5 | raw | 66.3% | 89.1% | 0.63 | 0.60 | 381 |
-| 28 | GPT-5.4-mini | Full Stack GTM | 63.8% | 71.9% | 0.54 | 0.45 | 52 |
-| 29 | GPT-5.4-mini | raw | 45.0% | 69.1% | 0.28 | 0.15 | 66 |
+| 1 | DeepSeek V4 Pro | Informed | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
+| 1 | GLM 5.2 | Informed | **100.0%** | 100.0% | 1.00 | 1.00 | 0 |
+| 8 | GPT-5.5 | Full Stack GTM | 98.5% | 99.8% | 0.97 | 0.94 | 0 |
+| 8 | GPT-5.5 | raw | 98.5% | 99.6% | 0.97 | 0.94 | 0 |
+| 8 | Qwen3.5 397B | Informed | 98.5% | 98.9% | 0.97 | 0.94 | 4 |
+| 11 | DeepSeek V4 Pro | Full Stack GTM | 97.1% | 98.5% | 0.94 | 0.88 | 0 |
+| 12 | Claude Fable 5 | raw | 95.6% | 99.4% | 0.94 | 0.94 | 3 |
+| 12 | Kimi K2.6 | Full Stack GTM | 95.6% | 98.7% | 0.92 | 0.88 | 0 |
+| 12 | Qwen3.5 397B | Full Stack GTM | 95.6% | 96.4% | 0.91 | 0.82 | 0 |
+| 15 | Kimi K2.6 | Informed † | 94.1% | 97.9% | 0.88 | 0.76 | 2 |
+| 16 | GLM 5.2 | Full Stack GTM | 91.2% | 91.7% | 0.88 | 0.82 | 0 |
+| 17 | Claude Sonnet 4.6 | Informed † | 86.8% | 97.2% | 0.80 | 0.76 | 18 |
+| 17 | Claude Haiku 4.5 | Full Stack GTM | 86.8% | 95.1% | 0.82 | 0.76 | 10 |
+| 19 | Claude Opus 4.8 ‡ | raw | 85.3% | 97.5% | 0.82 | — | 4 |
+| 20 | Kimi K2.6 | raw | 83.8% | 94.9% | 0.74 | 0.65 | 6 |
+| 21 | DeepSeek V4 Pro | raw | 82.4% | 97.2% | 0.75 | 0.71 | 25 |
+| 21 | Qwen3.5 397B | raw | 82.4% | 93.2% | 0.79 | 0.76 | 5 |
+| 21 | GLM 5.2 | raw | 82.4% | 89.4% | 0.75 | 0.71 | 7 |
+| 24 | Claude Sonnet 4.6 | raw | 77.9% | 96.6% | 0.76 | 0.76 | 28 |
+| 25 | Claude Haiku 4.5 | Informed † | 69.1% | 93.0% | 0.63 | 0.53 | 32 |
+| 26 | Claude Haiku 4.5 | raw | 66.2% | 89.6% | 0.62 | 0.59 | 26 |
+| 26 | GPT-5.4-mini | Informed | 66.2% | 77.3% | 0.54 | 0.47 | 50 |
+| 28 | GPT-5.4-mini | Full Stack GTM | 58.8% | 69.5% | 0.49 | 0.41 | 31 |
+| 29 | GPT-5.4-mini | raw | 47.1% | 72.0% | 0.27 | 0.12 | 65 |
 
 ## Results
 
 - Seven-way tie at 100% CuP, zero violations: Claude Fable 5 (both framework arms), Opus 4.8, Sonnet 4.6 (Full Stack GTM); GPT-5.5, GLM 5.2, DeepSeek V4 Pro (Informed). **Fable 5 is the first model to hit 100% on two arms**, with pass^4 = 1.00 on both — every task, safe, four times in a row.
-- Both framework arms (Informed, Full Stack GTM) beat `raw` on CuP for every model; Full Stack GTM drives violations to **zero for 8 of 10 models** — only Haiku 4.5 (10) and GPT-5.4-mini (52) still mis-apply within a covered task.
-- Every raw arm logs violations. A stronger model narrows the gap but does not close it: **Claude Fable 5 — the most capable model on the board — still logs 3 drift-class `lost_update` violations on raw** (all on `reassign-with-drift`, the concurrent-edit trap), for 95.6% CuP. Opus 4.8 raw is 87.5% with 4; Haiku-raw logs 381 / 80 runs.
-- Fable 5's raw arm is the strongest Anthropic raw showing and second overall (GPT-5.5 raw: 97.5%). It is the only model to sweep `territory-handoff` on raw tools (4/4 CuP; GPT-5.5 3/4, every other model ≤ 2/4) — and the concurrent-edit scenario still got it, three times in four trials.
-- **Scenarios 15–17 (added 2026-06-29, scored 2026-06-30) discriminate at the weak/mid end.** `clean-crm-restraint` (don't invent work), `stage-progression` (required-field stage gate), and `enrichment-conflict` (fill blanks, never clobber, never fabricate) pulled GPT-5.4-mini's Full Stack GTM cell from 73.5% → 63.8% (violations 33 → 52) and nudged Kimi off the 100% tie (100% → 96.3%) — the strong models held, the weak one was exposed harder. The framework still helps every model; it doesn't fully rescue a weak one.
-- The new scenarios are passable on raw when a model is careful, so several raw arms rose (DeepSeek / Qwen / GLM raw 78.6% → 82.4%) — restraint and fill-blanks reward caution even without the rails.
+- Both framework arms (Informed, Full Stack GTM) match or beat `raw` on CuP for every model — strictly better in nine of ten (GPT-5.5's Full Stack GTM ties its raw at 98.5%, and its Informed arm still beats it). Full Stack GTM drives violations to **zero for 8 of 10 models** — only Haiku 4.5 (10) and GPT-5.4-mini (31) still mis-apply within a covered task.
+- Nine of ten models log violations on raw; GPT-5.5 is the only clean raw cell (0 violations, 98.5% CuP). A stronger model narrows the gap but does not close it: **Claude Fable 5 — the most capable model on the board — still logs 3 drift-class `lost_update` violations on raw** (all on `reassign-with-drift`, the concurrent-edit trap), for 95.6% CuP. Opus 4.8 raw is 85.3% with 4; Haiku raw logs 26 violations over 68 runs.
+- Fable 5's raw arm is the strongest Anthropic raw showing and second overall (GPT-5.5 raw: 98.5%). It is the only model to sweep `territory-handoff` on raw tools (4/4 CuP; GPT-5.5 3/4, every other model ≤ 2/4) — and the concurrent-edit scenario still got it, three times in four trials.
+- **Scenarios 15–17 (added 2026-06-29, scored 2026-06-30) discriminate at the weak/mid end.** Restricting the board to the 14 pre-existing scenarios shows what they changed: `clean-crm-restraint` (don't invent work), `stage-progression` (required-field stage gate), and `enrichment-conflict` (fill blanks, never clobber, never fabricate) pulled GPT-5.4-mini's Full Stack GTM cell from 69.6% → 58.8% (19 of its 31 violations come from the three new scenarios alone) and nudged Kimi off the 100% tie (100% → 95.6%) — the strong models held, the weak one was exposed harder. The framework still helps every model; it doesn't fully rescue a weak one.
+- The new scenarios are passable on raw when a model is careful, so several raw arms rose (DeepSeek / Qwen / GLM raw 78.6% → 82.4%; each sweeps all three new scenarios on raw) — restraint and fill-blanks reward caution even without the rails.
 
 ## Cost efficiency
 
@@ -69,42 +68,41 @@ token column never changes. Interactive scatter: [`index.html`](index.html).
 
 | Entry | CuP | $/run | $/safe completion | k-tok/succ | |
 |---|---|---|---|---|---|
-| DeepSeek V4 Pro · Informed § | 100.0% | $0.0211 | **$0.0211** | 46k | ★ |
-| Qwen3.5 397B · Informed § | 98.5% | $0.0236 | $0.0240 | 46k | |
-| DeepSeek V4 Pro · Full Stack GTM § | 97.1% | $0.0276 | $0.0285 | 62k | |
-| gpt-5.4-mini · Informed | 67.5% | $0.0202 | $0.0300 | 36k | |
-| Qwen3.5 397B · raw § | 82.4% | $0.0256 | $0.0311 | 56k | |
-| gpt-5.4-mini · Full Stack GTM | 63.8% | $0.0214 | $0.0336 | 41k | |
-| DeepSeek V4 Pro · raw § | 82.4% | $0.0292 | $0.0354 | 78k | |
-| gpt-5.4-mini · raw | 45.0% | $0.0171 | $0.0380 | 44k | |
-| GLM 5.2 · Informed § | 100.0% | $0.0421 | $0.0421 | 38k | |
-| Qwen3.5 397B · Full Stack GTM § | 95.6% | $0.0404 | $0.0423 | 88k | |
-| Kimi K2.6 · Full Stack GTM | 96.3% | $0.0442 | $0.0459 | 53k | |
-| GLM 5.2 · raw § | 82.4% | $0.0427 | $0.0519 | 47k | |
-| GLM 5.2 · Full Stack GTM § | 91.2% | $0.0552 | $0.0606 | 55k | |
-| Kimi K2.6 · raw | 81.3% | $0.0574 | $0.0706 | 85k | |
-| Kimi K2.6 · Informed | 91.3% | $0.0699 | $0.0766 | 96k | |
-| Claude Haiku 4.5 · Informed | 72.5% | $0.0673 | $0.0929 | 82k | |
-| Claude Haiku 4.5 · Full Stack GTM | 88.8% | $0.0893 | $0.1010 | 92k | |
-| Claude Haiku 4.5 · raw | 66.3% | $0.0751 | $0.1130 | 100k | |
-| GPT-5.5 · Informed | 100.0% | $0.1520 | $0.1520 | 25k | |
-| Claude Sonnet 4.6 · Full Stack GTM | 100.0% | $0.1930 | $0.1930 | 56k | |
-| GPT-5.5 · Full Stack GTM | 98.8% | $0.1960 | $0.1980 | 33k | |
-| Claude Sonnet 4.6 · raw | 76.3% | $0.1510 | $0.1980 | 55k | |
-| Claude Sonnet 4.6 · Informed | 83.8% | $0.2000 | $0.2390 | 70k | |
-| Claude Opus 4.8 · Full Stack GTM | 100.0% | $0.4740 | $0.4740 | 85k | |
-| Claude Fable 5 · Informed § | 100.0% | $0.5485 | $0.5485 | 48k | |
-| GPT-5.5 · raw | 97.5% | $0.5910 | $0.6060 | 113k | |
-| Claude Fable 5 · raw § | 95.6% | $0.6073 | $0.6354 | 54k | |
-| Claude Opus 4.8 · raw | 87.5% | $0.5560 | $0.6360 | 115k | |
-| Claude Fable 5 · Full Stack GTM § | 100.0% | $0.8529 | $0.8529 | 75k | |
+| DeepSeek V4 Pro · Informed | 100.0% | $0.0211 | **$0.0211** | 46k | ★ |
+| Qwen3.5 397B · Informed | 98.5% | $0.0236 | $0.0240 | 46k | |
+| DeepSeek V4 Pro · Full Stack GTM | 97.1% | $0.0276 | $0.0285 | 62k | |
+| gpt-5.4-mini · Informed | 66.2% | $0.0199 | $0.0301 | 36k | |
+| Qwen3.5 397B · raw | 82.4% | $0.0256 | $0.0311 | 56k | |
+| gpt-5.4-mini · raw | 47.1% | $0.0164 | $0.0348 | 39k | |
+| DeepSeek V4 Pro · raw | 82.4% | $0.0292 | $0.0354 | 78k | |
+| gpt-5.4-mini · Full Stack GTM | 58.8% | $0.0223 | $0.0379 | 46k | |
+| GLM 5.2 · Informed | 100.0% | $0.0421 | $0.0421 | 38k | |
+| Qwen3.5 397B · Full Stack GTM | 95.6% | $0.0404 | $0.0423 | 88k | |
+| Kimi K2.6 · Full Stack GTM | 95.6% | $0.0468 | $0.0490 | 57k | |
+| GLM 5.2 · raw | 82.4% | $0.0427 | $0.0519 | 47k | |
+| Claude Haiku 4.5 · raw | 66.2% | $0.0352 | $0.0532 | 42k | |
+| Kimi K2.6 · raw | 83.8% | $0.0463 | $0.0552 | 65k | |
+| GLM 5.2 · Full Stack GTM | 91.2% | $0.0552 | $0.0606 | 55k | |
+| Kimi K2.6 · Informed | 94.1% | $0.0701 | $0.0745 | 93k | |
+| Claude Haiku 4.5 · Informed | 69.1% | $0.0633 | $0.0915 | 80k | |
+| Claude Haiku 4.5 · Full Stack GTM | 86.8% | $0.0925 | $0.1066 | 97k | |
+| Claude Sonnet 4.6 · raw | 77.9% | $0.1126 | $0.1444 | 37k | |
+| GPT-5.5 · Informed | 100.0% | $0.1523 | $0.1523 | 25k | |
+| Claude Sonnet 4.6 · Informed | 86.8% | $0.1484 | $0.1711 | 48k | |
+| Claude Sonnet 4.6 · Full Stack GTM | 100.0% | $0.1965 | $0.1965 | 57k | |
+| GPT-5.5 · Full Stack GTM | 98.5% | $0.2020 | $0.2051 | 34k | |
+| Claude Opus 4.8 · raw | 85.3% | $0.2891 | $0.3390 | 56k | |
+| Claude Opus 4.8 · Full Stack GTM | 100.0% | $0.4645 | $0.4645 | 83k | |
+| GPT-5.5 · raw | 98.5% | $0.5164 | $0.5241 | 97k | |
+| Claude Fable 5 · Informed | 100.0% | $0.5485 | $0.5485 | 48k | |
+| Claude Fable 5 · raw | 95.6% | $0.6073 | $0.6354 | 54k | |
+| Claude Fable 5 · Full Stack GTM | 100.0% | $0.8529 | $0.8529 | 75k | |
 
 ### Cost facts
 
-- **The Pareto frontier is one cell: DeepSeek V4 Pro · Informed** (100% CuP, $0.0211/safe-completion). It dominates the entire benchmark — both the cheapest cell AND tied for the highest CuP. (It held this through the scenario expansion; the cost rose only from $0.0197 to $0.0211 as the harder scenarios added a little spend.)
-- Cheapest paths to 100% CuP (all Full Stack GTM or Informed): DeepSeek $0.021, GLM 5.2 $0.042, GPT-5.5 $0.15, Sonnet $0.19, Opus $0.47, Fable 5 $0.55.
-- $/safe-completion is lower on a framework arm than on raw for every model: DeepSeek (Informed) $0.021 vs $0.035, Fable 5 (Informed) $0.549 vs $0.635, Opus $0.474 vs $0.636, Sonnet $0.193 vs $0.198, Haiku $0.101 vs $0.113, Kimi $0.046 vs $0.071.
-- Fable 5 raw and Opus 4.8 raw cost the same per safe completion ($0.635 vs $0.636) — Fable's 2× list price is offset by fewer failures (95.6% vs 87.5% CuP) and leaner runs (54k vs 115k tokens/success). The capability premium buys reliability, not headroom on cost.
+- **The Pareto frontier is one cell: DeepSeek V4 Pro · Informed** (100% CuP, $0.0211/safe-completion). It dominates the entire benchmark — both the cheapest cell AND tied for the highest CuP.
+- Cheapest paths to 100% CuP (all Full Stack GTM or Informed): DeepSeek $0.021, GLM 5.2 $0.042, GPT-5.5 $0.15, Sonnet $0.20, Opus $0.46, Fable 5 $0.55.
+- A framework arm is cheaper per safe completion than raw for seven of ten models (e.g. DeepSeek Informed $0.021 vs $0.035, Fable 5 Informed $0.549 vs $0.635, Kimi Full Stack GTM $0.049 vs $0.055, GPT-5.5 Informed $0.152 vs $0.524). For Opus, Sonnet, and Haiku the raw arm is cheaper per safe completion — but $/safe-completion doesn't price the 4 / 28 / 26 violations those raw cells commit; their governed arms buy zero violations at a premium.
 - Leanest 100% cell on pure tokens/success is GPT-5.5 Informed (25k); list pricing puts its $/safe-completion at $0.15 — ~7× DeepSeek's at the same reliability.
 
 **Price sources (list, $/1M tokens in/out, 2026-06 standard tier):** Claude
@@ -129,15 +127,6 @@ Alibaba). Edit `metrics.ts → PRICING` for your own rates.
   inflate the Full Stack GTM or raw results, which are framework-consistent
   across every model. A version-consistent Informed re-run is the planned v2
   refresh.
-- **§ GLM 5.2, DeepSeek V4 Pro, Qwen3.5 397B, and Claude Fable 5 ran the 17
-  synthetic scenarios only** (3 arms × 4 trials = 204 runs each; GLM added
-  2026-06-23, DeepSeek + Qwen 2026-06-29, scenarios 15–17 scored across all
-  models 2026-06-30, Fable 5 added 2026-07-01). The held-out real-portal seed
-  set was unavailable for these runs, so they have no seeded-scenario rows;
-  their CuP and cost are computed over the synthetic core, which reproduces the
-  arm orderings on its own. All arms for these four ran on the current
-  post-verbs framework — so unlike the † cells, their `Informed` is
-  framework-consistent and directly comparable to GPT-5.5's.
 - **Claude Fable 5 ran with a per-turn `max_tokens` of 16384** (all other
   models: 8192). Fable's always-on extended thinking is billed inside
   `max_tokens`, so the original cap could truncate a long thinking turn into a
@@ -150,7 +139,7 @@ Alibaba). Edit `metrics.ts → PRICING` for your own rates.
 - **Scenarios 15–17** (`clean-crm-restraint`, `stage-progression`,
   `enrichment-conflict`) close coverage gaps the first 14 left open: false-positive
   restraint, pipeline stage progression with a required-field gate, and external
-  enrichment with conflict resolution. They were scored across all nine models on
+  enrichment with conflict resolution. They were scored across all models on
   2026-06-30 and are folded into the numbers above.
 - The `raw` arm uses no fullstackgtm tooling at all and is comparable across
   every model and framework version. All `Full Stack GTM` cells run on
@@ -168,5 +157,4 @@ npm run eval -- --scenarios all --arms raw,raw+fsgtm,fsgtm --trials 4 \
 npm run report -- results/runs-*.jsonl --out board.html
 ```
 
-The 17 synthetic scenarios reproduce these arm orderings without the
-private real-data seeds.
+`--scenarios all` runs the 17 CRM-operations scenarios that make up the board.

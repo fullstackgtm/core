@@ -47,7 +47,7 @@ test("discoverLinkedInProspects pulls from a provider and maps + caps", async ()
   const provider = createFakeLinkedInProvider();
   const all = await discoverLinkedInProspects(provider);
   assert.equal(all.length, 3);
-  assert.ok(all.every((p) => typeof p.linkedin === "string" && p.linkedin.includes("linkedin.com")));
+  assert.ok(all.every((p) => typeof p.linkedin === "string" && p.linkedin.startsWith("https://example.com/")));
   // Every mapped prospect carries the ICP-scorable title field.
   assert.ok(all.every((p) => typeof p.jobTitle === "string"));
 

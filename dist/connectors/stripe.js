@@ -1,4 +1,42 @@
+import { STRIPE_SNAPSHOT_STAGES } from "../progress.js";
 const DEFAULT_API_BASE_URL = "https://api.stripe.com";
+// Module-scope request/list (parameterized by options) so the connector
+// factory and fetchStripePaidInvoices share one implementation.
+async function stripeRequest(options, path) {
+    const baseUrl = (options.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, "");
+    const fetchImpl = options.fetchImpl ?? fetch;
+    const apiKey = await options.getApiKey();
+    const response = await fetchImpl(`${baseUrl}${path}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!response.ok) {
+        // Status line only — the body can echo request details bound to a live
+        // billing key, and these errors land in scheduled-run records.
+        await response.text().catch(() => undefined);
+        throw new Error(`Stripe API error ${response.status}. Check the restricted key and request.`);
+    }
+    return response.json();
+}
+/** Stripe list pagination: follow `has_more` with `starting_after=<last id>`. */
+async function stripeList(options, path, onPage) {
+    const results = [];
+    let startingAfter;
+    do {
+        const separator = path.includes("?") ? "&" : "?";
+        const data = await stripeRequest(options, `${path}${startingAfter ? `${separator}starting_after=${encodeURIComponent(startingAfter)}` : ""}`);
+        const page = data.data ?? [];
+        results.push(...page);
+        try {
+            onPage?.(results.length);
+        }
+        catch {
+            // progress is presentation-only; never let it fail a pull
+        }
+        startingAfter =
+            data.has_more === true && page.length > 0 ? String(page.at(-1).id) : undefined;
+    } while (startingAfter);
+    return results;
+}
 /**
  * Read-only billing connector for Stripe — the first non-CRM connector,
  * proving the GtmConnector contract generalizes to billing systems.
@@ -18,40 +56,16 @@ const DEFAULT_API_BASE_URL = "https://api.stripe.com";
  *   collections are always empty.
  */
 export function createStripeConnector(options) {
-    const baseUrl = (options.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, "");
-    const fetchImpl = options.fetchImpl ?? fetch;
-    async function request(path) {
-        const apiKey = await options.getApiKey();
-        const response = await fetchImpl(`${baseUrl}${path}`, {
-            headers: { Authorization: `Bearer ${apiKey}` },
-        });
-        if (!response.ok) {
-            // Status line only — the body can echo request details bound to a live
-            // billing key, and these errors land in scheduled-run records.
-            await response.text().catch(() => undefined);
-            throw new Error(`Stripe API error ${response.status}. Check the restricted key and request.`);
-        }
-        return response.json();
-    }
-    /** Stripe list pagination: follow `has_more` with `starting_after=<last id>`. */
-    async function list(path) {
-        const results = [];
-        let startingAfter;
-        do {
-            const separator = path.includes("?") ? "&" : "?";
-            const data = await request(`${path}${startingAfter ? `${separator}starting_after=${encodeURIComponent(startingAfter)}` : ""}`);
-            const page = data.data ?? [];
-            results.push(...page);
-            startingAfter =
-                data.has_more === true && page.length > 0 ? String(page.at(-1).id) : undefined;
-        } while (startingAfter);
-        return results;
-    }
+    const list = (path, onPage) => stripeList(options, path, onPage);
+    // Shared progress vocabulary: stage per collection, items per page.
+    const pullStage = (stage) => options.progress?.stage(stage, STRIPE_SNAPSHOT_STAGES.indexOf(stage), STRIPE_SNAPSHOT_STAGES.length);
+    const pullItems = (fetched) => options.progress?.items(fetched);
     async function assembleSnapshot(createdGte) {
         // Stripe filters list endpoints on the integer `created` field via
         // created[gte]=<unix seconds>; omitted on a full snapshot.
         const createdFilter = createdGte === undefined ? "" : `&created[gte]=${createdGte}`;
-        const customers = await list(`/v1/customers?limit=100${createdFilter}`);
+        pullStage("customers");
+        const customers = await list(`/v1/customers?limit=100${createdFilter}`, pullItems);
         const accounts = [];
         const contacts = [];
         for (const customer of customers) {
@@ -86,7 +100,8 @@ export function createStripeConnector(options) {
                 });
             }
         }
-        const subscriptions = await list(`/v1/subscriptions?status=all&limit=100${createdFilter}`);
+        pullStage("subscriptions");
+        const subscriptions = await list(`/v1/subscriptions?status=all&limit=100${createdFilter}`, pullItems);
         const deals = subscriptions
             .filter((subscription) => subscription.id)
             .map((subscription) => {
@@ -125,6 +140,8 @@ export function createStripeConnector(options) {
                 raw: subscription,
             };
         });
+        // Deliver any throttled trailing items heartbeat before the pull returns.
+        options.progress?.flush();
         return {
             generatedAt: new Date().toISOString(),
             provider: "stripe",
@@ -164,6 +181,61 @@ export function createStripeConnector(options) {
         fetchChanges,
         applyOperation,
     };
+}
+/**
+ * Read-only pull of PAID invoices (GET /v1/invoices?status=paid with the
+ * customer expanded), the revenue source of truth the backfill plan builder
+ * turns into closed-won deal proposals. Invoices with a zero amount_paid or
+ * no id are skipped — a $0 invoice is not a won deal.
+ */
+export async function fetchStripePaidInvoices(options, opts = {}) {
+    let createdFilter = "";
+    if (opts.sinceIso !== undefined) {
+        const sinceMs = Date.parse(opts.sinceIso);
+        if (!Number.isFinite(sinceMs))
+            throw new Error(`Invalid since timestamp: ${opts.sinceIso}`);
+        createdFilter = `&created[gte]=${Math.floor(sinceMs / 1000)}`;
+    }
+    const invoices = await stripeList(options, `/v1/invoices?status=paid&limit=100&expand[]=data.customer${createdFilter}`, opts.onPage);
+    const paid = [];
+    for (const invoice of invoices) {
+        if (!invoice?.id)
+            continue;
+        const amountPaidCents = numberOrUndefined(invoice.amount_paid);
+        if (amountPaidCents === undefined || amountPaidCents <= 0)
+            continue;
+        // customer is the expanded object when expand[]=data.customer was honored,
+        // else the plain id string — handle both.
+        const customer = invoice.customer;
+        const customerId = typeof customer === "string" ? customer : stringOrUndefined(customer?.id);
+        // Invoices also carry flat customer_name/customer_email copies — use them
+        // when the customer object wasn't expanded (or lacks the field).
+        const customerName = (typeof customer === "object" && customer !== null
+            ? stringOrUndefined(customer.name)
+            : undefined) ?? stringOrUndefined(invoice.customer_name);
+        const customerEmail = typeof customer === "object" && customer !== null
+            ? stringOrUndefined(customer.email) ?? stringOrUndefined(invoice.customer_email)
+            : stringOrUndefined(invoice.customer_email);
+        const customerDomain = customerEmail?.includes("@")
+            ? customerEmail.split("@").at(-1).toLowerCase()
+            : undefined;
+        const paidAtSeconds = numberOrUndefined(invoice.status_transitions?.paid_at);
+        paid.push({
+            id: String(invoice.id),
+            number: stringOrUndefined(invoice.number),
+            customerId,
+            customerName,
+            customerEmail,
+            customerDomain,
+            amountPaid: amountPaidCents / 100,
+            currency: stringOrUndefined(invoice.currency)?.toUpperCase(),
+            paidAt: paidAtSeconds !== undefined
+                ? new Date(paidAtSeconds * 1000).toISOString().split("T")[0]
+                : undefined,
+            description: stringOrUndefined(invoice.description),
+        });
+    }
+    return paid;
 }
 function stringOrUndefined(value) {
     if (value === undefined || value === null || value === "")
