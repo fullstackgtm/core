@@ -7,6 +7,36 @@ The path to 1.0 is planned in the roadmap doc in the repository.
 
 ## [Unreleased]
 
+### Added
+
+- Added `GtmAuditRule.emitsOperations` and `isFindingsOnlyRule` so hosts can derive findings-only rule behavior from the package registry instead of duplicating rule IDs.
+- **Route, hierarchy, and relationships open surfaces.** `route leads` builds governed lead-to-account/owner patch plans; `hierarchy report` and `relationships account` provide read-only planning reports for account trees and stakeholder maps.
+
+### Changed
+
+- **CLI human path now uses progressive disclosure by default.** Bare
+  `fullstackgtm`/`--help` shows a compact lifecycle-grouped command map instead
+  of the full flag wall; `help <command>` and `<command> --help` show focused
+  per-command guidance; `help --full` (including `help <command> --full`) keeps
+  the complete reference available. `audit` now defaults to a summary view with
+  `--full` for per-operation detail and prints next-step guidance on stderr for
+  human runs while keeping `--json` machine-clean. The dry-run footer now frames
+  approval/write safety as invariants rather than prototype copy.
+- **Patch-plan assumptions and open questions are canonical.** Plan exports and
+  markdown use `assumptions` plus `openQuestions`; the duplicate
+  `decisionPoints` alias was removed.
+
+### Fixed
+
+- **Route plan safety and batching.** Owner routing recognizes both canonical
+  user ids and provider CRM owner ids, skips name-only account matches as
+  ambiguous, avoids self-conflicting sibling preconditions, groups only contacts
+  with multiple operations, and uses one shared free-email domain list.
+- **Hierarchy and relationships correctness.** Hierarchy reports dedupe duplicate
+  account ids, avoid common public-suffix parent guesses, and rely on a single
+  cycle-dedupe pass. Relationship `--domain` selectors normalize domains and
+  markdown preserves zero-value deal amounts.
+
 ## [0.47.0] — 2026-07-06
 
 ### Added

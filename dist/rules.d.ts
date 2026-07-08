@@ -34,4 +34,5 @@ export declare const duplicateOpenDealRule: GtmAuditRule;
 export declare const activeDealAccountWithoutContactsRule: GtmAuditRule;
 export declare const closingSoonInactiveRule: GtmAuditRule;
 export declare const accountSingleSourceRule: GtmAuditRule;
+export declare function isFindingsOnlyRule(rule: GtmAuditRule): boolean;
 export declare const builtinAuditRules: GtmAuditRule[];

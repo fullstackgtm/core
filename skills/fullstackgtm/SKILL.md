@@ -94,7 +94,7 @@ Tools over stdio: `fullstackgtm_audit` (read-only), `fullstackgtm_rules`,
 This CLI ships governed **primitives** — there is no `outbound` mega-command.
 **You (the agent) are the orchestrator:** chain these verbs into the play the
 operator wants, surface the one approve gate, and bridge the last mile to the
-sender (**the package never sends**). [docs/recipes.md](https://github.com/fullstackgtm/core/blob/main/packages/fullstackgtm/docs/recipes.md)
+sender (**the package never sends**). [docs/recipes.md](https://github.com/fullstackgtm/core/blob/main/docs/recipes.md)
 has five worked plays — cold-start lead-fill, the trigger→judge→draft outbound
 loop, scheduled-continuous, ABM-from-companies, and hygiene-gated outbound.
 `fullstackgtm init` scaffolds a workspace (icp.json + enrich config + a PLAYBOOK
@@ -102,7 +102,7 @@ pointing at those recipes) to start from.
 
 ## Going deeper
 
-- [docs/recipes.md](https://github.com/fullstackgtm/core/blob/main/packages/fullstackgtm/docs/recipes.md) — five composable GTM plays over the primitives (cold-start, outbound loop, scheduled, ABM, hygiene-gated)
+- [docs/recipes.md](https://github.com/fullstackgtm/core/blob/main/docs/recipes.md) — five composable GTM plays over the primitives (cold-start, outbound loop, scheduled, ABM, hygiene-gated)
 - [llms.txt](https://github.com/fullstackgtm/core/blob/main/llms.txt) — the full invariant map per layer (calls, market, write verbs, enrich, schedule, engagement/health)
 - [INSTALL_FOR_AGENTS.md](https://github.com/fullstackgtm/core/blob/main/INSTALL_FOR_AGENTS.md) — deterministic install-and-verify with expected outputs
 - [docs/api.md](https://github.com/fullstackgtm/core/blob/main/docs/api.md) — semver-covered surfaces: canonical model, rule interface, plan/apply contract, connectors, config, CLI, MCP

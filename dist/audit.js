@@ -33,6 +33,7 @@ export function auditSnapshot(snapshot, policy = defaultPolicy(), rules = builti
     const context = { snapshot, policy, index: buildSnapshotIndex(snapshot) };
     const findings = [];
     const operations = [];
+    const assumptionsById = new Map();
     for (const rule of rules) {
         try {
             onRule?.(rule.id, "start");
@@ -43,6 +44,10 @@ export function auditSnapshot(snapshot, policy = defaultPolicy(), rules = builti
         const result = rule.evaluate(context);
         findings.push(...result.findings);
         operations.push(...result.operations);
+        for (const assumption of result.assumptions ?? []) {
+            if (!assumptionsById.has(assumption.id))
+                assumptionsById.set(assumption.id, assumption);
+        }
         try {
             onRule?.(rule.id, "done", result.findings.length);
         }
@@ -50,6 +55,7 @@ export function auditSnapshot(snapshot, policy = defaultPolicy(), rules = builti
             // progress is presentation-only
         }
     }
+    const assumptions = Array.from(assumptionsById.values());
     const evidence = buildEvidence(snapshot, findings, policy.today);
     const pipelineFindings = buildPipelineFindings(findings, operations, evidence, policy.today);
     linkOperationContext(operations, findings, evidence);
@@ -63,6 +69,7 @@ export function auditSnapshot(snapshot, policy = defaultPolicy(), rules = builti
         findings,
         pipelineFindings,
         evidence,
+        assumptions: assumptions.length > 0 ? assumptions : undefined,
         operations,
     };
 }

@@ -69,7 +69,8 @@ release.
 Commands: `init`, `login` / `logout`, `snapshot`, `audit`, `report`, `diff`, `merge`, `plans`,
 `apply`, `suggest`, `audit-log` (`export` / `verify`),
 `call` (`parse` / `classify` / `score` / `link` / `plan`), `resolve`,
-`bulk-update`, `dedupe`, `reassign`, `fix`, `health`,
+`hierarchy` (`report`), `relationships` (`account`),
+`route` (`leads`), `bulk-update`, `dedupe`, `reassign`, `fix`, `health`,
 `market` (`init` / `capture` / `classify` / `worksheet` / `observe` / `fronts` /
 `axes` / `overlay` / `scale` / `report` / `refresh`),
 `tam` (`estimate` / `accounts` / `status` / `report` / `populate`),
@@ -160,8 +161,8 @@ per-rule detail with capped examples, and next steps. `auditReportToMarkdown` /
 
 ## Governed write verbs
 
-Plan builders behind `bulk-update`, `dedupe`, and `reassign` — every one
-emits a standard dry-run `PatchPlan` for the normal approve → apply chain:
+Plan builders behind `route`, `bulk-update`, `dedupe`, and `reassign` — every
+one emits a standard dry-run `PatchPlan` for the normal approve → apply chain:
 
 - `buildBulkUpdatePlan(snapshot, options: BulkUpdateOptions)` with
   `parseWhere` (filter expressions: `=`, `!=`, `~`, `!~`, `:empty`,
@@ -179,6 +180,22 @@ emits a standard dry-run `PatchPlan` for the normal approve → apply chain:
   `assignUnowned` (CLI `--assign-unowned`) it targets ownerless records
   (`ownerId:empty`) and claims them for `--to` — the backfill twin of
   `enrich acquire`'s create-time assignment, for clearing existing ownerless debt.
+- `buildLeadRoutePlan(snapshot, options: LeadRouteOptions)` — matches contacts
+  to accounts by email domain and optional company-name fallback, skips free
+  email domains and ambiguous matches, then emits approval-gated account-link
+  and owner-assignment operations. Owner routing can inherit active account
+  owners for ownerless contacts or use the shared deterministic
+  `AssignmentPolicy`; existing owners are preserved unless
+  `reassignExistingOwner` (CLI `--reassign-owned`) is set.
+
+Read-only prevention reports:
+
+- `buildAccountHierarchy(snapshot)` / `accountHierarchyToMarkdown(report)` —
+  provider parent hints plus subdomain inference, with duplicate-domain,
+  ambiguous-parent, and parent-cycle conflicts surfaced rather than written.
+- `buildRelationshipMap(snapshot, { accountId | domain })` /
+  `relationshipMapToMarkdown(map)` — account stakeholders, inferred roles,
+  activity sentiment evidence, open deals, and missing-role gaps.
 
 `fix` is CLI-only composition of existing surfaces (audit → suggest →
 approve → apply for one rule).

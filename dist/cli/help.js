@@ -46,6 +46,12 @@ Usage:
   fullstackgtm resolve <account|contact|deal> [--name N] [--domain D] [--email E] [--account-id A] [source options] [--json]
                                                the create gate: exit 0 = safe to create, exit 2 = match
                                                found (exists/ambiguous) — call before ANY record creation
+  fullstackgtm route leads [source options] [--match domain|company|both] [--no-inherit-owner] [--reassign-owned] [--policy <json|path>] [--save|--json|--out <path>]
+                                               lead-to-account matching + owner routing as a governed plan
+  fullstackgtm hierarchy report [source options] [--json|--out <path>]
+                                               account hierarchy view from native parents + subdomains
+  fullstackgtm relationships account (--account-id <id>|--domain <d>) [source options] [--json|--out <path>]
+                                               relationship map from contacts, deals, and activity evidence
   fullstackgtm market init --category <name>   start a market map: vendors + claim taxonomy as reviewable config
   fullstackgtm market capture [--config <path>] [--run <label>]
   fullstackgtm market classify [--run <label>] [--vendor <id>] [--model m] [--out <path>]
@@ -386,7 +392,28 @@ export const HELP = {
         detail: "Prevention, not cleanup. Call before ANY record creation — a sync job, webhook, agent, or script. Returns exists/ambiguous/safe_to_create with matches and reasons; exit 2 = do not create.",
         seeAlso: ["dedupe", "audit"],
     },
+    hierarchy: {
+        summary: "account hierarchy report (native parents + subdomain inference)",
+        phase: "Prevent",
+        synopsis: ["fullstackgtm hierarchy report [source options] [--json|--out <path>]"],
+        detail: "Builds a report-only account tree from provider-native parent ids (when present in raw payloads) and deterministic subdomain inference. It surfaces duplicate-domain and ambiguous-parent conflicts instead of guessing writes.",
+        seeAlso: ["route", "relationships"],
+    },
+    relationships: {
+        summary: "relationship map for an account from contacts/deals/activity evidence",
+        phase: "Prevent",
+        synopsis: ["fullstackgtm relationships account (--account-id <id>|--domain <d>) [source options] [--json|--out <path>]"],
+        detail: "Builds a stakeholder map with inferred buyer roles, sentiment from activity subjects, open deals, and missing-role gaps. Read-only evidence surface; no CRM writes.",
+        seeAlso: ["call", "route"],
+    },
     // Remediate — governed writes (all produce plans; nothing writes outside approve → apply)
+    route: {
+        summary: "lead-to-account matching and owner routing plan",
+        phase: "Remediate",
+        synopsis: ["fullstackgtm route leads [source options] [--match domain|company|both] [--no-inherit-owner] [--reassign-owned] [--policy <json|path>] [--save|--json|--out <path>]"],
+        detail: "Matches contact-shaped leads to accounts by domain and/or company name, inherits account owners (or applies an assignment policy), and emits every change as a dry-run patch plan for approve → apply. Ambiguous matches are surfaced, never guessed.",
+        seeAlso: ["resolve", "reassign"],
+    },
     fix: {
         summary: "one-shot composite: audit one rule → suggest → approve → apply",
         phase: "Remediate",
@@ -565,9 +592,9 @@ export function shortUsage() {
     const groups = [
         ["Get started", ["init"]],
         ["Setup & health", ["login", "logout", "doctor", "capabilities", "robot-docs", "profiles", "health"]],
-        ["Detect — read-only", ["audit", "report", "snapshot", "diff", "rules"]],
+        ["Detect — read-only", ["audit", "report", "snapshot", "diff", "rules", "hierarchy", "relationships"]],
         ["Prevent — gate writes", ["resolve"]],
-        ["Remediate — governed writes", ["fix", "bulk-update", "dedupe", "reassign", "enrich", "backfill"]],
+        ["Remediate — governed writes", ["fix", "bulk-update", "dedupe", "reassign", "route", "enrich", "backfill"]],
         ["Calls → evidence", ["call"]],
         ["Govern — the plan/apply spine", ["suggest", "plans", "apply", "audit-log", "merge"]],
         ["Market intelligence", ["market", "tam"]],

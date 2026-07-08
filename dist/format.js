@@ -1,8 +1,7 @@
-// `summary: true` renders only the header + the Findings-by-Rule table + an
-// operation count, for read verbs like `audit` where the full per-operation
-// dump (1,400+ lines on a real portal) buries the signal. Defaults to the full
-// view so write-preview callers (bulk-update, fix, dedupe, plans show, MCP) —
-// where you approve specific operations — keep every operation's detail.
+// `summary: true` renders the compact audit view: header, findings summary,
+// assumptions/open questions, and an operation count. Defaults to the full view
+// so write-preview callers (bulk-update, fix, dedupe, plans show, MCP) — where
+// you approve specific operations — keep every operation's detail.
 export function patchPlanToMarkdown(plan, opts = {}) {
     const lines = [
         `# ${plan.title}`,
@@ -25,6 +24,7 @@ export function patchPlanToMarkdown(plan, opts = {}) {
         });
         lines.push("");
     }
+    appendAssumptionsAndDecisionPoints(lines, plan);
     if (opts.summary) {
         const ops = plan.operations.length;
         lines.push(ops === 0
@@ -95,6 +95,32 @@ export function formatPatchPlanRun(run) {
         }
     }
     return `${lines.join("\n")}\n`;
+}
+function appendAssumptionsAndDecisionPoints(lines, plan) {
+    const assumptions = [...(plan.assumptions ?? [])].sort((left, right) => {
+        if (left.confidence === "guess" && right.confidence !== "guess")
+            return -1;
+        if (left.confidence !== "guess" && right.confidence === "guess")
+            return 1;
+        return 0;
+    });
+    const openQuestions = plan.openQuestions ?? [];
+    if (assumptions.length === 0 && openQuestions.length === 0)
+        return;
+    lines.push("## Assumptions & decision points", "");
+    for (const assumption of assumptions) {
+        const warning = assumption.confidence === "guess" ? "⚠️ " : "";
+        lines.push(`- ${warning}${assumption.text}${assumption.source ? ` _(source: ${assumption.source})_` : ""}`);
+    }
+    if (openQuestions.length > 0) {
+        if (assumptions.length > 0)
+            lines.push("");
+        lines.push("### Open questions", "");
+        for (const question of openQuestions) {
+            lines.push(`- ${question}`);
+        }
+    }
+    lines.push("");
 }
 function formatValue(value) {
     if (value === undefined || value === null || value === "")

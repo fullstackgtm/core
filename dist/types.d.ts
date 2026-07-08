@@ -58,6 +58,13 @@ export type CreateRecordPayload = {
     dealPipeline?: string;
 };
 export type AuditFindingSeverity = "info" | "warning" | "critical";
+export type PatchPlanAssumptionConfidence = "derived" | "heuristic" | "guess";
+export type PatchPlanAssumption = {
+    id: string;
+    text: string;
+    source?: string;
+    confidence?: PatchPlanAssumptionConfidence;
+};
 /**
  * One claim that a canonical record exists in an external system. A record
  * merged from several providers carries one identity per provider.
@@ -323,6 +330,10 @@ export type PatchPlan = {
      *  Account/contact hygiene findings are NOT here; read `findings` for those. */
     pipelineFindings?: PipelineFinding[];
     evidence?: GtmEvidence[];
+    /** Assumptions used to turn audit observations into findings and operations. */
+    assumptions?: PatchPlanAssumption[];
+    /** Human decisions or unresolved questions that affect how the plan should be applied. */
+    openQuestions?: string[];
     operations: PatchOperation[];
     /**
      * The filter this plan's operations were selected by. Re-evaluated per
@@ -374,6 +385,8 @@ export type GtmRuleContext = {
 export type GtmRuleResult = {
     findings: AuditFinding[];
     operations: PatchOperation[];
+    /** Rule-level assumptions that explain the policy or heuristic behind returned findings. */
+    assumptions?: PatchPlanAssumption[];
 };
 /**
  * A deterministic audit rule. Rules read the snapshot through the context and
@@ -385,6 +398,8 @@ export type GtmAuditRule = {
     description: string;
     /** Grouping for docs and discovery, e.g. "hygiene", "forecast", "coverage". */
     category?: string;
+    /** False for findings-only rules whose evaluator intentionally emits no patch operations. */
+    emitsOperations?: boolean;
     evaluate: (context: GtmRuleContext) => GtmRuleResult;
 };
 export type PatchOperationResult = {

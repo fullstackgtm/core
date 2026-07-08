@@ -60,10 +60,14 @@ test("<verb> --help gives focused per-command help, not the global wall", async 
   assert.match(await capture(["audit", "--help", "--full"]), /Authentication \(checked in order\)/);
 });
 
-test("help <verb> renders the same focused entry", async () => {
+test("help <verb> renders the same focused entry, with --full as a global escape hatch", async () => {
   const out = await capture(["help", "resolve"]);
   assert.match(out, /^fullstackgtm resolve —/);
   assert.match(out, /Lifecycle phase: Prevent/);
+
+  const full = await capture(["help", "resolve", "--full"]);
+  assert.match(full, /Authentication \(checked in order\)/);
+  assert.doesNotMatch(full, /^fullstackgtm resolve —/);
 });
 
 test("unknown verb --help falls back to the short map instead of dead-ending", async () => {

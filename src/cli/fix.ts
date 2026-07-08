@@ -1,6 +1,6 @@
 // Extracted verbatim from src/cli.ts (mechanical split, no behavior change).
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { auditSnapshot, defaultPolicy } from "../audit.ts";
 import { loadConfig, mergePolicy, resolveConfiguredRules } from "../config.ts";
@@ -8,6 +8,10 @@ import { applyPatchPlan } from "../connector.ts";
 import { patchPlanToMarkdown } from "../format.ts";
 import { createFilePlanStore } from "../planStore.ts";
 import { resolveRecord, type ResolveCandidate } from "../resolve.ts";
+import { parseAssignmentPolicy } from "../assign.ts";
+import { buildLeadRoutePlan } from "../route.ts";
+import { accountHierarchyToMarkdown, buildAccountHierarchy } from "../hierarchy.ts";
+import { buildRelationshipMap, relationshipMapToMarkdown } from "../relationships.ts";
 import { buildBulkUpdatePlan } from "../bulkUpdate.ts";
 import { buildDedupePlan, type DedupeOptions } from "../dedupe.ts";
 import { buildReassignPlans, type ReassignObjectType } from "../reassign.ts";
@@ -370,4 +374,67 @@ function snapshotSourceHint(args: string[]) {
   const input = option(args, "--input");
   if (input) return `--input ${input} `;
   return "";
+}
+
+function parseJsonOrFile(value: string): unknown {
+  const candidate = resolve(process.cwd(), value);
+  const text = existsSync(candidate) ? readFileSync(candidate, "utf8") : value;
+  return JSON.parse(text);
+}
+
+export async function routeCommand(args: string[]) {
+  const [subcommand, ...rest] = args;
+  if (subcommand !== "leads") {
+    throw new Error("Usage: fullstackgtm route leads [source options] [--match domain|company|both] [--no-inherit-owner] [--reassign-owned] [--policy <json|path>] [--save] [--json] [--out <path>]");
+  }
+  const match = option(rest, "--match") ?? "domain";
+  if (!["domain", "company", "both"].includes(match)) throw new Error("--match must be domain, company, or both");
+  const policyRaw = option(rest, "--policy");
+  const snapshot = await readSnapshot(rest);
+  const result = buildLeadRoutePlan(snapshot, {
+    matchByDomain: match === "domain" || match === "both",
+    matchByCompanyName: match === "company" || match === "both",
+    inheritAccountOwner: !rest.includes("--no-inherit-owner"),
+    reassignExistingOwner: rest.includes("--reassign-owned"),
+    assignmentPolicy: policyRaw ? parseAssignmentPolicy(parseJsonOrFile(policyRaw)) : undefined,
+    maxOperations: numericOption(rest, "--max-operations"),
+    reason: option(rest, "--reason") ?? undefined,
+  });
+  if (rest.includes("--json")) {
+    const out = option(rest, "--out");
+    if (out) writeFileSync(resolve(process.cwd(), out), `${JSON.stringify(result.plan, null, 2)}\n`);
+    if (saveRequested(rest)) await createFilePlanStore().save(result.plan);
+    console.error(`Route dry-run: ${JSON.stringify(result.counts)}`);
+    console.log(JSON.stringify({ counts: result.counts, plan: result.plan }, null, 2));
+    return;
+  }
+  console.error(
+    `Route dry-run: ${result.counts.linkOperations} link(s), ${result.counts.ownerOperations} owner assignment(s), ${result.counts.ambiguousAccountMatches} ambiguous match(es).`,
+  );
+  await emitPlan(result.plan, rest);
+}
+
+export async function hierarchyCommand(args: string[]) {
+  const [subcommand, ...rest] = args;
+  if (subcommand !== "report") throw new Error("Usage: fullstackgtm hierarchy report [source options] [--json|--out <path>]");
+  const snapshot = await readSnapshot(rest);
+  const report = buildAccountHierarchy(snapshot);
+  const out = option(rest, "--out");
+  const rendered = rest.includes("--json") ? `${JSON.stringify(report, null, 2)}\n` : `${accountHierarchyToMarkdown(report)}\n`;
+  if (out) writeFileSync(resolve(process.cwd(), out), rendered);
+  console.log(rendered.trimEnd());
+}
+
+export async function relationshipsCommand(args: string[]) {
+  const [subcommand, ...rest] = args;
+  if (subcommand !== "account") throw new Error("Usage: fullstackgtm relationships account (--account-id <id>|--domain <d>) [source options] [--json|--out <path>]");
+  const accountId = option(rest, "--account-id") ?? undefined;
+  const domain = option(rest, "--domain") ?? undefined;
+  if (!accountId && !domain) throw new Error("relationships account needs --account-id <id> or --domain <domain>");
+  const snapshot = await readSnapshot(rest);
+  const map = buildRelationshipMap(snapshot, { accountId, domain });
+  const out = option(rest, "--out");
+  const rendered = rest.includes("--json") ? `${JSON.stringify(map, null, 2)}\n` : `${relationshipMapToMarkdown(map)}\n`;
+  if (out) writeFileSync(resolve(process.cwd(), out), rendered);
+  console.log(rendered.trimEnd());
 }

@@ -21,6 +21,7 @@ import type {
   PatchPlan,
 } from "./types.ts";
 import type { StripePaidInvoice } from "./connectors/stripe.ts";
+import { FREE_EMAIL_DOMAINS } from "./freeEmailDomains.ts";
 import { normalizeDomain } from "./merge.ts";
 
 // Mirrors stableHash in rules.ts (FNV-1a); duplicated to keep backfill.ts
@@ -35,22 +36,6 @@ function fnv1a(value: string): string {
 }
 
 export const DEFAULT_BACKFILL_MATCH_PROPERTY = "stripe_invoice_id";
-
-// Freemail domains never become a company domain: stamping "gmail.com" on an
-// account (or resolving a company BY gmail.com) would collapse unrelated
-// customers onto one record. Mirrors FREE_MAIL in connectors/signalSources.ts
-// (duplicated to keep backfill.ts importable without connector code, the
-// fnv1a precedent above).
-const FREE_MAIL = new Set([
-  "gmail.com",
-  "yahoo.com",
-  "hotmail.com",
-  "outlook.com",
-  "icloud.com",
-  "aol.com",
-  "proton.me",
-  "protonmail.com",
-]);
 
 export type StripeBackfillOptions = {
   /** Pipeline id or case-insensitive label; absent = the portal's default pipeline. */
@@ -183,7 +168,7 @@ export function buildStripeBackfillPlan(
     let companyDomain = normalizeDomain(account?.domain);
     let accountIsNew = false;
     if (!account && createMissingAccounts) {
-      const usableDomain = domain && !FREE_MAIL.has(domain) ? domain : undefined;
+      const usableDomain = domain && !FREE_EMAIL_DOMAINS.has(domain) ? domain : undefined;
       const name = invoice.customerName?.trim() || usableDomain;
       if (name) {
         companyName = name;

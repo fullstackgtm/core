@@ -32,9 +32,9 @@ already do the right thing. Cohesion here = make every verb behave like
 
 ## Fix sequence (highest leverage first)
 
-### 1. Progressive-disclosure help — IN PROGRESS
-Fixes **F1, F3**. The full `usage()` becomes the explicit full reference
-(`fullstackgtm help --full`). Add:
+### 1. Progressive-disclosure help — DONE
+Fixes **F1, F3**. The full `usage()` is now the explicit full reference
+(`fullstackgtm help --full`). Added:
 - `shortUsage()` — a ~30-line map of the verbs grouped by lifecycle phase
   (Setup · Detect · Prevent · Remediate · Calls · Govern · Market · Schedule),
   one line each, ending with `<command> --help` and `help --full` pointers.

@@ -9,6 +9,7 @@ import type {
   PipelineFindingType,
   PatchOperation,
   PatchPlan,
+  PatchPlanAssumption,
   SourceFreshness,
 } from "./types.ts";
 
@@ -53,6 +54,7 @@ export function auditSnapshot(
   const context = { snapshot, policy, index: buildSnapshotIndex(snapshot) };
   const findings: AuditFinding[] = [];
   const operations: PatchOperation[] = [];
+  const assumptionsById = new Map<string, PatchPlanAssumption>();
 
   for (const rule of rules) {
     try {
@@ -63,6 +65,9 @@ export function auditSnapshot(
     const result = rule.evaluate(context);
     findings.push(...result.findings);
     operations.push(...result.operations);
+    for (const assumption of result.assumptions ?? []) {
+      if (!assumptionsById.has(assumption.id)) assumptionsById.set(assumption.id, assumption);
+    }
     try {
       onRule?.(rule.id, "done", result.findings.length);
     } catch {
@@ -70,6 +75,7 @@ export function auditSnapshot(
     }
   }
 
+  const assumptions = Array.from(assumptionsById.values());
 
   const evidence = buildEvidence(snapshot, findings, policy.today);
   const pipelineFindings = buildPipelineFindings(findings, operations, evidence, policy.today);
@@ -85,6 +91,7 @@ export function auditSnapshot(
     findings,
     pipelineFindings,
     evidence,
+    assumptions: assumptions.length > 0 ? assumptions : undefined,
     operations,
   };
 }

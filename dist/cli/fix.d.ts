@@ -31,3 +31,6 @@ export declare function reassignCommand(args: string[]): Promise<void>;
  */
 export declare function fixCommand(args: string[]): Promise<void>;
 export declare function suggest(args: string[]): Promise<void>;
+export declare function routeCommand(args: string[]): Promise<void>;
+export declare function hierarchyCommand(args: string[]): Promise<void>;
+export declare function relationshipsCommand(args: string[]): Promise<void>;

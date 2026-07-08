@@ -54,6 +54,11 @@ test("fullstackgtm audit emits dry-run findings and patch operations", () => {
       "stale-deal",
     ],
   );
+  assert.ok(plan.assumptions?.some((assumption) => assumption.id === "open-deal-derived-from-closed-won-flags"));
+  assert.equal(
+    plan.assumptions?.filter((assumption) => assumption.id === "open-deal-derived-from-closed-won-flags").length,
+    1,
+  );
 });
 
 test("fullstackgtm stale deal policy is configurable", () => {

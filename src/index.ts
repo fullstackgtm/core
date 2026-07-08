@@ -13,6 +13,27 @@ export { buildBulkUpdatePlan, isFilterableField, parseWhere, type BulkUpdateOpti
 export { buildDedupePlan, dedupeKey, type DedupeOptions } from "./dedupe.ts";
 export { buildReassignPlans, type ReassignObjectType, type ReassignOptions } from "./reassign.ts";
 export {
+  buildLeadRoutePlan,
+  type LeadRouteCounts,
+  type LeadRouteOptions,
+  type LeadRouteResult,
+} from "./route.ts";
+export {
+  accountHierarchyToMarkdown,
+  buildAccountHierarchy,
+  type AccountHierarchyConflict,
+  type AccountHierarchyNode,
+  type AccountHierarchyReport,
+} from "./hierarchy.ts";
+export {
+  buildRelationshipMap,
+  relationshipMapToMarkdown,
+  type RelationshipMap,
+  type StakeholderNode,
+  type StakeholderRole,
+  type StakeholderSentiment,
+} from "./relationships.ts";
+export {
   CONFIG_FILE_NAME,
   loadConfig,
   mergePolicy,
@@ -209,6 +230,7 @@ export {
   type AuditLogExport,
   type AuditLogVerification,
 } from "./auditLog.ts";
+export { FREE_EMAIL_DOMAINS } from "./freeEmailDomains.ts";
 export { formatPatchPlanRun, patchPlanToMarkdown } from "./format.ts";
 export {
   computeHealth,
@@ -236,6 +258,7 @@ export {
   buildSnapshotIndex,
   builtinAuditRules,
   closingSoonInactiveRule,
+  isFindingsOnlyRule,
   duplicateAccountDomainRule,
   duplicateContactEmailRule,
   duplicateOpenDealRule,
@@ -540,6 +563,8 @@ export type {
   PatchOperationResult,
   PatchOperationType,
   PatchPlan,
+  PatchPlanAssumption,
+  PatchPlanAssumptionConfidence,
   PatchPlanRun,
   PatchPlanRunStatus,
   PatchVerification,

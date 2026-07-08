@@ -2,19 +2,21 @@
 
 [![CI](https://github.com/fullstackgtm/core/actions/workflows/ci.yml/badge.svg)](https://github.com/fullstackgtm/core/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/fullstackgtm)](https://www.npmjs.com/package/fullstackgtm) [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
 
-**Plan/apply for your GTM stack.** An open-source framework for managing disparate go-to-market data spread across third-party systems: a canonical CRM/GTM data model, deterministic hygiene audits, reviewable dry-run patch plans, and approval-gated write-back to providers.
+**Guardrails for AI agents working in your CRM.**
 
-Think `terraform plan` for your CRM: agents and scripts may *read* everything, but every proposed change becomes a typed patch operation — object, field, before, after, reason, risk — that a human approves before any provider write happens.
+Let Claude or Codex loose on Salesforce or HubSpot and it will make predictable mistakes — duplicates, bad batch edits, silent overwrites. fullstackgtm is the wrapper that knows those mistakes: every change becomes a reviewable plan before anything is written.
 
-Licensed under [Apache-2.0](./LICENSE). The boundary is deliberate and stable: the framework, CLI, and MCP server are open source; the hosted Full Stack GTM application (dashboard, sync backend, broker service, team workflows) is a separate, proprietary product built on top of this package. Features never move from open to closed. See [CONTRIBUTING.md](./CONTRIBUTING.md) for how development and mirroring work.
+Instead of overwriting records, an agent using fullstackgtm sets out a **patch plan**: what it wants to change, field by field, with before/after values and the reason. You review it, roll it out incrementally (approve 10 operations, then 100, then all), and every write records the before value — so a mistake is visible and reversible, not silently absorbed. Think `terraform plan` for your CRM.
 
-**Status: beta (0.x).** The surfaces in [docs/api.md](./docs/api.md) — the canonical model, rule interface, plan/apply contract, connector contract, merge/diff, config, CLI, and MCP tools — are settling but may still break in minor releases until 1.0. The safety invariants (read-only audits, approval-gated writes, placeholder refusal) are not beta and do not change. Connectors: HubSpot (read/write), Salesforce (read/write), Stripe (read-only billing).
+**What it catches:** duplicates, orphaned records, bad batch edits, stale deals, missing owners — deterministic rules, not LLM guesses. Works as a CLI, a library, or an MCP server your agent calls directly.
+
+Open source (Apache-2.0), zero runtime dependencies. Beta (0.x): APIs may shift before 1.0; the safety invariants never do. Connectors: HubSpot, Salesforce (read/write), Stripe (read-only).
 
 ## Install
 
 ```bash
+npx fullstackgtm audit --demo               # zero-install try-it path
 npm install fullstackgtm                    # library + CLI in a project
-npx fullstackgtm audit --demo               # or zero-install via npx
 npm install github:fullstackgtm/core        # or straight from this repo (project-local)
 npx github:fullstackgtm/core audit --demo   # zero-install from the repo
 ```
@@ -546,6 +548,12 @@ Tokens stored via `fullstackgtm login` are picked up automatically — the env v
 1. Reads are safe by default; audits never mutate anything.
 2. Every proposed write is a typed patch operation with before/after values, a reason, and a risk level.
 3. `applyPatchPlan` enforces the contract for all connectors: only explicitly approved operation ids are written, placeholders require concrete override values, and every attempt produces a per-operation result record.
+
+## License & boundary
+
+Licensed under [Apache-2.0](./LICENSE). The boundary is deliberate and stable: the framework, CLI, and MCP server are open source; the hosted Full Stack GTM application (dashboard, sync backend, broker service, team workflows) is a separate, proprietary product built on top of this package. Features never move from open to closed. See [CONTRIBUTING.md](./CONTRIBUTING.md) for how development and mirroring work.
+
+The surfaces in [docs/api.md](./docs/api.md) — the canonical model, rule interface, plan/apply contract, connector contract, merge/diff, config, CLI, and MCP tools — are settling but may still break in minor releases until 1.0. The safety invariants (read-only audits, approval-gated writes, placeholder refusal) are not beta and do not change.
 
 ## Development
 

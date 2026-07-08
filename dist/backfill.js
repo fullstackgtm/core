@@ -11,6 +11,7 @@
  * connector re-resolves each invoice id (resolve-first) and creates only on
  * a confirmed miss.
  */
+import { FREE_EMAIL_DOMAINS } from "./freeEmailDomains.js";
 import { normalizeDomain } from "./merge.js";
 // Mirrors stableHash in rules.ts (FNV-1a); duplicated to keep backfill.ts
 // importable without pulling the audit engine (the enrich.ts precedent).
@@ -23,21 +24,6 @@ function fnv1a(value) {
     return (hash >>> 0).toString(16).padStart(8, "0");
 }
 export const DEFAULT_BACKFILL_MATCH_PROPERTY = "stripe_invoice_id";
-// Freemail domains never become a company domain: stamping "gmail.com" on an
-// account (or resolving a company BY gmail.com) would collapse unrelated
-// customers onto one record. Mirrors FREE_MAIL in connectors/signalSources.ts
-// (duplicated to keep backfill.ts importable without connector code, the
-// fnv1a precedent above).
-const FREE_MAIL = new Set([
-    "gmail.com",
-    "yahoo.com",
-    "hotmail.com",
-    "outlook.com",
-    "icloud.com",
-    "aol.com",
-    "proton.me",
-    "protonmail.com",
-]);
 /** `Invoice <number || id> — <customer name>` (the plan-time dedupe name). */
 function backfillDealName(invoice, companyName) {
     return `Invoice ${invoice.number ?? invoice.id} — ${invoice.customerName ?? companyName}`;
@@ -102,7 +88,7 @@ export function buildStripeBackfillPlan(invoices, snapshot, opts = {}) {
         let companyDomain = normalizeDomain(account?.domain);
         let accountIsNew = false;
         if (!account && createMissingAccounts) {
-            const usableDomain = domain && !FREE_MAIL.has(domain) ? domain : undefined;
+            const usableDomain = domain && !FREE_EMAIL_DOMAINS.has(domain) ? domain : undefined;
             const name = invoice.customerName?.trim() || usableDomain;
             if (name) {
                 companyName = name;

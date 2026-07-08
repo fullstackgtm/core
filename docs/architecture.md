@@ -57,9 +57,12 @@ provider  ──fetchSnapshot()──►  CanonicalGtmSnapshot
 - `auditLog.ts` — hash-chained, signed export of every apply run.
 
 **Governed write verbs (each builds a plan; never writes directly)**
-- `bulkUpdate.ts`, `dedupe.ts`, `reassign.ts` — filtered/duplicate/ownership
-  plan builders. `merge.ts` — snapshot diff/merge + entity resolution.
+- `bulkUpdate.ts`, `dedupe.ts`, `reassign.ts`, `route.ts` — filtered,
+  duplicate, ownership handoff, and lead-to-account/owner routing plan builders.
+  `merge.ts` — snapshot diff/merge + entity resolution.
 - `resolve.ts` — the create-gate (exists / ambiguous / safe_to_create).
+- `hierarchy.ts`, `relationships.ts` — read-only account hierarchy and
+  stakeholder relationship-map reports for planning/prevention workflows.
 
 **Connectors** (`connectors/`)
 - `hubspot.ts`, `salesforce.ts`, `stripe.ts` + their `*Auth.ts` OAuth/device

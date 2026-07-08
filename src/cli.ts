@@ -62,13 +62,19 @@ export async function runCli(argv: string[]) {
   }
   if (command === "help") {
     const [topic] = args;
-    if (topic && topic !== "--full" && !topic.startsWith("-")) {
+    if (topic && !topic.startsWith("-") && args.includes("--json")) {
       // `help <cmd> --json` → machine-readable help derived from the same
-      // HELP entry the plain text renders from. Plain output is unchanged.
-      if (args.includes("--json")) printCommandHelpJson(topic);
-      else console.log(commandHelp(topic));
+      // HELP entry the plain text renders from. JSON takes precedence over
+      // --full so automated callers get a stable shape.
+      printCommandHelpJson(topic);
+    } else if (args.includes("--full")) {
+      // --full is the global escape hatch to the complete reference, even
+      // when a topic is given (help <cmd> --full), unless --json is requested.
+      console.log(usage());
+    } else if (topic && !topic.startsWith("-")) {
+      console.log(commandHelp(topic));
     } else {
-      console.log(args.includes("--full") || topic === "--full" ? usage() : styledShortUsage());
+      console.log(styledShortUsage());
     }
     return;
   }
@@ -163,6 +169,18 @@ export async function runCli(argv: string[]) {
   }
   if (command === "resolve") {
     await (await import("./cli/fix.ts")).resolveCommand(args);
+    return;
+  }
+  if (command === "route") {
+    await (await import("./cli/fix.ts")).routeCommand(args);
+    return;
+  }
+  if (command === "hierarchy") {
+    await (await import("./cli/fix.ts")).hierarchyCommand(args);
+    return;
+  }
+  if (command === "relationships") {
+    await (await import("./cli/fix.ts")).relationshipsCommand(args);
     return;
   }
   if (command === "bulk-update") {

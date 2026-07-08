@@ -36,6 +36,91 @@ export function auditFindingId(ruleId, objectId) {
 export function patchOperationId(ruleId, objectId) {
     return `op_${stableHash(`${ruleId}:${objectId}`)}`;
 }
+const OPEN_DEAL_FLAGS_ASSUMPTION = {
+    id: "open-deal-derived-from-closed-won-flags",
+    text: "Derived open-deal status from canonical isClosed/isWon flags; a deal is open when neither flag is true.",
+    source: "CanonicalDeal.isClosed/isWon",
+    confidence: "derived",
+};
+const MISSING_CLOSED_WON_FLAGS_ASSUMPTION = {
+    id: "missing-closed-won-flags-treated-open",
+    text: "Treated deals with missing isClosed/isWon flags as open so hygiene rules do not silently ignore active pipeline.",
+    source: "CanonicalDeal.isClosed/isWon",
+    confidence: "heuristic",
+};
+const ORPHAN_ACCOUNT_RELATIONSHIP_ASSUMPTION = {
+    id: "account-without-contacts-or-deals-treated-orphan",
+    text: "Treated an account as orphaned when the snapshot has no contacts and no deals linked to that account.",
+    source: "snapshot account/contact/deal associations",
+    confidence: "derived",
+};
+const DEAL_OWNER_POLICY_ASSUMPTION = {
+    id: "deal-owner-required-by-policy",
+    text: "Treated a missing or unknown deal owner as invalid when requireDealOwner policy is enabled.",
+    source: "GtmPolicy.requireDealOwner",
+    confidence: "heuristic",
+};
+const DEAL_ACCOUNT_POLICY_ASSUMPTION = {
+    id: "deal-account-required-by-policy",
+    text: "Treated a missing or unknown deal account link as invalid when requireAccountForDeal policy is enabled.",
+    source: "GtmPolicy.requireAccountForDeal",
+    confidence: "heuristic",
+};
+const DEAL_AMOUNT_POLICY_ASSUMPTION = {
+    id: "open-deal-amount-required-by-policy",
+    text: "Treated open deals with missing or zero amount as forecast-risk findings unless requireDealAmount is disabled.",
+    source: "GtmPolicy.requireDealAmount",
+    confidence: "heuristic",
+};
+const DUPLICATE_ACCOUNT_DOMAIN_ASSUMPTION = {
+    id: "same-normalized-domain-duplicate-account",
+    text: "Treated accounts with the same normalized domain as duplicate-account candidates.",
+    source: "CanonicalAccount.domain",
+    confidence: "heuristic",
+};
+const DUPLICATE_CONTACT_EMAIL_ASSUMPTION = {
+    id: "same-email-duplicate-contact",
+    text: "Treated contacts with the same lowercased email address as duplicate-contact candidates.",
+    source: "CanonicalContact.email",
+    confidence: "heuristic",
+};
+const DUPLICATE_OPEN_DEAL_ASSUMPTION = {
+    id: "same-account-and-name-duplicate-open-deal",
+    text: "Treated open deals with the same normalized name on the same account scope as duplicate-opportunity candidates.",
+    source: "CanonicalDeal.accountId/name",
+    confidence: "heuristic",
+};
+const ACCOUNT_WITH_OPEN_DEAL_NEEDS_CONTACT_ASSUMPTION = {
+    id: "open-pipeline-account-needs-contact",
+    text: "Treated accounts with open pipeline but no linked contacts as coverage gaps requiring a buying-committee contact.",
+    source: "snapshot account/contact/deal associations",
+    confidence: "heuristic",
+};
+const SINGLE_SOURCE_ACCOUNT_ASSUMPTION = {
+    id: "single-source-account-is-cross-system-gap",
+    text: "Treated an account present in only one connected system as a cross-system reconciliation gap.",
+    source: "ProviderIdentity.provider",
+    confidence: "heuristic",
+};
+function staleDealPolicyAssumption(days) {
+    return {
+        id: "stale-deal-days-policy",
+        text: `Treated open deals with no recorded activity for more than ${days} days as stale.`,
+        source: "GtmPolicy.staleDealDays",
+        confidence: "heuristic",
+    };
+}
+function closingSoonPolicyAssumption(windowDays, idleDays) {
+    return {
+        id: "closing-soon-idle-policy",
+        text: `Treated open deals closing within ${windowDays} days and idle for more than ${idleDays} days as silent slip risk.`,
+        source: "GtmPolicy.closingSoonDays/closingSoonIdleDays",
+        confidence: "heuristic",
+    };
+}
+function assumptionsIfFindings(findings, assumptions) {
+    return findings.length > 0 ? assumptions : undefined;
+}
 export function stableHash(value) {
     let hash = 0;
     for (let index = 0; index < value.length; index += 1) {
@@ -150,7 +235,11 @@ export const orphanAccountRule = {
                 approvalRequired: true,
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [ORPHAN_ACCOUNT_RELATIONSHIP_ASSUMPTION]),
+        };
     },
 };
 export const missingDealOwnerRule = {
@@ -180,7 +269,11 @@ export const missingDealOwnerRule = {
                 approvalRequired: true,
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [DEAL_OWNER_POLICY_ASSUMPTION]),
+        };
     },
 };
 export const missingDealAccountRule = {
@@ -210,7 +303,11 @@ export const missingDealAccountRule = {
                 approvalRequired: true,
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [DEAL_ACCOUNT_POLICY_ASSUMPTION]),
+        };
     },
 };
 export const pastCloseDateRule = {
@@ -240,7 +337,14 @@ export const pastCloseDateRule = {
                 approvalRequired: true,
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [
+                OPEN_DEAL_FLAGS_ASSUMPTION,
+                MISSING_CLOSED_WON_FLAGS_ASSUMPTION,
+            ]),
+        };
     },
 };
 export const staleDealRule = {
@@ -280,7 +384,15 @@ export const staleDealRule = {
                 approvalRequired: true,
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [
+                OPEN_DEAL_FLAGS_ASSUMPTION,
+                MISSING_CLOSED_WON_FLAGS_ASSUMPTION,
+                staleDealPolicyAssumption(policy.staleDealDays),
+            ]),
+        };
     },
 };
 export const missingDealAmountRule = {
@@ -312,7 +424,15 @@ export const missingDealAmountRule = {
                 approvalRequired: true,
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [
+                OPEN_DEAL_FLAGS_ASSUMPTION,
+                MISSING_CLOSED_WON_FLAGS_ASSUMPTION,
+                DEAL_AMOUNT_POLICY_ASSUMPTION,
+            ]),
+        };
     },
 };
 function duplicateGroups(items, keyOf) {
@@ -365,7 +485,11 @@ export const duplicateAccountDomainRule = {
                 rollback: "IRREVERSIBLE: provider merges cannot be unmerged. The pre-apply snapshot retains every record's field values; recreate a record manually from it if a merge was wrong.",
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [DUPLICATE_ACCOUNT_DOMAIN_ASSUMPTION]),
+        };
     },
 };
 export const duplicateContactEmailRule = {
@@ -402,7 +526,11 @@ export const duplicateContactEmailRule = {
                 rollback: "IRREVERSIBLE: provider merges cannot be unmerged. The pre-apply snapshot retains every record's field values; recreate a record manually from it if a merge was wrong.",
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [DUPLICATE_CONTACT_EMAIL_ASSUMPTION]),
+        };
     },
 };
 export const duplicateOpenDealRule = {
@@ -449,7 +577,15 @@ export const duplicateOpenDealRule = {
                 rollback: "IRREVERSIBLE: provider merges cannot be unmerged. The pre-apply snapshot retains every record's field values; recreate a record manually from it if a merge was wrong.",
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [
+                OPEN_DEAL_FLAGS_ASSUMPTION,
+                MISSING_CLOSED_WON_FLAGS_ASSUMPTION,
+                DUPLICATE_OPEN_DEAL_ASSUMPTION,
+            ]),
+        };
     },
 };
 export const activeDealAccountWithoutContactsRule = {
@@ -491,7 +627,15 @@ export const activeDealAccountWithoutContactsRule = {
                 approvalRequired: true,
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [
+                OPEN_DEAL_FLAGS_ASSUMPTION,
+                MISSING_CLOSED_WON_FLAGS_ASSUMPTION,
+                ACCOUNT_WITH_OPEN_DEAL_NEEDS_CONTACT_ASSUMPTION,
+            ]),
+        };
     },
 };
 export const closingSoonInactiveRule = {
@@ -536,12 +680,21 @@ export const closingSoonInactiveRule = {
                 approvalRequired: true,
             });
         }
-        return { findings, operations };
+        return {
+            findings,
+            operations,
+            assumptions: assumptionsIfFindings(findings, [
+                OPEN_DEAL_FLAGS_ASSUMPTION,
+                MISSING_CLOSED_WON_FLAGS_ASSUMPTION,
+                closingSoonPolicyAssumption(windowDays, idleDays),
+            ]),
+        };
     },
 };
 export const accountSingleSourceRule = {
     id: "account-single-source",
     title: "Account exists in only one connected system",
+    emitsOperations: false,
     description: "On merged multi-system snapshots, flags accounts known to just one source — the seams where GTM systems disagree.",
     category: "cross-system",
     evaluate: ({ snapshot }) => {
@@ -566,9 +719,16 @@ export const accountSingleSourceRule = {
                 recommendation: "Check whether the account is missing from the other systems or matched under a different domain/name.",
             });
         }
-        return { findings, operations: [] };
+        return {
+            findings,
+            operations: [],
+            assumptions: assumptionsIfFindings(findings, [SINGLE_SOURCE_ACCOUNT_ASSUMPTION]),
+        };
     },
 };
+export function isFindingsOnlyRule(rule) {
+    return rule.emitsOperations === false;
+}
 export const builtinAuditRules = [
     orphanAccountRule,
     missingDealOwnerRule,

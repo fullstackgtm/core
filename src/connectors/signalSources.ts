@@ -21,6 +21,7 @@
 
 import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { FREE_EMAIL_DOMAINS } from "../freeEmailDomains.ts";
 import type { SignalBucket, StagedSignalRow } from "../signals.ts";
 import { SIGNAL_BUCKETS } from "../signals.ts";
 import { parseSpoolText, spoolFilesIn } from "../spoolFiles.ts";
@@ -294,21 +295,10 @@ function fieldValue(values: Array<{ name?: string; value?: string }> | undefined
   return "";
 }
 
-const FREE_MAIL = new Set([
-  "gmail.com",
-  "yahoo.com",
-  "hotmail.com",
-  "outlook.com",
-  "icloud.com",
-  "aol.com",
-  "proton.me",
-  "protonmail.com",
-]);
-
 /** Company domain from an email, or "" for free-mail / no email. */
 function corporateDomain(email: string): string {
   if (!email.includes("@")) return "";
   const domain = email.split("@").at(-1)!.trim().toLowerCase();
-  if (!domain || FREE_MAIL.has(domain)) return "";
+  if (!domain || FREE_EMAIL_DOMAINS.has(domain)) return "";
   return domain;
 }
