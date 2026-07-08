@@ -67,12 +67,11 @@ test("R-001: --json mode returns a structured UNKNOWN_FLAG envelope on stdout", 
   assert.match(payload.error.hints.join("\n"), /Try: fullstackgtm audit --demo --json --provider hubspot/);
 });
 
-test("R-001: unknown flags with no documented near-miss keep the pre-pass behavior (ignored)", async () => {
-  // --verbose is nobody's typo (≥ 2 edits from every documented flag);
-  // erroring on it would break legitimately undocumented flags.
+test("R-001: unknown flags with no documented near-miss fail closed", async () => {
   const result = await cli(["doctor", "--verbose"]);
-  assert.equal(result.exitCode, 0);
-  assert.match(result.stdout, /Package:/);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /Unknown flag for doctor: --verbose/);
+  assert.equal(result.stdout, "");
 });
 
 test("R-001: documented flags never trigger the typo handler (registry is derived from help.ts)", () => {
@@ -157,10 +156,11 @@ test("R-009: --flag=value with a typo'd base is corrected too", async () => {
   assert.match(result.stderr, /Did you mean: --json/);
 });
 
-test("R-009: an =value whose base is documented nowhere stays ignored (status quo)", async () => {
+test("R-009: an =value whose base is not valid for the command fails closed", async () => {
   const result = await cli(["doctor", "--verbosity=high"]);
-  assert.equal(result.exitCode, 0);
-  assert.match(result.stdout, /Package:/);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /Unknown flag for doctor: --verbosity/);
+  assert.equal(result.stdout, "");
 });
 
 test("R-010: a flag-shaped first token is diagnosed as flag-before-command, with the flag resolved", async () => {

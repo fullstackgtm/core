@@ -10,7 +10,7 @@ export declare function documentedFlags(): Set<string>;
 export type FlagTypo = {
     given: string;
     /** Human-readable correction, e.g. `--json` or `--rules missing-deal-owner`. */
-    suggestion: string;
+    suggestion: string | null;
     /** The argv tokens that replace `given` in the corrected command. */
     replacement: string[];
 };
@@ -29,6 +29,7 @@ export type FlagTypo = {
  * --jsn` exited 0 and printed markdown where the agent asked for JSON.
  */
 export declare function detectFlagTypo(args: string[]): FlagTypo | null;
+export declare function detectUnknownFlag(command: string, args: string[]): FlagTypo | null;
 /** Nearest known command, derived from the same HELP table. */
 export declare function suggestCommand(command: string): string | null;
 /**

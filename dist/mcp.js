@@ -129,6 +129,9 @@ function packageVersion() {
         return "0.0.0";
     }
 }
+function strictSchema(shape) {
+    return z.object(shape).strict();
+}
 // Single registration table. startMcpServer() registers exactly this list,
 // and fullstackgtm_capabilities reports its names from the same array — the
 // advertised inventory cannot drift from what is actually registered.
@@ -143,7 +146,7 @@ const toolDefinitions = [
             description: "Run a dry-run GTM hygiene audit and return a reviewable patch plan. " +
                 "Sources: the realistic zero-credential demo CRM (provider: \"demo\" — richest test data), " +
                 "the minimal sample dataset, a snapshot file, or a live provider.",
-            inputSchema: {
+            inputSchema: strictSchema({
                 provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
                 inputPath: z.string().optional(),
                 configPath: z.string().optional(),
@@ -151,7 +154,7 @@ const toolDefinitions = [
                 output: z.enum(["json", "markdown"]).optional(),
                 today: z.string().optional(),
                 staleDealDays: z.number().int().positive().optional(),
-            },
+            }),
         },
         handler: async ({ provider, inputPath, configPath, rules, output, today, staleDealDays }) => {
             const loaded = configPath ? loadConfig(configPath) : null;
@@ -176,11 +179,11 @@ const toolDefinitions = [
             description: "Derive values for a plan's requires_human_* placeholder operations from snapshot " +
                 "evidence (account-name matching, contact associations), with confidence levels and " +
                 "reasons. Read-only; feed accepted values into fullstackgtm_apply's valueOverrides.",
-            inputSchema: {
+            inputSchema: strictSchema({
                 planPath: z.string(),
                 provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
                 inputPath: z.string().optional(),
-            },
+            }),
         },
         handler: async ({ planPath, provider, inputPath }) => {
             const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
@@ -198,14 +201,14 @@ const toolDefinitions = [
                 "uses LLM extraction when an Anthropic/OpenAI key is configured in the server " +
                 "environment or credential store, else the free deterministic keyword baseline; " +
                 "'llm' and 'deterministic' force either. Read-only; every insight is provenance-marked.",
-            inputSchema: {
+            inputSchema: strictSchema({
                 transcript: z.string().optional(),
                 transcriptPath: z.string().optional(),
                 title: z.string().optional(),
                 source: z.enum(["gong", "chorus", "fathom", "manual", "csv", "unknown"]).optional(),
                 extractor: z.enum(["auto", "llm", "deterministic"]).optional(),
                 model: z.string().optional(),
-            },
+            }),
         },
         handler: async ({ transcript, transcriptPath, title, source, extractor, model }) => {
             const raw = transcript ??
@@ -238,7 +241,7 @@ const toolDefinitions = [
                 "(exists | ambiguous | safe_to_create) with matches and a reason, using the same " +
                 "identity keys as the audit/merge engines (account domain, contact email, open-deal " +
                 "key). Read-only. Never create on 'exists' or 'ambiguous'.",
-            inputSchema: {
+            inputSchema: strictSchema({
                 objectType: z.enum(["account", "contact", "deal"]),
                 name: z.string().optional(),
                 domain: z.string().optional(),
@@ -246,7 +249,7 @@ const toolDefinitions = [
                 accountId: z.string().optional(),
                 provider: z.enum(["sample", "demo", "hubspot", "salesforce", "stripe"]).optional(),
                 inputPath: z.string().optional(),
-            },
+            }),
         },
         handler: async ({ objectType, name, domain, email, accountId, provider, inputPath }) => {
             const snapshot = await readSnapshot(provider, inputPath);
@@ -259,7 +262,7 @@ const toolDefinitions = [
         config: {
             title: "List Audit Rules",
             description: "List the built-in deterministic audit rules with ids and descriptions.",
-            inputSchema: {},
+            inputSchema: strictSchema({}),
         },
         handler: async () => {
             return content(builtinAuditRules.map(({ id, title, description }) => ({ id, title, description })));
@@ -277,13 +280,13 @@ const toolDefinitions = [
                 "the store's HMAC approval digests — ids not approved with `plans approve` are " +
                 "refused — and the run is recorded onto the stored plan so `plans show` and " +
                 "`audit-log export` include it.",
-            inputSchema: {
+            inputSchema: strictSchema({
                 provider: z.enum(["hubspot", "salesforce"]),
                 planPath: z.string(),
                 approvedOperationIds: z.array(z.string()).min(1),
                 valueOverrides: z.record(z.string(), z.string()).optional(),
                 output: z.enum(["json", "markdown"]).optional(),
-            },
+            }),
         },
         handler: async ({ provider, planPath, approvedOperationIds, valueOverrides, output }) => {
             // The file may be a raw PatchPlan (audit --out) or a StoredPlan envelope
@@ -400,11 +403,11 @@ const toolDefinitions = [
                 "and quote verbatim spans (≤300 chars) for every loud/quiet reading. Submit the full " +
                 "ObservationSet via fullstackgtm_market_observe — quotes are verified character-for-" +
                 "character against the captures, so never paraphrase.",
-            inputSchema: {
+            inputSchema: strictSchema({
                 vendorId: z.string(),
                 configPath: z.string().optional().describe("Path to market.config.json (default ./market.config.json)"),
                 captureRun: z.string().optional(),
-            },
+            }),
         },
         handler: async ({ vendorId, configPath, captureRun }) => {
             const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
@@ -420,10 +423,10 @@ const toolDefinitions = [
                 "Validates coverage, the verbatim-evidence rule, and mechanically verifies every quoted " +
                 "span against the stored capture it cites. Returns problems if rejected; nothing is " +
                 "stored unless the whole set passes. Observations are append-only — use a new runLabel.",
-            inputSchema: {
+            inputSchema: strictSchema({
                 observationsPath: z.string().describe("Path to the ObservationSet JSON file"),
                 configPath: z.string().optional().describe("Path to market.config.json (default ./market.config.json)"),
-            },
+            }),
         },
         handler: async ({ observationsPath, configPath }) => {
             const config = loadMarketConfigOrHint(resolve(process.cwd(), configPath ?? "market.config.json"));
@@ -454,6 +457,7 @@ toolDefinitions.unshift({
         description: "Machine-readable contract for this MCP server: the tool inventory (derived from the " +
             "server's own registration table, with per-tool CRM-write flags), safety defaults, and " +
             "the CLI entrypoints for everything the tools don't cover.",
+        inputSchema: strictSchema({}),
     },
     handler: async () => content({
         ok: true,

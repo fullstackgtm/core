@@ -70,6 +70,16 @@ test("mcp audit over the demo dataset returns a valid dry-run patch plan", () =>
     assert.equal(plan.operations.length, 79);
   }));
 
+test("mcp audit rejects unknown input keys instead of falling back to the sample audit", () =>
+  withMcpClient(async (client) => {
+    const result = await client.callTool({
+      name: "fullstackgtm_audit",
+      arguments: { source: "demo" },
+    });
+    assert.equal((result as { isError?: boolean }).isError, true);
+    assert.match(textPayload(result), /source|Unrecognized|unknown/i);
+  }));
+
 test("mcp audit supports rule scoping for agents", () =>
   withMcpClient(async (client) => {
     const result = await client.callTool({

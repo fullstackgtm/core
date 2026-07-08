@@ -10,6 +10,12 @@ export type HelpEntry = {
 };
 export declare const HELP: Record<string, HelpEntry>;
 export declare const BESPOKE_HELP: string[];
+export declare const GLOBAL_FLAGS: string[];
+export declare const GLOBAL_SHORT_FLAGS: string[];
+export declare const SOURCE_FLAGS: string[];
+export declare const AUDIT_FLAGS: string[];
+export declare const COMMAND_FLAGS: Record<string, string[]>;
+export declare const FLAGS_WITH_VALUES: Set<string>;
 export declare function shortUsage(): string;
 /**
  * Interactive-terminal styling for the short front door: a dimmed one-line

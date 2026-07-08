@@ -33,7 +33,7 @@ machine — that is normal and does not block the next step.
 fullstackgtm audit --demo --json
 ```
 
-Expect a JSON patch plan with `dryRun: true` and ~80 findings over a generated,
+Expect a JSON patch plan with `dryRun: true` and 110 findings/110 operations over a generated,
 deliberately messy CRM. Deterministic per seed: `--seed 7` is the default, so
 two runs produce identical finding and operation ids. Exit code 0.
 
@@ -131,8 +131,8 @@ the server resolves them from there (peer-dependency semantics) — so this
 works from inside existing projects too.
 
 Tools exposed over stdio — read-only: `fullstackgtm_audit`,
-`fullstackgtm_rules`, `fullstackgtm_suggest`, `fullstackgtm_call_parse`,
-`fullstackgtm_resolve`, `fullstackgtm_market_worksheet`. Gated:
+`fullstackgtm_capabilities`, `fullstackgtm_rules`, `fullstackgtm_suggest`,
+`fullstackgtm_call_parse`, `fullstackgtm_resolve`, `fullstackgtm_market_worksheet`. Gated:
 `fullstackgtm_apply` (requires explicit `approvedOperationIds`),
 `fullstackgtm_market_observe` (every quoted span is verified against the
 stored captures before anything is appended).

@@ -646,6 +646,56 @@ export const HELP: Record<string, HelpEntry> = {
 // `--help` to themselves, so commandHelp() only renders these via `help <verb>`.
 export const BESPOKE_HELP = ["init", "call", "market", "tam", "enrich", "bulk-update", "schedule", "signals", "icp", "draft"];
 
+export const GLOBAL_FLAGS = ["--help", "--full"];
+export const GLOBAL_SHORT_FLAGS = ["-h"];
+export const SOURCE_FLAGS = ["--provider", "--token-env", "--input", "--demo", "--sample", "--seed", "--today"];
+export const AUDIT_FLAGS = ["--config", "--rules", "--stale-days", "--fail-on", "--save", "--dry-run", "--json", "--out", "--full"];
+
+// Complete per-command flag registry used by runCli's fail-closed flag
+// validation. Keep this next to HELP so focused help, machine capabilities,
+// and the parser safety gate have one command inventory to reconcile against.
+export const COMMAND_FLAGS: Record<string, string[]> = {
+  init: ["--source", "--provider", "--out", "--force"],
+  login: ["--via", "--hosted", "--private-token", "--token", "--key", "--api-key", "--client-id", "--client-secret", "--scopes", "--port", "--oauth", "--device", "--instance-url", "--login-url", "--no-validate"],
+  logout: [],
+  doctor: ["--json"],
+  capabilities: ["--json"],
+  "robot-docs": [],
+  profiles: ["--json"],
+  health: ["--json"],
+  snapshot: [...SOURCE_FLAGS, "--since", "--out", "--archive"],
+  audit: [...SOURCE_FLAGS, ...AUDIT_FLAGS],
+  report: [...SOURCE_FLAGS, ...AUDIT_FLAGS, "--plan", "--client", "--title", "--prepared-by", "--format", "--max-examples"],
+  diff: ["--before", "--after", "--config", "--stale-days", "--today", "--json", "--fail-on-new-findings"],
+  rules: ["--config", "--json"],
+  resolve: [...SOURCE_FLAGS, "--name", "--domain", "--email", "--account-id", "--json"],
+  hierarchy: [...SOURCE_FLAGS, "--json", "--out"],
+  relationships: [...SOURCE_FLAGS, "--account-id", "--domain", "--json", "--out"],
+  route: [...SOURCE_FLAGS, "--match", "--no-inherit-owner", "--reassign-owned", "--policy", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
+  fix: [...SOURCE_FLAGS, "--config", "--rule", "--provider", "--min-confidence", "--include-creates", "--yes", "--confirm", "--dry-run"],
+  "bulk-update": [...SOURCE_FLAGS, "--where", "--set", "--guard", "--require", "--create-task", "--archive", "--force-archive-duplicates", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
+  dedupe: [...SOURCE_FLAGS, "--key", "--keep", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
+  reassign: [...SOURCE_FLAGS, "--from", "--assign-unowned", "--to", "--objects", "--where", "--except-deal-stage", "--include-closed-deals", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
+  backfill: [...SOURCE_FLAGS, "--since", "--pipeline", "--match-property", "--skip-unmatched", "--save", "--dry-run", "--json"],
+  enrich: [...SOURCE_FLAGS, "--config", "--source", "--icp", "--input", "--provider", "--stale-days", "--assign-owner", "--objects", "--max", "--staged-run", "--run-label", "--label", "--runs", "--save", "--dry-run", "--json", "--out"],
+  call: [...SOURCE_FLAGS, "--transcript", "--title", "--source", "--model", "--deterministic", "--heuristics", "--llm", "--json", "--ndjson", "--out", "--call", "--call-type", "--rubric", "--list", "--list-rubrics", "--attendees", "--domain", "--deal", "--save", "--dry-run"],
+  suggest: [...SOURCE_FLAGS, "--plan-id", "--plan", "--json", "--out"],
+  plans: ["--status", "--operations", "--value", "--values-from", "--min-confidence", "--include-creates", "--json"],
+  apply: ["--plan", "--plan-id", "--provider", "--channel", "--token-env", "--approve", "--value", "--json", "--config"],
+  "audit-log": ["--in", "--out", "--json"],
+  merge: ["--input", "--out", "--json"],
+  market: ["--category", "--config", "--vendor", "--snapshot", "--task-account", "--task-deal", "--capture-run", "--run", "--prior-run", "--diff", "--from", "--calls", "--anchor", "--min-mentions", "--max-claims", "--promote-lift", "--model", "--format", "--auto", "--unverified", "--save", "--dry-run", "--json", "--out"],
+  tam: [...SOURCE_FLAGS, "--source", "--name", "--icp", "--accounts", "--acv", "--acv-basis", "--acv-from-crm", "--deal-period", "--buyers-per-account", "--cross-checks", "--max", "--max-credits", "--usd-per-credit", "--dry-run", "--confirm", "--cron", "--label", "--save", "--json", "--out"],
+  icp: [...SOURCE_FLAGS, "--name", "--signals-from", "--with-history", "--prompt", "--min-score", "--from-judge", "--golden", "--against-outcomes", "--min-accuracy", "--model", "--label", "--save", "--json", "--out"],
+  signals: ["--bucket", "--source", "--connector", "--connector-opt", "--watchlist", "--keywords", "--from", "--label", "--since", "--account", "--contact", "--unjudged", "--touch", "--result", "--save", "--json", "--explain"],
+  draft: ["--from-judge", "--min-score", "--prompt", "--model", "--channel", "--save", "--dry-run", "--json", "--out"],
+  schedule: ["--cron", "--label", "--provider", "--trigger", "--runs", "--json"],
+};
+
+export const FLAGS_WITH_VALUES = new Set([
+  "--account", "--account-id", "--accounts", "--acv", "--acv-basis", "--after", "--anchor", "--api-key", "--approve", "--archive", "--assign-owner", "--attendees", "--before", "--bucket", "--buyers-per-account", "--call", "--call-type", "--calls", "--capture-run", "--category", "--channel", "--client", "--client-id", "--client-secret", "--config", "--connector", "--connector-opt", "--contact", "--cron", "--cross-checks", "--deal", "--deal-period", "--diff", "--domain", "--email", "--except-deal-stage", "--format", "--from", "--from-judge", "--golden", "--guard", "--icp", "--in", "--input", "--instance-url", "--keep", "--key", "--keywords", "--label", "--login-url", "--match", "--match-property", "--max", "--max-claims", "--max-credits", "--max-examples", "--max-operations", "--min-accuracy", "--min-confidence", "--min-mentions", "--min-score", "--model", "--name", "--objects", "--operations", "--out", "--pipeline", "--plan", "--plan-id", "--policy", "--port", "--prepared-by", "--prior-run", "--profile", "--promote-lift", "--prompt", "--provider", "--reason", "--require", "--result", "--rubric", "--rule", "--rules", "--run", "--run-label", "--runs", "--scopes", "--seed", "--set", "--signals-from", "--since", "--snapshot", "--source", "--staged-run", "--stale-days", "--status", "--task-account", "--task-deal", "--title", "--to", "--today", "--token", "--token-env", "--touch", "--transcript", "--trigger", "--usd-per-credit", "--value", "--values-from", "--vendor", "--via", "--watchlist", "--where",
+]);
+
 // Lifecycle-grouped front door. One line per verb, organized by the
 // Prevent→Detect→Remediate→Verify loop so a new user sees ~6 jobs, not 22 verbs.
 export function shortUsage() {

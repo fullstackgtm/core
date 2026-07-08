@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import test from "node:test";
 import { runCli } from "../src/cli.ts";
+
+const repoRoot = resolve(import.meta.dirname, "..");
+const runCliProcess = (args: string[]) =>
+  spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "src/bin.ts", ...args],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
 
 // Capture everything runCli writes to stdout for a given argv.
 async function capture(argv: string[]): Promise<string> {
@@ -73,6 +83,25 @@ test("help <verb> renders the same focused entry, with --full as a global escape
 test("unknown verb --help falls back to the short map instead of dead-ending", async () => {
   const out = await capture(["definitely-not-a-command", "--help"]);
   assert.match(out, /Setup & health:/);
+});
+
+test("unknown command flags fail closed with a did-you-mean hint", () => {
+  const result = runCliProcess(["audit", "--demo", "--fail-on-critical"]);
+  assert.notEqual(result.status, 0, "misspelled CI gate flag must not silently pass");
+  assert.match(`${result.stderr}${result.stdout}`, /Unknown flag for audit: --fail-on-critical/);
+  assert.match(`${result.stderr}${result.stdout}`, /Did you mean --fail-on\?/);
+});
+
+test("unknown command flags after a missing value-taking option still fail closed", () => {
+  const result = runCliProcess(["audit", "--out", "--fail-on-critical", "--demo"]);
+  assert.notEqual(result.status, 0, "unknown flag must not be hidden by a prior missing --out value");
+  assert.match(`${result.stderr}${result.stdout}`, /Unknown flag for audit: --fail-on-critical/);
+});
+
+test("unknown single-dash command flags fail closed", () => {
+  const result = runCliProcess(["audit", "--demo", "-x"]);
+  assert.notEqual(result.status, 0, "unknown short flag must not be silently ignored");
+  assert.match(`${result.stderr}${result.stdout}`, /Unknown flag for audit: -x/);
 });
 
 // #2 — every read verb points forward. `audit --demo` used to end on a blank

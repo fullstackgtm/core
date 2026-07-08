@@ -2,7 +2,7 @@ import { activeProfile, listProfiles, setActiveProfile } from "./credentials.js"
 import { capabilitiesCommand, printCommandHelpJson, robotDocsCommand, unknownCommandEnvelope } from "./cli/capabilities.js";
 import { BESPOKE_HELP, commandHelp, HELP, shortUsage, stylizeShortUsage, usage } from "./cli/help.js";
 import { readPackageInfo } from "./cli/shared.js";
-import { correctedCommand, detectFlagTypo, suggestCommand, unknownFlagEnvelope } from "./cli/suggest.js";
+import { correctedCommand, detectFlagTypo, detectUnknownFlag, suggestCommand, unknownFlagEnvelope } from "./cli/suggest.js";
 import { colorEnabled, paint } from "./cli/ui.js";
 // Verb modules load lazily inside their dispatch branch below. The dispatcher
 // used to import all of them eagerly, so `--version` compiled the full
@@ -96,20 +96,27 @@ export async function runCli(argv) {
     }
     // Flag typos used to be silently dropped by the per-verb parsers —
     // `audit --demo --jsn` exited 0 and printed markdown where the agent asked
-    // for JSON. Near-miss unknown flags (≤ 1 edit from a flag documented in
-    // help.ts) now stop with the exact corrected command. Suggest-only: never
-    // auto-execute the correction, so a typo can never change what a
-    // write-shaped invocation stages.
+    // for JSON. Every flag-shaped token is now checked against the per-command
+    // registry in help.ts, so unknown flags fail closed instead of being ignored.
+    // Suggest-only: never auto-execute the correction, so a typo can never
+    // silently change what a write-shaped invocation stages.
     if (command in HELP) {
-        const typo = detectFlagTypo(args);
+        const typo = detectUnknownFlag(command, args);
         if (typo) {
             if (args.includes("--json")) {
                 console.log(JSON.stringify(unknownFlagEnvelope(command, args, typo), null, 2));
             }
             else {
+                console.error(`Unknown flag for ${command}: ${typo.given}`);
+                // Keep the old near-miss shape too; existing agents key off it.
                 console.error(`Unknown flag: ${typo.given}`);
-                console.error(`Did you mean: ${typo.suggestion}`);
-                console.error(`Try: ${correctedCommand(command, args, typo)}`);
+                if (typo.suggestion) {
+                    console.error(`Did you mean ${typo.suggestion}?`);
+                    console.error(`Did you mean: ${typo.suggestion}`);
+                    if (typo.replacement.length > 0) {
+                        console.error(`Try: ${correctedCommand(command, args, typo)}`);
+                    }
+                }
             }
             process.exitCode = 1;
             return;

@@ -317,7 +317,7 @@ fullstackgtm diff --before old.json --after new.json --fail-on-new-findings
 - `--demo` (with `--seed`) generates a realistic mid-market CRM with injected real-world failure modes — departed owners, unlinked deals, orphan accounts, stale pipeline — so agents and CI can exercise the full snapshot → audit → apply pipeline with zero credentials.
 - Exit codes: `0` success, `1` error, `2` findings at/above `--fail-on`.
 
-"Built for agents" is measured, not asserted: a 1,904-run benchmark (17 CRM-operations scenarios × 3 tool-surface arms × up to 4 trials, across ten models from six vendors, deterministic graders over final CRM state, τ-bench-style pass^k) shows the gated CLI surface matching or beating raw CRM-API access on completion-under-policy for every model tested — strictly better in nine of ten — and the effect is vendor-independent. Full matrix and methodology: [the leaderboard](./evals/crm/leaderboard/RESULTS.md).
+"Built for agents" is measured, not asserted: a 1,904-run benchmark (17 CRM-operations scenarios × 3 tool-surface arms × up to 4 trials, across ten models from six vendors, deterministic graders over final CRM state, τ-bench-style pass^k) shows the gated CLI surface matching or beating raw CRM-API access on completion-under-policy for every model tested — strictly better in nine of ten — and the effect is vendor-independent. Full matrix and methodology: [the leaderboard](https://github.com/fullstackgtm/core/blob/main/evals/crm/leaderboard/RESULTS.md).
 
 Caveat: the leaderboard documents the Opus reduced protocol and mixed-version Informed arms; treat the headline as a pointer to those exact RESULTS.md conditions.
 
@@ -535,9 +535,9 @@ Or configure any MCP client (Cursor, Claude Desktop, …) with:
 }
 ```
 
-Eight tools are exposed over stdio.
+Nine tools are exposed over stdio.
 
-**Read-only:** `fullstackgtm_audit` (sample, demo, file, or live provider sources with optional rule scoping), `fullstackgtm_rules` (rule discovery), `fullstackgtm_suggest` (deterministic placeholder values with confidence + reasons), `fullstackgtm_call_parse` (transcripts → provenance-marked segments, insights, and evidence), `fullstackgtm_resolve` (the create gate: exists / ambiguous / safe_to_create), and `fullstackgtm_market_worksheet` (the classification packet for one vendor: claims, judging rules, captured page texts).
+**Read-only:** `fullstackgtm_audit` (sample, demo, file, or live provider sources with optional rule scoping), `fullstackgtm_capabilities` (server/tool capability manifest), `fullstackgtm_rules` (rule discovery), `fullstackgtm_suggest` (deterministic placeholder values with confidence + reasons), `fullstackgtm_call_parse` (transcripts → provenance-marked segments, insights, and evidence), `fullstackgtm_resolve` (the create gate: exists / ambiguous / safe_to_create), and `fullstackgtm_market_worksheet` (the classification packet for one vendor: claims, judging rules, captured page texts).
 
 **Gated:** `fullstackgtm_apply` (requires explicit `approvedOperationIds`; placeholders still need value overrides) and `fullstackgtm_market_observe` (verifies every quoted span against the stored captures before appending — nothing is stored unless the whole set passes).
 

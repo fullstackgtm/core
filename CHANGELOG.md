@@ -3,9 +3,11 @@
 All notable changes to the `fullstackgtm` package are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
-The path to 1.0 is planned in the roadmap doc in the repository.
+The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullstackgtm/core/blob/main/docs/roadmap-to-1.0.md).
 
 ## [Unreleased]
+
+## [0.48.0] — 2026-07-08
 
 ### Added
 
@@ -147,7 +149,7 @@ The path to 1.0 is planned in the roadmap doc in the repository.
   doctor, rules, dedupe, resolve, snapshot, and error paths) and the public
   import surface of `cli.ts` is unchanged. Profiling method, opportunity
   matrix, and honest non-wins are documented in
-  [docs/perf-notes.md](./docs/perf-notes.md).
+  [docs/perf-notes.md](https://github.com/fullstackgtm/core/blob/main/docs/perf-notes.md).
 
 ## [0.45.0] — 2026-07-02
 
@@ -485,7 +487,7 @@ The path to 1.0 is planned in the roadmap doc in the repository.
   Library: `connectors/signalSources.ts` (`listSignalSources`, `getSignalSource`,
   `fileSource`, `serpapiNewsSource`, `hubspotFormsSource`), `stagedRowToSignal` +
   `StagedSignalRow` from `signals.ts`. Design:
-  [docs/spec-connectors-signals-outbound.md](../../docs/spec-connectors-signals-outbound.md)
+  [docs/spec-connectors-signals-outbound.md](https://github.com/fullstackgtm/core/blob/main/docs/spec-connectors-signals-outbound.md)
   (the connector taxonomy + the Phase 2/3 webhook-spool and governed-channel plan).
 - **Webhook spool format + conventional landing zone (signals Phase 2).**
   `--connector file` with no path now reads the conventional spool directory
@@ -874,7 +876,7 @@ The path to 1.0 is planned in the roadmap doc in the repository.
   you approve specific operations and run `apply`… These safety invariants are
   not beta."), matching the README and agent skill.
 
-See [docs/dx-punch-list.md](./docs/dx-punch-list.md) for the audit that drove this.
+See [docs/dx-punch-list.md](https://github.com/fullstackgtm/core/blob/main/docs/dx-punch-list.md) for the audit that drove this.
 
 ## [0.34.0] — 2026-06-18
 
@@ -1965,7 +1967,7 @@ milestones, not a frozen public contract. 0.10.0 continues the 0.x line
 1.2.2 plus the status/docs corrections below. `fullstackgtm@1.2.1` and
 `@1.2.2` were briefly on npm (2026-06-10) and were unpublished the same
 week; those version numbers are permanently burned per npm policy. The real
-1.0 will be declared via [docs/roadmap-to-1.0.md](./docs/roadmap-to-1.0.md)
+1.0 will be declared via [docs/roadmap-to-1.0.md](https://github.com/fullstackgtm/core/blob/main/docs/roadmap-to-1.0.md)
 once the API surface has survived external usage.
 
 ### Changed
@@ -2260,7 +2262,7 @@ stability commitment attached.
 
 - The hosted app's Convex plan tables are the second `PlanStore`
   implementation target; unifying them onto these types is the remaining
-  0.3.x work (see docs/roadmap-to-1.0.md).
+  0.3.x work (see https://github.com/fullstackgtm/core/blob/main/docs/roadmap-to-1.0.md).
 
 ## [0.2.0] — Unreleased
 

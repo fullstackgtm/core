@@ -12,7 +12,14 @@
 // itself; this holds uniformly for read and write verbs, so a typo can never
 // silently change what a write-shaped invocation stages.
 
-import { HELP, usage } from "./help.ts";
+import {
+  COMMAND_FLAGS,
+  FLAGS_WITH_VALUES,
+  GLOBAL_FLAGS,
+  GLOBAL_SHORT_FLAGS,
+  HELP,
+  usage,
+} from "./help.ts";
 
 export function levenshtein(a: string, b: string): number {
   const dp = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0));
@@ -65,7 +72,7 @@ export function documentedFlags(): Set<string> {
 export type FlagTypo = {
   given: string;
   /** Human-readable correction, e.g. `--json` or `--rules missing-deal-owner`. */
-  suggestion: string;
+  suggestion: string | null;
   /** The argv tokens that replace `given` in the corrected command. */
   replacement: string[];
 };
@@ -108,6 +115,53 @@ export function detectFlagTypo(args: string[]): FlagTypo | null {
   return null;
 }
 
+function isFlagShaped(token: string): boolean {
+  return token !== "-" && token.startsWith("-");
+}
+
+function suggestCommandFlag(unknown: string, allowed: Set<string>): string | null {
+  const candidates = [...allowed].filter((flag) => flag.startsWith("--"));
+  const prefix = candidates
+    .filter((flag) => unknown.startsWith(`${flag}-`) || flag.startsWith(unknown))
+    .sort((a, b) => b.length - a.length)[0];
+  if (prefix) return prefix;
+  return nearest(unknown.toLowerCase().replace(/_/g, "-"), candidates, 3);
+}
+
+export function detectUnknownFlag(command: string, args: string[]): FlagTypo | null {
+  const commandFlags = COMMAND_FLAGS[command];
+  if (!commandFlags) return null;
+  const allowed = new Set([...GLOBAL_FLAGS, ...commandFlags]);
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--") break;
+    if (GLOBAL_SHORT_FLAGS.includes(token)) continue;
+    if (!token.startsWith("-")) continue;
+
+    if (!token.startsWith("--")) {
+      return { given: token, suggestion: null, replacement: [] };
+    }
+
+    const equalsIndex = token.indexOf("=");
+    const flag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+    if (allowed.has(flag)) {
+      if (equalsIndex !== -1) {
+        const value = token.slice(equalsIndex + 1);
+        const replacement = value === "" ? [flag] : [flag, value];
+        return { given: token, suggestion: replacement.join(" "), replacement };
+      }
+      if (FLAGS_WITH_VALUES.has(flag) && args[index + 1] !== undefined && !isFlagShaped(args[index + 1])) {
+        index += 1;
+      }
+      continue;
+    }
+
+    const suggestion = suggestCommandFlag(flag, allowed);
+    return { given: flag, suggestion, replacement: suggestion ? [suggestion] : [] };
+  }
+  return null;
+}
+
 /** Nearest known command, derived from the same HELP table. */
 export function suggestCommand(command: string): string | null {
   if (!command) return null;
@@ -143,8 +197,8 @@ export function unknownFlagEnvelope(command: string, args: string[], typo: FlagT
       code: "UNKNOWN_FLAG" as const,
       message: `Unknown flag: ${typo.given}`,
       hints: [
-        `Did you mean: ${typo.suggestion}`,
-        `Try: ${correctedCommand(command, args, typo)}`,
+        ...(typo.suggestion ? [`Did you mean: ${typo.suggestion}`] : []),
+        ...(typo.replacement.length > 0 ? [`Try: ${correctedCommand(command, args, typo)}`] : []),
       ],
     },
   };
