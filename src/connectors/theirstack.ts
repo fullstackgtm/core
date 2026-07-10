@@ -17,6 +17,7 @@
  * `metadata.total_results` with include_total_results:true; limit must be ≥ 1
  * (limit:0 → 422, the count gotcha — cf. Explorium's `size`-caps-the-total).
  */
+import { ProviderHttpError } from "../providerError.ts";
 
 type FetchImpl = typeof fetch;
 
@@ -42,14 +43,6 @@ export function theirStackPullCost(companies: number, usdPerCredit?: number): Th
     credits,
     ...(usdPerCredit && usdPerCredit > 0 ? { usd: Math.round(credits * usdPerCredit) } : {}),
   };
-}
-
-async function safeText(res: { text(): Promise<string> }): Promise<string> {
-  try {
-    return (await res.text()).slice(0, 300);
-  } catch {
-    return "";
-  }
 }
 
 /** Firmographic + technographic filter for TheirStack company search. */
@@ -136,7 +129,7 @@ export async function theirStackCountCompanies(opts: {
     body: buildBody(opts.filters, 1, 0, true),
   });
   if (!res.ok) {
-    throw new Error(`TheirStack count failed: HTTP ${res.status} ${await safeText(res)}`);
+    throw new ProviderHttpError("TheirStack", "count", res.status);
   }
   return readTheirStackTotal(await res.json());
 }
@@ -162,7 +155,7 @@ export async function theirStackSearchCompanies(opts: {
     body: buildBody(opts.filters, limit, opts.page ?? 0, true),
   });
   if (!res.ok) {
-    throw new Error(`TheirStack search failed: HTTP ${res.status} ${await safeText(res)}`);
+    throw new ProviderHttpError("TheirStack", "search", res.status);
   }
   const body = (await res.json()) as { data?: Array<Record<string, unknown>>; results?: Array<Record<string, unknown>> };
   const rows = body.data ?? body.results ?? [];

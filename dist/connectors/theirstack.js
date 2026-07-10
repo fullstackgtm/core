@@ -17,6 +17,7 @@
  * `metadata.total_results` with include_total_results:true; limit must be ≥ 1
  * (limit:0 → 422, the count gotcha — cf. Explorium's `size`-caps-the-total).
  */
+import { ProviderHttpError } from "../providerError.js";
 /** TheirStack charges per company RETURNED — verified live (a list pull of N
  *  companies spends 3N). The count (limit:1) returns 1 row, so it's ~3 credits. */
 export const THEIRSTACK_CREDITS_PER_COMPANY = 3;
@@ -30,14 +31,6 @@ export function theirStackPullCost(companies, usdPerCredit) {
         credits,
         ...(usdPerCredit && usdPerCredit > 0 ? { usd: Math.round(credits * usdPerCredit) } : {}),
     };
-}
-async function safeText(res) {
-    try {
-        return (await res.text()).slice(0, 300);
-    }
-    catch {
-        return "";
-    }
 }
 const BASE = "https://api.theirstack.com";
 const SEARCH_PATH = "/v1/companies/search";
@@ -99,7 +92,7 @@ export async function theirStackCountCompanies(opts) {
         body: buildBody(opts.filters, 1, 0, true),
     });
     if (!res.ok) {
-        throw new Error(`TheirStack count failed: HTTP ${res.status} ${await safeText(res)}`);
+        throw new ProviderHttpError("TheirStack", "count", res.status);
     }
     return readTheirStackTotal(await res.json());
 }
@@ -117,7 +110,7 @@ export async function theirStackSearchCompanies(opts) {
         body: buildBody(opts.filters, limit, opts.page ?? 0, true),
     });
     if (!res.ok) {
-        throw new Error(`TheirStack search failed: HTTP ${res.status} ${await safeText(res)}`);
+        throw new ProviderHttpError("TheirStack", "search", res.status);
     }
     const body = (await res.json());
     const rows = body.data ?? body.results ?? [];

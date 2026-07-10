@@ -1,5 +1,6 @@
 import { type ProgressEmitter } from "./progress.ts";
 import type { GtmEvidence } from "./types.ts";
+export { assertPublicUrl } from "./publicHttp.ts";
 /**
  * The Market Map: a live model of the competitive category a company sells
  * into. Vendors publish claims constantly (pricing pages, feature pages,
@@ -162,7 +163,6 @@ export type FetchPage = (url: string) => Promise<{
     status: number;
     body: string;
 }>;
-export declare function assertPublicUrl(rawUrl: string): Promise<URL>;
 export type CaptureOptions = {
     /** Directory for captures; defaults to <marketHome>/captures. Ignored when `store` is given. */
     dir?: string;

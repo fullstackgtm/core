@@ -62,6 +62,12 @@ release.
 
 - `fullstackgtm.config.json`: `{ policy?, rules?: { enabled?, disabled? }, rulePackages? }`.
 - Rule packages export `rules: GtmAuditRule[]`.
+- Rule packages are executable code and are fail-closed. CLI execution requires
+  an explicit `--config <path> --allow-plugins`; `--no-plugins` applies only
+  declarative policy/rule filters. An implicitly discovered config never grants
+  plugin trust.
+- MCP never executes rule packages. Mutable tool-call paths are not accepted as
+  a durable code-trust boundary; use the reviewed CLI plugin flow instead.
 - Precedence: CLI flags > config file > defaults.
 
 ## CLI
@@ -283,6 +289,23 @@ domain stamped — so the acquired account is immediately signal-watchable
 `CanonicalContact.linkedin` (mapped from HubSpot `hs_linkedin_url`) is the
 strong dedup key across all of the above.
 
+## Apply recovery
+
+Store-backed applies persist an apply-attempt claim before provider I/O. If the
+process exits without a completed run, the plan remains `applying`: the CLI
+cannot know whether a remote write landed and will not replay it. Inspect the
+attempt with `fullstackgtm plans show <id>` and reconcile the named provider's
+records. Only then run:
+
+```bash
+fullstackgtm plans recover <id> --acknowledge-uncertain-writes
+```
+
+Recovery performs no provider calls. It clears the old approvals and returns
+the plan to `needs_approval`, requiring a fresh review and signed approval
+before another apply. Provider APIs do not all expose idempotency keys, so this
+operator reconciliation remains necessary after a timeout or crash.
+
 ## Schedule
 
 The horizontal scheduler: a declarative schedule-entry store, a
@@ -347,8 +370,12 @@ the stored capture it cites before a set is accepted; failed captures read as
 Tools: `fullstackgtm_capabilities` (the machine-readable server contract —
 tool inventory with per-tool CRM-write flags, derived from the server's own
 registration table), `fullstackgtm_audit`, `fullstackgtm_rules`,
-`fullstackgtm_apply` (requires explicit `approvedOperationIds`),
+`fullstackgtm_apply` (accepts only a stored `planId`; approved operation ids and
+placeholder values come exclusively from the HMAC-signed plan store),
 `fullstackgtm_suggest`, `fullstackgtm_call_parse`, `fullstackgtm_resolve`,
 `fullstackgtm_market_worksheet`, `fullstackgtm_market_observe` (validates,
 verifies quoted spans against the stored captures, appends, returns front
-states). Input schemas are stable.
+states). Input schemas are stable. MCP never executes rule packages and cannot
+accept external plan files or caller-supplied approvals/value overrides. An
+uncertain apply is reconciled with the CLI `plans recover` workflow and is
+never replayed automatically.

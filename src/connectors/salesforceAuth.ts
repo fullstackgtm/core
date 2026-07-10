@@ -9,6 +9,41 @@
 
 const DEFAULT_LOGIN_URL = "https://login.salesforce.com";
 
+/**
+ * Normalize and validate a Salesforce credential-bearing origin.
+ *
+ * Salesforce API hosts are either the standard login/sandbox hosts or a
+ * Salesforce-owned instance/My Domain below salesforce.com.  Deliberately
+ * return an origin (not the input URL) so callers cannot accidentally retain
+ * paths, queries, credentials, or fragments from configuration.
+ */
+export function validateSalesforceOrigin(value: string, label = "Salesforce URL"): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid HTTPS Salesforce URL.`);
+  }
+  if (url.protocol !== "https:") throw new Error(`${label} must use HTTPS.`);
+  if (url.username || url.password) throw new Error(`${label} must not contain user information.`);
+  if (url.hash) throw new Error(`${label} must not contain a fragment.`);
+  if (url.search) throw new Error(`${label} must not contain a query string.`);
+  if (url.pathname !== "/" && url.pathname !== "") throw new Error(`${label} must be an origin without a path.`);
+  if (url.port && url.port !== "443") throw new Error(`${label} must use the standard HTTPS port.`);
+
+  const hostname = url.hostname.toLowerCase();
+  const trusted =
+    hostname === "login.salesforce.com" ||
+    hostname === "test.salesforce.com" ||
+    (hostname.endsWith(".salesforce.com") && hostname.length > ".salesforce.com".length);
+  if (!trusted) {
+    throw new Error(
+      `${label} must use login.salesforce.com, test.salesforce.com, or a Salesforce instance/My Domain host.`,
+    );
+  }
+  return url.origin;
+}
+
 export type SalesforceTokenSet = {
   accessToken: string;
   refreshToken?: string;
@@ -27,7 +62,7 @@ export type SalesforceDeviceAuthorization = {
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 
 function tokenUrl(loginUrl: string) {
-  return `${loginUrl.replace(/\/$/, "")}/services/oauth2/token`;
+  return `${validateSalesforceOrigin(loginUrl, "Salesforce login URL")}/services/oauth2/token`;
 }
 
 /**
@@ -55,6 +90,7 @@ export async function startSalesforceDeviceLogin(options: {
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl(tokenUrl(options.loginUrl ?? DEFAULT_LOGIN_URL), {
     method: "POST",
+    redirect: "manual",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       response_type: "device_code",
@@ -91,6 +127,7 @@ export async function pollSalesforceDeviceLogin(options: {
     await new Promise((resolveSleep) => setTimeout(resolveSleep, intervalMs));
     const response = await fetchImpl(url, {
       method: "POST",
+      redirect: "manual",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "device",
@@ -100,10 +137,11 @@ export async function pollSalesforceDeviceLogin(options: {
     });
     const data = await response.json().catch(() => ({}));
     if (response.ok && data.access_token && data.instance_url) {
+      const instanceUrl = validateSalesforceOrigin(String(data.instance_url), "Salesforce token instance_url");
       return {
         accessToken: data.access_token,
         refreshToken: data.refresh_token,
-        instanceUrl: data.instance_url,
+        instanceUrl,
         expiresAt: Date.now() + SESSION_TTL_MS,
       };
     }
@@ -128,6 +166,7 @@ export async function refreshSalesforceToken(options: {
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl(tokenUrl(options.loginUrl ?? DEFAULT_LOGIN_URL), {
     method: "POST",
+    redirect: "manual",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "refresh_token",
@@ -145,7 +184,7 @@ export async function refreshSalesforceToken(options: {
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token ?? options.refreshToken,
-    instanceUrl: data.instance_url,
+    instanceUrl: validateSalesforceOrigin(String(data.instance_url), "Salesforce token instance_url"),
     expiresAt: Date.now() + SESSION_TTL_MS,
   };
 }
@@ -155,17 +194,18 @@ export async function validateSalesforceToken(
   instanceUrl: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ ok: boolean; detail: string }> {
+  const trustedInstanceUrl = validateSalesforceOrigin(instanceUrl, "Salesforce instance URL");
   let response: Response;
   try {
     response = await fetchImpl(
-      `${instanceUrl.replace(/\/$/, "")}/services/oauth2/userinfo`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
+      `${trustedInstanceUrl}/services/oauth2/userinfo`,
+      { redirect: "manual", headers: { Authorization: `Bearer ${accessToken}` } },
     );
   } catch (error) {
     const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
     return {
       ok: false,
-      detail: `Cannot reach Salesforce at ${instanceUrl}${cause}. Check the --instance-url (your My Domain URL, e.g. https://yourco.my.salesforce.com) and network access.`,
+      detail: `Cannot reach Salesforce at ${trustedInstanceUrl}${cause}. Check the --instance-url (your My Domain URL, e.g. https://yourco.my.salesforce.com) and network access.`,
     };
   }
   if (response.ok) {

@@ -1,3 +1,4 @@
+import { ProviderHttpError } from "../providerError.js";
 function splitName(full) {
     if (!full)
         return {};
@@ -26,7 +27,7 @@ export async function fetchExploriumProspects(opts) {
         body: JSON.stringify({ mode: "full", size, page_size: size, page: 1, filters: opts.filters }),
     });
     if (!response.ok) {
-        throw new Error(`Explorium /v1/prospects failed: HTTP ${response.status} ${await safeText(response)}`);
+        throw new ProviderHttpError("Explorium", "prospect search", response.status);
     }
     const data = (await response.json());
     return (data.data ?? []).map((row) => ({
@@ -58,7 +59,7 @@ export async function fetchPipe0CrustdataProspects(opts) {
         }),
     });
     if (!response.ok) {
-        throw new Error(`pipe0 /v1/searches/run/sync failed: HTTP ${response.status} ${await safeText(response)}`);
+        throw new ProviderHttpError("pipe0", "prospect search", response.status);
     }
     const body = (await response.json());
     // Surface upstream provider errors (e.g. CreditBalanceInsufficient) instead of
@@ -119,7 +120,7 @@ export async function probeExploriumBusinessCount(opts) {
         body: JSON.stringify({ mode: "full", page_size: 1, page: 1, filters: opts.filters }),
     });
     if (!response.ok) {
-        throw new Error(`Explorium /v1/businesses count failed: HTTP ${response.status} ${await safeText(response)}`);
+        throw new ProviderHttpError("Explorium", "business count", response.status);
     }
     const body = (await response.json());
     const total = body.total_results;
@@ -292,14 +293,6 @@ export async function pipe0ResolveCompanyDomains(opts) {
 function fieldValue(field) {
     const v = field?.value;
     return typeof v === "string" && v.trim() ? v : undefined;
-}
-async function safeText(response) {
-    try {
-        return (await response.text()).slice(0, 300);
-    }
-    catch {
-        return "";
-    }
 }
 // ---------------------------------------------------------------------------
 // Pre-email dedup: identity keys shared between prospects and CRM contacts, so

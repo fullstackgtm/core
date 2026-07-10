@@ -373,6 +373,12 @@ fullstackgtm logout hubspot   # or: salesforce | broker
 
 BYO direct credentials always win over a hosted broker pairing, so an operator can override the team default. First-party app secrets never ship in the npm package; hosted login stores a local broker token and mints provider tokens server-side. HubSpot does not support the device-authorization grant or secretless public clients, which is why the bring-your-own-app OAuth path requires client credentials; they are stored locally for silent refresh, the same model as `gcloud` and `aws` CLI profiles.
 
+Salesforce credential-bearing URLs are restricted to canonical HTTPS
+Salesforce-owned production, sandbox, and My Domain origins. Lookalike hosts,
+userinfo, paths/query/fragment, nonstandard ports, unsafe token-response
+instance URLs, and credential-forwarding redirects are refused both when the
+credential is stored and every time it is used.
+
 ## Connect your CRM
 
 What each provider actually requires before `audit --provider <name>` works on your data.
@@ -539,9 +545,14 @@ Nine tools are exposed over stdio.
 
 **Read-only:** `fullstackgtm_audit` (sample, demo, file, or live provider sources with optional rule scoping), `fullstackgtm_capabilities` (server/tool capability manifest), `fullstackgtm_rules` (rule discovery), `fullstackgtm_suggest` (deterministic placeholder values with confidence + reasons), `fullstackgtm_call_parse` (transcripts → provenance-marked segments, insights, and evidence), `fullstackgtm_resolve` (the create gate: exists / ambiguous / safe_to_create), and `fullstackgtm_market_worksheet` (the classification packet for one vendor: claims, judging rules, captured page texts).
 
-**Gated:** `fullstackgtm_apply` (requires explicit `approvedOperationIds`; placeholders still need value overrides) and `fullstackgtm_market_observe` (verifies every quoted span against the stored captures before appending — nothing is stored unless the whole set passes).
+**Gated:** `fullstackgtm_apply` (accepts only a stored plan id; approvals and values must already be human-approved and HMAC-signed in the plan store) and `fullstackgtm_market_observe` (verifies every quoted span against the stored captures before appending — nothing is stored unless the whole set passes).
 
 Tokens stored via `fullstackgtm login` are picked up automatically — the env var is only needed when no stored login exists.
+
+Rule packages are executable JavaScript and are disabled by default. In the CLI,
+review the modules and use `--config <path> --allow-plugins`; use `--no-plugins`
+to apply only declarative config. MCP never executes rule packages: mutable
+tool-call paths are not a durable code-trust boundary.
 
 ## Safety model
 

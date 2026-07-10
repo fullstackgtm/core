@@ -38,8 +38,10 @@ export {
   loadConfig,
   mergePolicy,
   resolveConfiguredRules,
+  rulePackageTrustFromCli,
   type FullstackgtmConfig,
   type LoadedConfig,
+  type RulePackageTrust,
 } from "./config.ts";
 export { applyPatchPlan, type ApplyPatchPlanOptions } from "./connector.ts";
 export {
@@ -76,6 +78,7 @@ export {
   pollSalesforceDeviceLogin,
   refreshSalesforceToken,
   startSalesforceDeviceLogin,
+  validateSalesforceOrigin,
   validateSalesforceToken,
   type SalesforceDeviceAuthorization,
   type SalesforceTokenSet,
@@ -575,3 +578,4 @@ export type {
   RiskLevel,
   SourceFreshness,
 } from "./types.ts";
+export { ProviderHttpError } from "./providerError.ts";

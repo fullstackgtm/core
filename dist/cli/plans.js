@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { auditSnapshot, defaultPolicy } from "../audit.js";
-import { loadConfig, mergePolicy, resolveConfiguredRules } from "../config.js";
+import { loadConfig, mergePolicy, resolveConfiguredRules, rulePackageTrustFromCli } from "../config.js";
 import { applyPatchPlan } from "../connector.js";
 import { diffFindings, diffSnapshots, diffToMarkdown } from "../diff.js";
 import { createChannelConnector } from "../connectors/outboxChannel.js";
@@ -210,6 +210,19 @@ export async function apply(args) {
     // A channel (e.g. outbox) renders approved ops to a local artifact and
     // transmits nothing; a CRM provider writes records. Same governed apply path.
     const connector = channel ? createChannelConnector(channel) : await connectorFor(provider, args);
+    let applyClaimId;
+    if (planId && store) {
+        const claimed = await store.claimApply(planId, { provider: provider ?? `channel:${channel}`, source: "cli" });
+        applyClaimId = claimed.claimId;
+        const claimedVerification = verifyApprovalDigests(claimed.stored.plan.operations, claimed.stored.approvedOperationIds, claimed.stored.valueOverrides, claimed.stored.approvalDigests);
+        if (!claimedVerification.ok) {
+            await store.abortApplyPreflight(planId, claimed.claimId, "Approval integrity verification failed after the claim and before provider I/O.");
+            throw new Error(`Refusing to apply plan ${planId}: approval changed while acquiring the apply claim.`);
+        }
+        plan = claimed.stored.plan;
+        approvedOperationIds = claimed.stored.approvedOperationIds;
+        valueOverrides = claimed.stored.valueOverrides;
+    }
     // Interactive terminals get a live apply board on stderr while the run
     // executes (preflight → operations → results, with a per-op safety ticker);
     // piped runs render nothing. Either way the emitter streams heartbeats to
@@ -224,11 +237,18 @@ export async function apply(args) {
             progress,
         });
     }
+    catch (error) {
+        // Once applyPatchPlan starts, an exception cannot prove that the provider
+        // performed no write. Keep the claim fail-closed for operator reconciliation.
+        if (planId && store && applyClaimId)
+            await store.markApplyUncertain(planId, applyClaimId);
+        throw error;
+    }
     finally {
         renderer.done();
     }
     if (planId && store) {
-        await store.recordRun(planId, run);
+        await store.recordRun(planId, run, applyClaimId);
     }
     // Charge the acquire meter for the creates that actually landed.
     if (createOps.length > 0) {
@@ -272,8 +292,9 @@ export async function diffCommand(args) {
     }
     const before = JSON.parse(readFileSync(resolve(process.cwd(), beforePath), "utf8"));
     const after = JSON.parse(readFileSync(resolve(process.cwd(), afterPath), "utf8"));
-    const loaded = loadConfig(option(args, "--config") ?? undefined);
-    const rules = selectedRules(args, await resolveConfiguredRules(loaded));
+    const explicitConfig = option(args, "--config") ?? undefined;
+    const loaded = loadConfig(explicitConfig);
+    const rules = selectedRules(args, await resolveConfiguredRules(loaded, undefined, rulePackageTrustFromCli(args, explicitConfig)));
     const policy = mergePolicy(defaultPolicy(), loaded?.config);
     const today = option(args, "--today");
     if (today)
@@ -397,6 +418,14 @@ export async function plansCommand(args) {
         console.log(`Status: ${planStatusWord(stored.status, showPaint)}`);
         console.log(`Approved operations: ${stored.approvedOperationIds.join(", ") || "none"}`);
         console.log(`Runs: ${stored.runs.length}`);
+        if (stored.applyAttempts?.length) {
+            console.log("Apply attempts:");
+            for (const attempt of stored.applyAttempts) {
+                console.log(`  ${attempt.id}  ${attempt.status}  ${attempt.provider} via ${attempt.source}  ${attempt.claimedAt}`);
+                if (attempt.note)
+                    console.log(`    ${attempt.note}`);
+            }
+        }
         console.log("");
         console.log(stylizePlanMarkdown(patchPlanToMarkdown(stored.plan), showPaint));
         return;
@@ -452,5 +481,27 @@ export async function plansCommand(args) {
         console.log(`Rejected ${planId}.`);
         return;
     }
-    throw unknownSubcommandError("plans", subcommand, ["list", "show", "approve", "reject"]);
+    if (subcommand === "recover") {
+        const planId = rest.find((arg) => !arg.startsWith("--"));
+        if (!planId) {
+            throw new Error("Usage: fullstackgtm plans recover <planId> --acknowledge-uncertain-writes");
+        }
+        const stored = await store.get(planId);
+        if (!stored)
+            throw new Error(`No stored plan with id ${planId}.`);
+        if (stored.status !== "applying" || !stored.applyClaim) {
+            throw new Error(`Plan ${planId} has no unresolved apply attempt.`);
+        }
+        const attempt = stored.applyAttempts?.find((entry) => entry.id === stored.applyClaim?.id);
+        if (!rest.includes("--acknowledge-uncertain-writes")) {
+            throw new Error(`Plan ${planId} has an unresolved ${attempt?.provider ?? "provider"} apply attempt (${stored.applyClaim.id}). ` +
+                "Inspect the affected records in the provider; do not replay automatically. If you accept that some writes may already have landed, " +
+                `run \`fullstackgtm plans recover ${planId} --acknowledge-uncertain-writes\`. This clears every approval and requires a fresh review and approval before retrying.`);
+        }
+        await store.recoverApply(planId);
+        console.log(`Released ${planId} to needs_approval after acknowledging uncertain provider state. ` +
+            `No writes were replayed. Re-audit provider state, review the plan, then approve operations again before any apply.`);
+        return;
+    }
+    throw unknownSubcommandError("plans", subcommand, ["list", "show", "approve", "reject", "recover"]);
 }

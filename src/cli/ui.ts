@@ -449,6 +449,7 @@ export function severityWord(word: string, p: Paint): string {
 export function planStatusWord(status: string, p: Paint): string {
   if (status === "needs_approval") return p.yellow(status);
   if (status === "approved" || status === "applied") return p.green(status);
+  if (status === "applying") return p.yellow(status);
   if (status === "rejected") return p.red(status);
   return status;
 }

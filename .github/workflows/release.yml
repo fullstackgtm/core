@@ -18,18 +18,21 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: npm-production
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
 
       # Trusted publishing requires npm >= 11.5.1; runners bundle an older npm.
-      - name: Update npm
-        run: npm install -g npm@latest
+      - name: Install audited npm version
+        run: |
+          npm install -g --ignore-scripts npm@11.5.1
+          test "$(npm --version)" = "11.5.1"
 
       - name: Install dependencies
         run: npm ci
@@ -59,5 +62,13 @@ jobs:
             exit 1
           fi
 
+      - name: Verify full source provenance
+        run: |
+          SOURCE_SHA=$(node -p "require('./SOURCE_PROVENANCE.json').sourceCommit")
+          if ! printf '%s' "$SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "SOURCE_PROVENANCE.json does not contain a full source commit SHA" >&2
+            exit 1
+          fi
+
       - name: Publish to npm (OIDC trusted publishing)
-        run: npm publish --access public --tag latest
+        run: npm publish --access public --tag latest --provenance

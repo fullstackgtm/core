@@ -20,6 +20,7 @@ export type ApprovalStatus =
   | "draft"
   | "needs_approval"
   | "approved"
+  | "applying"
   | "rejected"
   | "applied";
 

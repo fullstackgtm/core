@@ -1,4 +1,5 @@
 import { SALESFORCE_DEFAULT_FIELD_MAPPINGS, mappedField, mappedFields, readMappedValue, } from "../mappings.js";
+import { validateSalesforceOrigin } from "./salesforceAuth.js";
 import { SNAPSHOT_PULL_STAGES } from "../progress.js";
 const DEFAULT_API_VERSION = "v59.0";
 const SOBJECT_TYPES = {
@@ -97,13 +98,17 @@ export function createSalesforceConnector(options) {
     }
     async function request(path, init = {}) {
         const connection = await options.getConnection();
-        const url = path.startsWith("http")
-            ? path
-            : `${connection.instanceUrl.replace(/\/$/, "")}${path}`;
+        const instanceUrl = validateSalesforceOrigin(connection.instanceUrl, "Salesforce connection instance URL");
+        const resolved = new URL(path, `${instanceUrl}/`);
+        if (resolved.origin !== instanceUrl) {
+            throw new Error("Salesforce response attempted to send credentials to a different origin.");
+        }
+        const url = resolved.href;
         let response;
         try {
             response = await fetchImpl(url, {
                 ...init,
+                redirect: "manual",
                 headers: {
                     Authorization: `Bearer ${connection.accessToken}`,
                     "Content-Type": "application/json",
@@ -113,7 +118,7 @@ export function createSalesforceConnector(options) {
         }
         catch (error) {
             const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
-            throw new Error(`Cannot reach Salesforce at ${connection.instanceUrl}${cause}. Check SALESFORCE_INSTANCE_URL (your My Domain URL, e.g. https://yourco.my.salesforce.com) and network access.`);
+            throw new Error(`Cannot reach Salesforce at ${instanceUrl}${cause}. Check SALESFORCE_INSTANCE_URL (your My Domain URL, e.g. https://yourco.my.salesforce.com) and network access.`);
         }
         if (!response.ok) {
             // Status line only — the body echoes submitted field values and the
@@ -526,8 +531,9 @@ export function createSalesforceConnector(options) {
      */
     async function soapMerge(sobjectType, masterId, loserIds) {
         const connection = await options.getConnection();
+        const instanceUrl = validateSalesforceOrigin(connection.instanceUrl, "Salesforce connection instance URL");
         const version = apiVersion.replace(/^v/, ""); // SOAP path uses "59.0", not "v59.0"
-        const url = `${connection.instanceUrl.replace(/\/$/, "")}/services/Soap/u/${version}`;
+        const url = `${instanceUrl}/services/Soap/u/${version}`;
         const toMerge = loserIds.map((id) => `<urn:recordToMergeIds>${escapeXml(id)}</urn:recordToMergeIds>`).join("");
         const envelope = `<?xml version="1.0" encoding="UTF-8"?>` +
             `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:partner.soap.sforce.com" xmlns:urn1="urn:sobject.partner.soap.sforce.com">` +
@@ -540,6 +546,7 @@ export function createSalesforceConnector(options) {
         try {
             response = await fetchImpl(url, {
                 method: "POST",
+                redirect: "manual",
                 headers: { "Content-Type": "text/xml; charset=UTF-8", SOAPAction: '""' },
                 body: envelope,
             });

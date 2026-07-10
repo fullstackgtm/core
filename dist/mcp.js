@@ -158,12 +158,19 @@ const toolDefinitions = [
         },
         handler: async ({ provider, inputPath, configPath, rules, output, today, staleDealDays }) => {
             const loaded = configPath ? loadConfig(configPath) : null;
+            if (loaded?.config.rulePackages?.length) {
+                throw new Error("MCP refuses executable rulePackages from tool-call configPath. " +
+                    "MCP plugin execution is disabled because mutable tool-call paths are not a durable code-trust boundary. " +
+                    "Run reviewed plugins through the CLI with --config <path> --allow-plugins instead.");
+            }
             const policy = mergePolicy(defaultPolicy(today), loaded?.config);
             if (today)
                 policy.today = today;
             if (staleDealDays !== undefined)
                 policy.staleDealDays = staleDealDays;
-            const ruleSet = await resolveConfiguredRules(loaded);
+            const ruleSet = await resolveConfiguredRules(loaded, undefined, {
+                disableRulePackages: true,
+            });
             const selected = rules?.length
                 ? ruleSet.filter((rule) => rules.includes(rule.id))
                 : ruleSet;
@@ -273,122 +280,79 @@ const toolDefinitions = [
         writesCrm: true,
         config: {
             title: "Apply Approved Patch Operations",
-            description: "Apply explicitly approved operations from a patch plan through a provider " +
-                "connector. Operations not listed in approvedOperationIds are never written, " +
-                "and requires_human_* placeholders need a value override. When the plan is in " +
-                "the local plan store (saved via `audit --save`), approvals are verified against " +
-                "the store's HMAC approval digests — ids not approved with `plans approve` are " +
-                "refused — and the run is recorded onto the stored plan so `plans show` and " +
+            description: "Apply a stored, human-approved patch plan through a provider connector. The plan, " +
+                "approved operation ids, and concrete placeholder values are loaded exclusively from " +
+                "the local plan store and verified against its HMAC approval digests. Callers cannot " +
+                "supply or widen approvals. Every apply run is recorded so `plans show` and " +
                 "`audit-log export` include it.",
             inputSchema: strictSchema({
                 provider: z.enum(["hubspot", "salesforce"]),
-                planPath: z.string(),
-                approvedOperationIds: z.array(z.string()).min(1),
-                valueOverrides: z.record(z.string(), z.string()).optional(),
+                planId: z.string().regex(/^[\w.-]+$/),
                 output: z.enum(["json", "markdown"]).optional(),
             }),
         },
-        handler: async ({ provider, planPath, approvedOperationIds, valueOverrides, output }) => {
-            // The file may be a raw PatchPlan (audit --out) or a StoredPlan envelope
-            // (a file straight out of the plan-store directory).
-            const parsed = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
-            const filePlan = isStoredPlanFile(parsed) ? parsed.plan : parsed;
-            if (!filePlan || !Array.isArray(filePlan.operations)) {
-                throw new Error(`${planPath} is not a patch plan (expected { id, operations: [...] }).`);
-            }
-            // Governance parity with CLI apply: when this plan id exists in the local
-            // plan store, the STORE is the source of truth — the approved-id set must
-            // come from `plans approve` (which HMAC-signed each approved op), the
-            // signatures are re-verified here, and the run is recorded back onto the
-            // plan so audit-log export sees MCP applies exactly like CLI applies.
+        handler: async ({ provider, planId, output }) => {
+            // The store is the only authority accepted over MCP. In particular, do
+            // not accept a plan body/path, approval ids, or value overrides from the
+            // agent call: combining proposal and approval in one call defeats the
+            // human approval boundary the plan lifecycle is meant to enforce.
             const store = createFilePlanStore();
-            const stored = typeof filePlan.id === "string" && /^[\w.-]+$/.test(filePlan.id)
-                ? await store.get(filePlan.id)
-                : null;
-            let plan;
-            let effectiveOverrides;
-            if (stored) {
-                if (stored.status !== "approved") {
-                    throw new Error(`Plan ${filePlan.id} is ${stored.status}; approve operations first with ` +
-                        `\`fullstackgtm plans approve ${filePlan.id} --operations <ids|all>\`.`);
-                }
-                // Downgrade guard (same as CLI apply): an approved plan with no
-                // signatures either predates 0.26 or had approvalDigests stripped to
-                // skip the integrity check. Refuse rather than trust the file.
-                if (stored.approvedOperationIds.length > 0 && !stored.approvalDigests) {
-                    throw new Error(`Refusing to apply plan ${filePlan.id}: it was approved without integrity signatures ` +
-                        "(approved before 0.26.0, or its signatures were removed). Re-approve it with " +
-                        `\`fullstackgtm plans approve ${filePlan.id} --operations <ids|all>\`.`);
-                }
-                // Never widen: every id the tool wants applied must already be
-                // store-approved. (A subset is fine — narrowing never writes more.)
-                const storeApproved = new Set(stored.approvedOperationIds);
-                const unapproved = approvedOperationIds.filter((id) => !storeApproved.has(id));
-                if (unapproved.length > 0) {
-                    throw new Error(`Refusing to apply plan ${filePlan.id}: operation(s) ${unapproved.join(", ")} were never ` +
-                        "approved in the plan store. Approve them first with " +
-                        `\`fullstackgtm plans approve ${filePlan.id} --operations <ids>\`.`);
-                }
-                // Integrity gate: verify against the EFFECTIVE overrides (stored ∪ tool
-                // args), so a tool-supplied value that changes what the human approved
-                // is treated as tamper, not a live override — what gets written must
-                // equal what was signed.
-                effectiveOverrides = { ...stored.valueOverrides, ...(valueOverrides ?? {}) };
-                const verification = verifyApprovalDigests(stored.plan.operations, stored.approvedOperationIds, effectiveOverrides, stored.approvalDigests);
-                if (!verification.ok) {
-                    const detail = verification.reason === "no_key"
-                        ? "the plan-signing key is missing (was this plan approved on another machine?). Re-approve it here with `fullstackgtm plans approve`."
-                        : `these operations differ from what was approved: ${verification.tampered.join(", ")}. ` +
-                            "If you want a different value, set it at approval (`plans approve --value <op>=<v>`) and re-approve; " +
-                            "otherwise the plan was edited after approval — review and re-approve.";
-                    throw new Error(`Refusing to apply plan ${filePlan.id}: ${detail}`);
-                }
-                plan = stored.plan; // apply what was signed, not what the file says now
+            const stored = await store.get(planId);
+            if (!stored) {
+                throw new Error(`No stored plan with id ${planId}. Save it with \`fullstackgtm audit --save\`, then approve it with \`fullstackgtm plans approve\`.`);
             }
-            else {
-                // External plan file, not in the store: no digests exist to verify, but
-                // approvals must still reference real operations in the plan content.
-                plan = filePlan;
-                const known = new Set(plan.operations.map((operation) => operation.id));
-                const unknown = approvedOperationIds.filter((id) => !known.has(id));
-                if (unknown.length > 0) {
-                    throw new Error(`Plan ${planPath} has no operation(s) ${unknown.join(", ")} — approvedOperationIds ` +
-                        "must reference operations in the plan.");
-                }
-                effectiveOverrides = valueOverrides ?? {};
+            if (stored.status !== "approved") {
+                throw new Error(`Plan ${planId} is ${stored.status}; approve operations first with ` +
+                    `\`fullstackgtm plans approve ${planId} --operations <ids|all>\`.`);
             }
-            const run = await applyPatchPlan(await connectorFor(provider), plan, {
-                approvedOperationIds,
-                valueOverrides: effectiveOverrides,
-            });
-            // Persist the run (same data the CLI records) so runs[] and plan status
-            // update and audit-log export includes MCP applies. External plan files
-            // have no store entry to update — say so instead of silently dropping it.
-            let runRecorded = false;
-            if (stored) {
-                await store.recordRun(plan.id, run);
-                runRecorded = true;
+            if (stored.approvedOperationIds.length === 0) {
+                throw new Error(`Plan ${planId} has no approved operations.`);
             }
+            if (!stored.approvalDigests) {
+                throw new Error(`Refusing to apply plan ${planId}: it was approved without integrity signatures ` +
+                    "(approved before 0.26.0, or its signatures were removed). Re-approve it with " +
+                    `\`fullstackgtm plans approve ${planId} --operations <ids|all>\`.`);
+            }
+            const verification = verifyApprovalDigests(stored.plan.operations, stored.approvedOperationIds, stored.valueOverrides, stored.approvalDigests);
+            if (!verification.ok) {
+                const detail = verification.reason === "no_key"
+                    ? "the plan-signing key is missing (was this plan approved on another machine?). Re-approve it here with `fullstackgtm plans approve`."
+                    : `these operations differ from what was approved: ${verification.tampered.join(", ")}. ` +
+                        "The stored plan or approved values changed after approval — review and re-approve.";
+                throw new Error(`Refusing to apply plan ${planId}: ${detail}`);
+            }
+            const connector = await connectorFor(provider);
+            // Claim only after all preflight checks and credential resolution. The
+            // atomic store transition prevents a second CLI/MCP process from
+            // applying the same approval concurrently.
+            const claimed = await store.claimApply(planId, { provider, source: "mcp" });
+            const claimedVerification = verifyApprovalDigests(claimed.stored.plan.operations, claimed.stored.approvedOperationIds, claimed.stored.valueOverrides, claimed.stored.approvalDigests);
+            if (!claimedVerification.ok) {
+                await store.abortApplyPreflight(planId, claimed.claimId, "Approval integrity verification failed after the claim and before provider I/O.");
+                throw new Error(`Refusing to apply plan ${planId}: the claimed plan differs from what was approved: ` +
+                    `${claimedVerification.tampered.join(", ") || "signing key unavailable"}.`);
+            }
+            let run;
+            try {
+                run = await applyPatchPlan(connector, claimed.stored.plan, {
+                    approvedOperationIds: claimed.stored.approvedOperationIds,
+                    valueOverrides: claimed.stored.valueOverrides,
+                });
+            }
+            catch (error) {
+                await store.markApplyUncertain(planId, claimed.claimId);
+                throw error;
+            }
+            await store.recordRun(claimed.stored.plan.id, run, claimed.claimId);
             const governance = {
-                planSource: stored ? "store" : "external",
-                approvalDigestsVerified: stored !== null,
-                runRecorded,
-                ...(stored
-                    ? {}
-                    : {
-                        note: "Plan file is not in the local plan store: approvals came from tool arguments " +
-                            "(verified against the plan content only — no approval-digest check) and the run " +
-                            "was not recorded. Use `fullstackgtm audit --save` + `plans approve` for " +
-                            "store-backed governance.",
-                    }),
+                planSource: "store",
+                approvalDigestsVerified: true,
+                runRecorded: true,
             };
             if (output === "markdown") {
                 return content(`${formatPatchPlanRun(run)}\n\nGovernance: plan source ${governance.planSource}; ` +
-                    (runRecorded
-                        ? "approval digests verified; run recorded on the stored plan (audit-log export includes it)."
-                        : governance.note));
+                    "approval digests verified; run recorded on the stored plan (audit-log export includes it).");
             }
-            // Backward compatible: the run's own fields stay top-level; governance is additive.
             return content({ ...run, governance });
         },
     },
@@ -470,7 +434,7 @@ toolDefinitions.unshift({
             writesCrm,
         })),
         safety: "Only tools flagged writesCrm can reach a CRM; fullstackgtm_apply writes only operations " +
-            "listed in approvedOperationIds and never writes requires_human_* placeholders without a value override.",
+            "from a stored plan whose ids and values were human-approved and HMAC-verified.",
         server: { command: "npx -y fullstackgtm-mcp" },
         cli: {
             command: "npx fullstackgtm <command> [--json]",
@@ -496,18 +460,6 @@ export async function startMcpServer() {
     }
     const transport = new StdioServerTransport();
     await server.connect(transport);
-}
-/**
- * A plan-store file is a StoredPlan envelope ({ plan, status, runs, ... });
- * `audit --out` writes a bare PatchPlan. fullstackgtm_apply accepts either.
- */
-function isStoredPlanFile(value) {
-    if (typeof value !== "object" || value === null || !("plan" in value))
-        return false;
-    const plan = value.plan;
-    return (typeof plan === "object" &&
-        plan !== null &&
-        Array.isArray(plan.operations));
 }
 function loadMarketConfigOrHint(path) {
     try {

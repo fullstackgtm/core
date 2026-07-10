@@ -1,22 +1,3 @@
-/**
- * TheirStack — technographic company discovery.
- *
- * Explorium can only size a firmographic universe (NAICS/size/geo) and can't even
- * return the list. For a CRM-hygiene/RevOps tool the real buying signal is
- * "company runs a CRM", and the deliverable is an actual list of those companies.
- * TheirStack does both: filter companies by the technology they use (Salesforce,
- * HubSpot, Pipedrive, …) plus firmographics, and return real records (name,
- * domain, employee_count, …). A cheap count sizes the market; a paged search
- * materializes the list. Both cost ~3 credits per company RETURNED — counting
- * still returns 1 row (the API rejects limit:0), so a count is ~3 credits, not
- * free; a list pull is ~3 × the rows.
- *
- * API: POST https://api.theirstack.com/v1/companies/search, Bearer auth.
- * Verified live (2026-06-29): filters company_technology_slug_or /
- * company_country_code_or / min_employee_count / max_employee_count; the total is
- * `metadata.total_results` with include_total_results:true; limit must be ≥ 1
- * (limit:0 → 422, the count gotcha — cf. Explorium's `size`-caps-the-total).
- */
 type FetchImpl = typeof fetch;
 /** TheirStack charges per company RETURNED — verified live (a list pull of N
  *  companies spends 3N). The count (limit:1) returns 1 row, so it's ~3 credits. */

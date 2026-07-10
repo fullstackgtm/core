@@ -19,6 +19,7 @@ import type {
   PatchOperationResult,
   SnapshotProgress,
 } from "../types.ts";
+import { validateSalesforceOrigin } from "./salesforceAuth.ts";
 import { SNAPSHOT_PULL_STAGES, type ProgressEmitter } from "../progress.ts";
 
 const DEFAULT_API_VERSION = "v59.0";
@@ -152,13 +153,17 @@ export function createSalesforceConnector(
 
   async function request(path: string, init: RequestInit = {}): Promise<any> {
     const connection = await options.getConnection();
-    const url = path.startsWith("http")
-      ? path
-      : `${connection.instanceUrl.replace(/\/$/, "")}${path}`;
+    const instanceUrl = validateSalesforceOrigin(connection.instanceUrl, "Salesforce connection instance URL");
+    const resolved = new URL(path, `${instanceUrl}/`);
+    if (resolved.origin !== instanceUrl) {
+      throw new Error("Salesforce response attempted to send credentials to a different origin.");
+    }
+    const url = resolved.href;
     let response: Response;
     try {
       response = await fetchImpl(url, {
         ...init,
+        redirect: "manual",
         headers: {
           Authorization: `Bearer ${connection.accessToken}`,
           "Content-Type": "application/json",
@@ -168,7 +173,7 @@ export function createSalesforceConnector(
     } catch (error) {
       const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
       throw new Error(
-        `Cannot reach Salesforce at ${connection.instanceUrl}${cause}. Check SALESFORCE_INSTANCE_URL (your My Domain URL, e.g. https://yourco.my.salesforce.com) and network access.`,
+        `Cannot reach Salesforce at ${instanceUrl}${cause}. Check SALESFORCE_INSTANCE_URL (your My Domain URL, e.g. https://yourco.my.salesforce.com) and network access.`,
       );
     }
     if (!response.ok) {
@@ -644,8 +649,9 @@ export function createSalesforceConnector(
     loserIds: string[],
   ): Promise<{ ok: boolean; detail?: string }> {
     const connection = await options.getConnection();
+    const instanceUrl = validateSalesforceOrigin(connection.instanceUrl, "Salesforce connection instance URL");
     const version = apiVersion.replace(/^v/, ""); // SOAP path uses "59.0", not "v59.0"
-    const url = `${connection.instanceUrl.replace(/\/$/, "")}/services/Soap/u/${version}`;
+    const url = `${instanceUrl}/services/Soap/u/${version}`;
     const toMerge = loserIds.map((id) => `<urn:recordToMergeIds>${escapeXml(id)}</urn:recordToMergeIds>`).join("");
     const envelope =
       `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -659,6 +665,7 @@ export function createSalesforceConnector(
     try {
       response = await fetchImpl(url, {
         method: "POST",
+        redirect: "manual",
         headers: { "Content-Type": "text/xml; charset=UTF-8", SOAPAction: '""' },
         body: envelope,
       });

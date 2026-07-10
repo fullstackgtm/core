@@ -10,7 +10,8 @@ is no fullstackgtm-operated server in the data path for the open package.**
 
 - CRM snapshots, patch plans, approvals, apply-run records, market captures and
   observations, enrich run state, and the signing/credential stores all live
-  under `$FSGTM_HOME` (default `~/.fullstackgtm`), `0600`/`0700`. Nothing is
+  under `$FSGTM_HOME` (default `~/.fullstackgtm`), `0600`/`0700`, using atomic
+  no-follow file I/O. Nothing is
   uploaded to Full Stack GTM.
 - No telemetry, analytics, or phone-home. The core package has zero runtime
   dependencies; the only network calls are the ones listed below, all to
@@ -23,11 +24,15 @@ is no fullstackgtm-operated server in the data path for the open package.**
 | `snapshot`, `audit`, `apply`, `resolve`, `bulk-update`, `dedupe`, `reassign`, `fix`, `enrich` (writeback) | **Your CRM** (HubSpot / Salesforce / Stripe API) | Reads: your CRM records. Writes: only approved patch operations. | Your CRM token (env / stored / broker) |
 | `call parse`, `call score`, `market classify`, `market refresh` | **Your LLM provider** (api.anthropic.com or api.openai.com) | The call transcript / captured competitor page text you point at, plus the extraction prompt | Your `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` (BYO) |
 | `enrich append --source apollo`, `enrich refresh` | **Apollo** (api.apollo.io) | The company domain / contact email being enriched | Your `APOLLO_API_KEY` (BYO) |
-| `market capture`, `market refresh` | **Public vendor websites** you list in `market.config.json` | An HTTP GET (no data sent beyond the request); SSRF-guarded to public hosts only | none |
+| `market capture`, `market refresh` | **Public vendor websites** you list in `market.config.json` | A bounded HTTP GET; DNS answers are validated and pinned, mixed/private/reserved answers are refused, and every redirect is revalidated | none |
 | `login --via <url>` (optional) | **Your hosted deployment's broker** | A pairing handshake; the broker mints short-lived CRM tokens | broker pairing token |
 
 Commands not listed (`plans`, `rules`, `doctor`, `schedule`, `audit-log`,
 `diff`, `merge`, report rendering) make **no network calls**.
+
+Provider HTTP failures persist only typed provider/operation/status/retryability
+metadata. Raw third-party response bodies—which may reflect credentials,
+filters, or PII—are not written to run records or normal CLI/MCP errors.
 
 ## Avoiding third-party data egress
 

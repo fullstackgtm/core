@@ -17,9 +17,29 @@ export type StoredPlan = {
      * file is caught instead of written. Absent on plans approved before 0.26.0.
      */
     approvalDigests?: Record<string, string>;
+    /** Monotonic store revision used to make lifecycle changes explicit. */
+    revision: number;
+    /** Present only while one process owns the right to apply this plan. */
+    applyClaim?: {
+        id: string;
+        claimedAt: string;
+        revision: number;
+    };
+    /** Durable journal of apply ownership. An unresolved entry must never be replayed automatically. */
+    applyAttempts?: ApplyAttempt[];
     runs: PatchPlanRun[];
     createdAt: string;
     updatedAt: string;
+};
+export type ApplyAttempt = {
+    id: string;
+    claimedAt: string;
+    provider: string;
+    source: "cli" | "fix" | "mcp";
+    status: "in_progress" | "preflight_aborted" | "completed" | "uncertain";
+    resolvedAt?: string;
+    /** Deliberately generic: provider errors can contain CRM data or credentials. */
+    note?: string;
 };
 export interface PlanStore {
     save(plan: PatchPlan): Promise<StoredPlan>;
@@ -27,7 +47,14 @@ export interface PlanStore {
     list(status?: ApprovalStatus): Promise<StoredPlan[]>;
     approveOperations(planId: string, operationIds: string[], valueOverrides?: Record<string, unknown>): Promise<StoredPlan>;
     reject(planId: string): Promise<StoredPlan>;
-    recordRun(planId: string, run: PatchPlanRun): Promise<StoredPlan>;
+    claimApply(planId: string, metadata?: Pick<ApplyAttempt, "provider" | "source">): Promise<{
+        stored: StoredPlan;
+        claimId: string;
+    }>;
+    recordRun(planId: string, run: PatchPlanRun, claimId: string): Promise<StoredPlan>;
+    abortApplyPreflight(planId: string, claimId: string, note: string): Promise<StoredPlan>;
+    markApplyUncertain(planId: string, claimId: string): Promise<StoredPlan>;
+    recoverApply(planId: string): Promise<StoredPlan>;
 }
 /**
  * Plans as JSON files in a directory (default `$FSGTM_HOME/plans`), one file

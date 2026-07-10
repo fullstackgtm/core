@@ -3,10 +3,11 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { auditSnapshot, defaultPolicy } from "../audit.ts";
-import { loadConfig, mergePolicy, resolveConfiguredRules } from "../config.ts";
+import { loadConfig, mergePolicy, resolveConfiguredRules, rulePackageTrustFromCli } from "../config.ts";
 import { applyPatchPlan } from "../connector.ts";
 import { patchPlanToMarkdown } from "../format.ts";
 import { createFilePlanStore } from "../planStore.ts";
+import { verifyApprovalDigests } from "../integrity.ts";
 import { resolveRecord, type ResolveCandidate } from "../resolve.ts";
 import { parseAssignmentPolicy } from "../assign.ts";
 import { buildLeadRoutePlan } from "../route.ts";
@@ -213,8 +214,9 @@ export async function fixCommand(args: string[]) {
   }
   const includeCreates = args.includes("--include-creates");
 
-  const loaded = loadConfig(option(args, "--config") ?? undefined);
-  const configured = await resolveConfiguredRules(loaded);
+  const explicitConfig = option(args, "--config") ?? undefined;
+  const loaded = loadConfig(explicitConfig);
+  const configured = await resolveConfiguredRules(loaded, undefined, rulePackageTrustFromCli(args, explicitConfig));
   const rule = configured.find((candidate) => candidate.id === ruleId);
   if (!rule) {
     throw new Error(`Unknown rule: ${ruleId}. Available rules: ${configured.map((r) => r.id).join(", ")}`);
@@ -287,6 +289,22 @@ export async function fixCommand(args: string[]) {
     return;
   }
   const connector = await connectorFor(provider, args);
+  const claimed = await store.claimApply(plan.id, { provider, source: "fix" });
+  const { claimId } = claimed;
+  const claimedVerification = verifyApprovalDigests(
+    claimed.stored.plan.operations,
+    claimed.stored.approvedOperationIds,
+    claimed.stored.valueOverrides,
+    claimed.stored.approvalDigests,
+  );
+  if (!claimedVerification.ok) {
+    await store.abortApplyPreflight(
+      plan.id,
+      claimId,
+      "Approval integrity verification failed after the claim and before provider I/O.",
+    );
+    throw new Error(`Refusing to apply plan ${plan.id}: approval changed while acquiring the apply claim.`);
+  }
   // Live apply board on interactive terminals (stderr; inert otherwise); the
   // same emitter streams heartbeats to the paired hosted app on long runs.
   const renderer = createProgressRenderer(APPLY_STAGES);
@@ -295,15 +313,18 @@ export async function fixCommand(args: string[]) {
   );
   let run: PatchPlanRun;
   try {
-    run = await applyPatchPlan(connector, plan, {
-      approvedOperationIds: approvedIds,
-      valueOverrides: overrides,
+    run = await applyPatchPlan(connector, claimed.stored.plan, {
+      approvedOperationIds: claimed.stored.approvedOperationIds,
+      valueOverrides: claimed.stored.valueOverrides,
       progress,
     });
+  } catch (error) {
+    await store.markApplyUncertain(plan.id, claimId);
+    throw error;
   } finally {
     renderer.done();
   }
-  await store.recordRun(plan.id, run);
+  await store.recordRun(plan.id, run, claimId);
   const counts: Record<string, number> = { applied: 0, conflict: 0, skipped: 0, failed: 0 };
   for (const result of run.results) counts[result.status] = (counts[result.status] ?? 0) + 1;
   lines.push(

@@ -44,6 +44,21 @@ node --experimental-strip-types --test tests/fullstackgtm*.test.ts   # from the 
 node packages/fullstackgtm/src/bin.ts doctor                  # run the CLI locally
 ```
 
+Before a release-facing change, verify the artifact rather than only its source
+tree:
+
+```bash
+cd packages/fullstackgtm
+npm run build
+node scripts/verify-packed-install.mjs              # isolated install, optional peers absent
+node scripts/verify-packed-install.mjs --with-peers # isolated install, MCP peers present
+```
+
+The verifier creates the real npm tarball, enforces required/prohibited paths,
+imports the public export, checks its declaration entrypoint, and runs both
+installed binaries. CI repeats compiled-runtime checks on Node 20 and 22 across
+Linux, macOS, and Windows; source-level tests remain on Node 22.6+.
+
 > **Tests live at the monorepo root `tests/`, not in the package.** Running
 > `npm test` *inside* `packages/fullstackgtm` deliberately fails with a pointer
 > (a `pretest` guard) rather than silently passing with zero tests. On the
@@ -78,13 +93,17 @@ the development monorepo). From the monorepo:
 
 1. Bump `packages/fullstackgtm/package.json` version + add a `CHANGELOG.md`
    entry; merge to `main`.
-2. `scripts/sync-oss.sh --push` (builds a fresh `dist/`, mirrors the package +
-   rewritten tests to `fullstackgtm/core`).
+2. Run `scripts/sync-oss.sh` to export an allowlisted mirror from the full
+   source commit, build `dist/`, scan for secrets, and inspect the complete
+   staged diff. Then rerun with `--push` after review. Clone failures stop the
+   release; only a genuine first publication may use the separately confirmed
+   `--initialize-public-repo` mode.
 3. Re-check the mirror's `package.json` version, then tag `vX.Y.Z` on the mirror
    and push the tag.
 4. GitHub Actions (`release.yml`) publishes to npm via **OIDC trusted
-   publishing** — no tokens. It rebuilds from source and refuses to publish if
-   the committed `dist/` differs from a fresh build (supply-chain gate).
+   publishing** — no tokens. The protected `npm-production` environment must
+   require an independent reviewer. The workflow rebuilds from source and
+   refuses to publish if committed `dist/` differs (supply-chain gate).
 
 **Access a new co-maintainer needs to cut a release:** write access to
 `github.com/fullstackgtm/core` (for `sync-oss.sh --push` and the tag push). No

@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { auditSnapshot, defaultPolicy } from "../audit.js";
-import { loadConfig, mergePolicy, resolveConfiguredRules } from "../config.js";
+import { loadConfig, mergePolicy, resolveConfiguredRules, rulePackageTrustFromCli } from "../config.js";
 import { getCredential, resolveHubspotConnection } from "../credentials.js";
 import { patchPlanToMarkdown } from "../format.js";
 import { appendHealthEntry, computeHealth, healthToMarkdown, readHealthTimeline, saveWorkspaceSnapshot, summarizeHealth, activeWorkspaceProfile } from "../health.js";
@@ -169,8 +169,9 @@ async function registerHubspotWithBroker() {
 }
 export async function audit(args) {
     const threshold = failOnThreshold(args);
-    const loaded = loadConfig(option(args, "--config") ?? undefined);
-    const rules = selectedRules(args, await resolveConfiguredRules(loaded));
+    const explicitConfig = option(args, "--config") ?? undefined;
+    const loaded = loadConfig(explicitConfig);
+    const rules = selectedRules(args, await resolveConfiguredRules(loaded, undefined, rulePackageTrustFromCli(args, explicitConfig)));
     const snapshot = await readSnapshot(args);
     const policy = mergePolicy(defaultPolicy(), loaded?.config);
     const today = option(args, "--today");
@@ -326,8 +327,9 @@ function shortDay(at) {
  * re-fetching (useful for a plan produced earlier or by another machine).
  */
 export async function reportCommand(args) {
-    const loaded = loadConfig(option(args, "--config") ?? undefined);
-    const configuredRules = await resolveConfiguredRules(loaded);
+    const explicitConfig = option(args, "--config") ?? undefined;
+    const loaded = loadConfig(explicitConfig);
+    const configuredRules = await resolveConfiguredRules(loaded, undefined, rulePackageTrustFromCli(args, explicitConfig));
     let plan;
     let snapshot;
     const planPath = option(args, "--plan");
@@ -375,8 +377,9 @@ export async function reportCommand(args) {
     }
 }
 export async function rulesCommand(args) {
-    const loaded = loadConfig(option(args, "--config") ?? undefined);
-    const rules = await resolveConfiguredRules(loaded);
+    const explicitConfig = option(args, "--config") ?? undefined;
+    const loaded = loadConfig(explicitConfig);
+    const rules = await resolveConfiguredRules(loaded, undefined, rulePackageTrustFromCli(args, explicitConfig));
     if (args.includes("--json")) {
         console.log(JSON.stringify(rules.map(({ id, title, description, category }) => ({
             id,

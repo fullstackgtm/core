@@ -16,7 +16,7 @@
  *    Sitemaps / redirects / logo bytes are plain resources — they never need a
  *    headless browser, so the default fetch is sufficient even in the hosted layer.
  */
-import { assertPublicUrl } from "./market.js";
+import { publicHttpGet } from "./publicHttp.js";
 import { DEFAULT_MODELS, forcedToolCall } from "./llm.js";
 const USER_AGENT = "fullstackgtm-market/0 (+https://github.com/fullstackgtm/core)";
 const FETCH_TIMEOUT_MS = 15_000;
@@ -156,28 +156,9 @@ export function extractLogoUrl(html, baseUrl) {
 // ── Default SSRF-guarded fetchers ────────────────────────────────────────────
 /** Manual-redirect fetch that re-validates every hop against the SSRF guard. */
 async function guardedFetch(url) {
-    let current = url;
-    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-        await assertPublicUrl(current);
-        const res = await fetch(current, {
-            redirect: "manual",
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-            headers: { "User-Agent": USER_AGENT },
-        });
-        const location = res.headers.get("location");
-        if (res.status >= 300 && res.status < 400 && location) {
-            try {
-                await res.body?.cancel();
-            }
-            catch {
-                /* ignore */
-            }
-            current = new URL(location, current).toString();
-            continue;
-        }
-        return res;
-    }
-    return null;
+    const res = await publicHttpGet(url, { maxRedirects: MAX_REDIRECTS, timeoutMs: FETCH_TIMEOUT_MS,
+        headers: { "User-Agent": USER_AGENT } });
+    return new Response(res.body.length ? Buffer.from(res.body) : null, { status: res.status, headers: res.headers });
 }
 const defaultFetchText = async (url) => {
     try {
@@ -206,28 +187,9 @@ const defaultFetchBytes = async (url) => {
  * + status WITHOUT downloading the body. Used to detect identity drift.
  */
 export const resolveFinalUrl = async (rawUrl) => {
-    let current = rawUrl;
-    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-        await assertPublicUrl(current);
-        const res = await fetch(current, {
-            redirect: "manual",
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-            headers: { "User-Agent": USER_AGENT },
-        });
-        try {
-            await res.body?.cancel();
-        }
-        catch {
-            /* ignore */
-        }
-        const location = res.headers.get("location");
-        if (res.status >= 300 && res.status < 400 && location) {
-            current = new URL(location, current).toString();
-            continue;
-        }
-        return { finalUrl: current, status: res.status };
-    }
-    return { finalUrl: current, status: 0 };
+    const res = await publicHttpGet(rawUrl, { maxRedirects: MAX_REDIRECTS, timeoutMs: FETCH_TIMEOUT_MS,
+        maxBytes: 0, headers: { "User-Agent": USER_AGENT } });
+    return { finalUrl: res.finalUrl, status: res.status };
 };
 // ── Fetching helpers ─────────────────────────────────────────────────────────
 /**

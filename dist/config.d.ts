@@ -26,6 +26,18 @@ export type LoadedConfig = {
     config: FullstackgtmConfig;
     path: string;
 };
+export type RulePackageTrust = {
+    /** Execute rule-package modules. Only set after an explicit trust decision. */
+    allowRulePackages?: boolean;
+    /** Deliberately ignore rule packages while still applying declarative config. */
+    disableRulePackages?: boolean;
+};
+/**
+ * Translate the CLI's explicit trust flags into the library trust contract.
+ * Plugin execution requires both an explicit config path and --allow-plugins;
+ * discovering a config in the current directory is never a trust decision.
+ */
+export declare function rulePackageTrustFromCli(args: string[], explicitConfigPath?: string): RulePackageTrust;
 export declare function loadConfig(explicitPath?: string, cwd?: string): LoadedConfig | null;
 /** Overlay config policy values onto a base policy; defined values win. */
 export declare function mergePolicy(base: GtmPolicy, config?: FullstackgtmConfig): GtmPolicy;
@@ -33,4 +45,4 @@ export declare function mergePolicy(base: GtmPolicy, config?: FullstackgtmConfig
  * Build the effective rule set: built-ins plus rule-package exports, then
  * `enabled` (allow-list) and `disabled` filters.
  */
-export declare function resolveConfiguredRules(loaded?: LoadedConfig | null, baseRules?: GtmAuditRule[]): Promise<GtmAuditRule[]>;
+export declare function resolveConfiguredRules(loaded?: LoadedConfig | null, baseRules?: GtmAuditRule[], trust?: RulePackageTrust): Promise<GtmAuditRule[]>;

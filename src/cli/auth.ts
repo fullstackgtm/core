@@ -3,7 +3,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULT_LOOPBACK_PORT, openInBrowser, runHubspotLoopbackLogin, validateHubspotToken } from "../connectors/hubspotAuth.ts";
-import { pollSalesforceDeviceLogin, startSalesforceDeviceLogin, validateSalesforceToken } from "../connectors/salesforceAuth.ts";
+import { pollSalesforceDeviceLogin, startSalesforceDeviceLogin, validateSalesforceOrigin, validateSalesforceToken } from "../connectors/salesforceAuth.ts";
 import { activeProfile, credentialsPath, DEFAULT_PROFILE, deleteCredential, getCredential, storeCredential, type StoredCredential } from "../credentials.ts";
 import { activeWorkspaceProfile, readHealthTimeline, summarizeHealth } from "../health.ts";
 import { resolveLlmCredential, validateLlmKey } from "../llm.ts";
@@ -252,7 +252,10 @@ async function salesforceLogin(args: string[]) {
       await guidedProviderLogin("salesforce", args, "--device requires --client-id (the consumer key of a Connected App with device flow enabled).");
       return;
     }
-    const loginUrl = option(args, "--login-url") ?? undefined;
+    const loginUrlInput = option(args, "--login-url") ?? undefined;
+    const loginUrl = loginUrlInput
+      ? validateSalesforceOrigin(loginUrlInput, "Salesforce --login-url")
+      : undefined;
     const authorization = await startSalesforceDeviceLogin({ clientId, loginUrl });
     console.error(
       `\nPairing code: ${authorization.userCode}\n\nConfirm this code at:\n\n  ${authorization.verificationUri}\n`,
@@ -282,8 +285,8 @@ async function salesforceLogin(args: string[]) {
     return;
   }
 
-  const instanceUrl = option(args, "--instance-url");
-  if (!instanceUrl) {
+  const instanceUrlInput = option(args, "--instance-url");
+  if (!instanceUrlInput) {
     await guidedProviderLogin(
       "salesforce",
       args,
@@ -291,6 +294,7 @@ async function salesforceLogin(args: string[]) {
     );
     return;
   }
+  const instanceUrl = validateSalesforceOrigin(instanceUrlInput, "Salesforce --instance-url");
   const token = await readSecret("Salesforce access token");
   if (!token) throw new Error("No access token provided.");
   if (!args.includes("--no-validate")) {

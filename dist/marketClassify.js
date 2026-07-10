@@ -188,6 +188,56 @@ export async function classifyMarket(config, options) {
         retriedVendorIds,
     };
 }
+const HINT_STOPWORDS = new Set([
+    "the", "and", "for", "with", "from", "that", "this", "into", "your", "you", "are", "but", "not", "when", "how", "use", "uses", "using",
+    "claim", "claims", "vendor", "vendors", "page", "pages", "loud", "quiet", "absent", "capability", "specific", "differentiating",
+    "unknown", "buyer", "buyers", "pricing", "structure", "category", "support", "supported", "primary", "secondary", "mentioned", "mentions",
+]);
+function normalizeHintText(value) {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+function claimHintTerms(claim) {
+    const exact = [claim.id.replace(/[-_]+/g, " "), claim.capability, ...(claim.terms ?? [])]
+        .map(normalizeHintText)
+        .filter((term) => term.length >= 3);
+    const tokenSource = normalizeHintText(`${claim.capability} ${claim.definition} ${(claim.terms ?? []).join(" ")}`)
+        .split(" ")
+        .filter((term) => term.length >= 4 && !HINT_STOPWORDS.has(term));
+    return Array.from(new Set([...exact, ...tokenSource])).slice(0, 24);
+}
+function lineSnippet(line, term) {
+    const clean = line.trim().replace(/\s+/g, " ");
+    if (clean.length <= 300)
+        return clean;
+    const lower = clean.toLowerCase();
+    const idx = lower.indexOf(term.toLowerCase().split(" ")[0] ?? "");
+    const start = Math.max(0, idx < 0 ? 0 : idx - 120);
+    return clean.slice(start, start + 300).trim();
+}
+function buildClaimHints(claims, pages) {
+    return claims.map((claim) => {
+        const terms = claimHintTerms(claim);
+        const matches = [];
+        for (const page of pages) {
+            const lines = page.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+            for (const term of terms) {
+                const normalizedTerm = normalizeHintText(term);
+                const line = lines.find((candidate) => normalizeHintText(candidate).includes(normalizedTerm));
+                if (!line)
+                    continue;
+                const quote = lineSnippet(line, term);
+                if (quote && !matches.some((m) => m.quote === quote && m.url === page.url)) {
+                    matches.push({ url: page.url, captureHash: page.captureHash, term, quote });
+                }
+                if (matches.length >= 4)
+                    break;
+            }
+            if (matches.length >= 4)
+                break;
+        }
+        return { claimId: claim.id, matches };
+    });
+}
 export function buildWorksheet(config, vendorId, options = {}) {
     const vendor = config.vendors.find((candidate) => candidate.id === vendorId);
     if (!vendor)
@@ -211,6 +261,7 @@ export function buildWorksheet(config, vendorId, options = {}) {
         vendor: { id: vendor.id, name: vendor.name },
         claims: config.claims,
         pages,
-        instructions: "Produce one observation per claim (intensity loud|quiet|absent from these pages only; unobservable only if a page you need failed to capture). Every loud/quiet reading must quote a verbatim span (≤300 chars) from a page's text, with that page's url and captureHash in evidence metadata. Submit as an ObservationSet via `market observe --from <file>` — quotes are mechanically verified against the captures.",
+        claimHints: buildClaimHints(config.claims, pages),
+        instructions: "Produce one observation per claim from these pages only. Intensity rubric: loud = hero copy, primary positioning, or a named/dedicated product area; quiet = supported by a verbatim page quote but secondary, qualified, or merely available; absent = the pages do not support the claim; unobservable = no usable captured page exists for this vendor, not a synonym for absent. claimHints are deterministic retrieval hints only: use them to find candidate support, but do not mark a claim loud/quiet unless the quote truly supports the claim. Every loud/quiet reading must quote a verbatim span (≤300 chars) from a page's text, with that page's url and captureHash in evidence metadata. Submit as an ObservationSet via `market observe --from <file>` — quotes are mechanically verified against the captures.",
     };
 }

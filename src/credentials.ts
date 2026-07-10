@@ -3,17 +3,20 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
-  statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { refreshHubspotToken } from "./connectors/hubspotAuth.ts";
-import { refreshSalesforceToken } from "./connectors/salesforceAuth.ts";
+import { refreshSalesforceToken, validateSalesforceOrigin } from "./connectors/salesforceAuth.ts";
 import { detectKeychainBackend } from "./keychain.ts";
+import {
+  assertNoSymlinkComponents,
+  readSecureRegularFile,
+  UnsafeManagedPathError,
+  writeSecureFileAtomic,
+} from "./secureFile.ts";
 
 /**
  * Local CLI credential store: ~/.fullstackgtm/credentials.json (0600), or
@@ -126,7 +129,9 @@ export function ensureSecureHomeDir(): string {
   const levels =
     dir === baseHomeDir() ? [dir] : [baseHomeDir(), join(baseHomeDir(), "profiles"), dir];
   for (const level of levels) {
+    assertNoSymlinkComponents(level);
     mkdirSync(level, { recursive: true, mode: 0o700 });
+    assertNoSymlinkComponents(level);
     try {
       chmodSync(level, 0o700);
     } catch {
@@ -138,12 +143,7 @@ export function ensureSecureHomeDir(): string {
 
 /** Write a 0600 file under the home, enforcing the mode even on rewrite. */
 export function writeSecureFile(path: string, contents: string) {
-  writeFileSync(path, contents, { mode: 0o600 });
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // Non-POSIX filesystems ignore chmod.
-  }
+  writeSecureFileAtomic(path, contents);
 }
 
 /**
@@ -153,19 +153,14 @@ export function writeSecureFile(path: string, contents: string) {
  * mode on read too — re-tighten to 0600 and warn once — so a world-readable
  * credential store can't sit there silently leaking the token to other users.
  */
-function enforceCredentialFileMode(path: string): void {
-  try {
-    const mode = statSync(path).mode & 0o777;
-    if ((mode & 0o077) !== 0) {
-      chmodSync(path, 0o600);
-      console.error(
-        `fullstackgtm: tightened ${path} from ${mode.toString(8).padStart(3, "0")} to 600 ` +
-          "(it was readable or writable by other users).",
-      );
-    }
-  } catch {
-    // Missing file or non-POSIX filesystem: nothing to enforce.
-  }
+function readCredentialFile(path: string): string {
+  return readSecureRegularFile(path, {
+    tightenMode: 0o600,
+    onModeTightened: (mode) => console.error(
+      `fullstackgtm: tightened ${path} from ${mode.toString(8).padStart(3, "0")} to 600 ` +
+        "(it was readable or writable by other users).",
+    ),
+  });
 }
 
 /**
@@ -190,7 +185,7 @@ function activeKeychain(): { account: string; backend: NonNullable<ReturnType<ty
 function migratePlaintextToKeychain(keychain: NonNullable<ReturnType<typeof activeKeychain>>): void {
   if (!existsSync(credentialsPath())) return;
   try {
-    const fileParsed = JSON.parse(readFileSync(credentialsPath(), "utf8"));
+    const fileParsed = JSON.parse(readCredentialFile(credentialsPath()));
     if (fileParsed && fileParsed.version === 1 && fileParsed.providers) {
       const current = keychain.backend.get(keychain.account);
       const existing = current ? (JSON.parse(current).providers ?? {}) : {};
@@ -209,14 +204,15 @@ function readFile(): CredentialsFile {
   const keychain = activeKeychain();
   if (keychain) migratePlaintextToKeychain(keychain);
   try {
-    const raw = keychain ? keychain.backend.get(keychain.account) : (enforceCredentialFileMode(credentialsPath()), readFileSync(credentialsPath(), "utf8"));
+    const raw = keychain ? keychain.backend.get(keychain.account) : readCredentialFile(credentialsPath());
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object" && parsed.version === 1 && parsed.providers) {
         return parsed as CredentialsFile;
       }
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof UnsafeManagedPathError) throw error;
     // Missing or unreadable store falls through to an empty one.
   }
   return { version: 1, providers: {} };
@@ -238,6 +234,18 @@ export function getCredential(provider: string): StoredCredential | null {
 }
 
 export function storeCredential(provider: string, credential: StoredCredential) {
+  if (provider === "salesforce") {
+    if (!credential.instanceUrl) {
+      throw new Error("Salesforce credentials require an instance URL.");
+    }
+    credential = {
+      ...credential,
+      instanceUrl: validateSalesforceOrigin(credential.instanceUrl, "Salesforce credential instance URL"),
+      ...(credential.loginUrl
+        ? { loginUrl: validateSalesforceOrigin(credential.loginUrl, "Salesforce credential login URL") }
+        : {}),
+    };
+  }
   const file = readFile();
   file.providers[provider] = credential;
   persist(file);
@@ -315,12 +323,19 @@ export async function resolveSalesforceConnection(
         "Stored Salesforce credential has no instance URL. Run `fullstackgtm login salesforce` again.",
       );
     }
+    const instanceUrl = validateSalesforceOrigin(
+      credential.instanceUrl,
+      "Stored Salesforce credential instance URL",
+    );
+    if (credential.loginUrl) {
+      validateSalesforceOrigin(credential.loginUrl, "Stored Salesforce credential login URL");
+    }
     const needsRefresh =
       credential.kind === "oauth" &&
       credential.expiresAt !== undefined &&
       Date.now() > credential.expiresAt - REFRESH_SKEW_MS;
     if (!needsRefresh) {
-      return { accessToken: credential.accessToken, instanceUrl: credential.instanceUrl };
+      return { accessToken: credential.accessToken, instanceUrl };
     }
     if (!credential.refreshToken || !credential.clientId) {
       throw new Error(
@@ -349,9 +364,13 @@ export async function resolveSalesforceConnection(
   if (!minted.instanceUrl) {
     throw new Error("The hosted deployment returned no Salesforce instance URL.");
   }
+  const instanceUrl = validateSalesforceOrigin(
+    minted.instanceUrl,
+    "Hosted Salesforce credential instance URL",
+  );
   return {
     accessToken: minted.accessToken,
-    instanceUrl: minted.instanceUrl,
+    instanceUrl,
     fieldMappings: minted.fieldMappings,
   };
 }

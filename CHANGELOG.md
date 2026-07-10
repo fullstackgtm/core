@@ -7,6 +7,44 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.49.0] — 2026-07-10
+
+### Security
+
+- MCP apply now accepts only store-backed, HMAC-approved plan ids; external
+  plan paths and caller-supplied approvals/value overrides are rejected.
+- Apply uses an atomic single-owner claim and durable attempt journal.
+  Uncertain attempts remain fail-closed until an operator acknowledges provider
+  state; recovery clears every approval and never replays writes automatically.
+- Salesforce credential-bearing endpoints are restricted to canonical HTTPS
+  Salesforce origins and redirects are handled without forwarding credentials.
+- Executable rule packages require explicit CLI trust and are disabled entirely
+  in MCP. Implicit repository configuration cannot activate plugins.
+- Sensitive local files use atomic no-follow writes and verified no-follow
+  reads; symlinked credential, plan, and managed-home paths are refused.
+- Market capture/sourcing uses DNS-pinned public-only HTTP with per-hop redirect
+  validation, bounded responses, and cross-origin credential stripping.
+- Provider HTTP failures expose typed status metadata without raw response
+  bodies, reflected secrets, or PII.
+
+### Changed
+
+- **Breaking pre-1.0 plan-store contract:** `PlanStore` implementations now
+  participate in apply claims, attempt recovery, and claim-bound run recording;
+  `ApprovalStatus` includes `applying`. Custom stores must implement the new
+  lifecycle before upgrading.
+- Public mirror generation is commit-derived, allowlisted, secret-scanned, and
+  fail-closed. npm publishing uses pinned actions/npm plus a protected release
+  environment and provenance verification.
+- Package CI now validates Node 20/22, Linux/macOS/Windows compiled runtimes,
+  and actual installed tarballs with and without optional MCP peers.
+
+### Fixed
+
+- `bulk-update --help` and `-h` now return focused help before parsing an object
+  type or touching configuration, credentials, disk, or network.
+- Installation guidance no longer pins a brittle exact demo finding count.
+
 ## [0.48.0] — 2026-07-08
 
 ### Added

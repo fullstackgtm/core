@@ -21,7 +21,10 @@ newest version, not backported (the project is pre-1.0).
 **Credentials.** API tokens are never accepted as command-line arguments
 (they would leak into the process table and shell history); they come from an
 environment variable or stdin only, and are stored `0600` under a `0700` home
-(`$FSGTM_HOME`, default `~/.fullstackgtm`), re-tightened on read. This is the
+(`$FSGTM_HOME`, default `~/.fullstackgtm`). Writes use exclusive temporary
+files, fsync, and atomic rename; reads require regular files opened without
+following symlinks. Managed-home, credential, and plan-store symlink paths are
+refused before chmod/read/write. This is the
 same custody model as the `gcloud`/`aws` CLIs. The hosted broker
 (`login --via`) exists so a team can connect a CRM once, server-side, and hand
 laptops only a revocable pairing token instead of a long-lived super-admin key;
@@ -57,13 +60,34 @@ approved on one machine cannot be applied on another (the key does not travel).
 Documented boundary: this defends the plan file, not an attacker who already
 holds the signing key (same directory and permissions as the credential store).
 
+**Single-owner apply and recovery.** Store-backed CLI and MCP writes atomically
+claim an approved plan and journal the provider, caller surface, and attempt
+state before provider I/O. A second process cannot apply the same approval.
+Failures after provider I/O remain `applying`/uncertain because a timeout cannot
+prove no remote write landed. Recovery never auto-replays: after reconciling CRM
+state, `plans recover <id> --acknowledge-uncertain-writes` clears every approval
+and signature and requires a fresh human review.
+
+**Executable configuration.** `rulePackages` are arbitrary JavaScript. An
+implicitly discovered repository config cannot activate them; CLI execution
+requires explicit `--config <path> --allow-plugins` (`--no-plugins` disables
+them). MCP never executes rule packages or accepts external plans/caller
+approvals.
+
+**Credential origins.** Salesforce access and refresh tokens are sent only to
+canonical HTTPS Salesforce-owned origins. Userinfo, paths/query/fragment,
+nonstandard ports, lookalike domains, unsafe token-response instance URLs, and
+credential-preserving redirects are refused at input, storage, and use.
+
 **Scheduling never auto-approves.** Scheduled (cron) runs are restricted to a
 read/plan-side allowlist plus `apply --plan-id` whose approved status and
 signatures are re-checked at every firing. Arbitrary shell is not schedulable.
 
 **Untrusted input.** Competitor pages fetched by `market capture` are guarded
-against SSRF (scheme allowlist; private/loopback/link-local/metadata addresses
-refused; redirects re-validated). LLM-extracted call insights and market
+against SSRF: every DNS answer must be globally routable, validated answers are
+pinned into socket creation, mixed/private/reserved answers are refused, every
+redirect is revalidated, sensitive headers are stripped cross-origin, and
+time/body/redirect limits are enforced. LLM-extracted call insights and market
 classifications are mechanically verified verbatim against the source text
 before they can drive a writeback, so a prompt-injected transcript or page
 cannot fabricate a grounded-looking change. CSV/formula-injection in ingested

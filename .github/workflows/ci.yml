@@ -11,11 +11,11 @@ jobs:
     strategy:
       matrix:
         # The test runner needs node --experimental-strip-types (22.6+).
-        node-version: [22, 24]
+        node-version: [22]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -36,8 +36,8 @@ jobs:
   dist-integrity:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 22
           cache: npm
@@ -54,16 +54,29 @@ jobs:
           fi
           echo "dist integrity OK"
 
-  # The runtime supports node >=20 (engines), but type stripping for the test
-  # runner does not exist there — so validate 20 against the built output.
-  node20-smoke:
-    runs-on: ubuntu-latest
+  # Source tests require Node 22's type stripping. Validate the declared Node
+  # 20 runtime and all supported runner OSes against compiled output instead.
+  runtime-matrix:
+    name: Runtime (Node ${{ matrix.node }}, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 20
+          - os: ubuntu-latest
+            node: 22
+          - os: macos-latest
+            node: 22
+          - os: windows-latest
+            node: 20
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: npm
 
       - name: Install dependencies
@@ -74,7 +87,29 @@ jobs:
 
       - name: Smoke test built CLI
         run: |
-          node dist/bin.js doctor
+          node dist/bin.js --help
+          node dist/mcp-bin.js --help
           node dist/bin.js audit --demo --json > /dev/null
           node dist/bin.js rules --json > /dev/null
-          echo "node 20 smoke OK"
+
+  packed-install:
+    name: Packed install (Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Verify tarball without optional peers
+        run: node scripts/verify-packed-install.mjs
+      - name: Verify tarball with optional peers
+        run: node scripts/verify-packed-install.mjs --with-peers

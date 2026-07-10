@@ -85,9 +85,15 @@ npx -y fullstackgtm-mcp
 
 Tools over stdio: `fullstackgtm_audit` (read-only), `fullstackgtm_rules`,
 `fullstackgtm_suggest`, `fullstackgtm_call_parse`,
-`fullstackgtm_apply` (requires `approvedOperationIds`),
+`fullstackgtm_apply` (stored `planId` only; approvals and values come from the
+HMAC-signed plan store and cannot be supplied by the MCP caller),
 `fullstackgtm_resolve`, `fullstackgtm_market_worksheet`,
 `fullstackgtm_market_observe`.
+
+MCP never executes rule packages or external plans. An uncertain apply is
+never replayed automatically: reconcile provider state, then use
+`fullstackgtm plans recover <id> --acknowledge-uncertain-writes`, which clears
+approvals and requires a fresh review.
 
 ## Composing the primitives into plays
 

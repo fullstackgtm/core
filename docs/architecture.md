@@ -27,13 +27,21 @@ provider  ──fetchSnapshot()──►  CanonicalGtmSnapshot
                          plans approve  (planStore.ts + integrity.ts: HMAC-signed)
                                       │
                                       ▼
+                    atomic apply claim + durable attempt journal
+                                      │
+                                      ▼
                     applyPatchPlan (connector.ts): for each APPROVED op —
                     compare-and-set vs live value, precondition + guard recheck,
                     irreversible-op drift guard → connector.applyOperation()
                                       │
                                       ▼
-                               PatchPlanRun  (the audit record; auditLog.ts exports it)
+                               PatchPlanRun  (claim-bound audit record)
 ```
+
+An interrupted provider attempt stays `applying`/uncertain. Recovery never
+replays automatically: reconcile provider state, then `plans recover ...
+--acknowledge-uncertain-writes` clears approvals and returns the plan to
+`needs_approval` for a fresh signed review.
 
 ## Module map (`src/`)
 
@@ -49,12 +57,15 @@ provider  ──fetchSnapshot()──►  CanonicalGtmSnapshot
 - `audit.ts` — runs rules over a snapshot into a `PatchPlan`.
 - `suggest.ts` — derives concrete values for `requires_human_*` placeholders from
   snapshot evidence, with confidence + reasons.
-- `planStore.ts` — durable plan lifecycle (save / approve / record runs), 0600.
+- `planStore.ts` — durable plan lifecycle (save / approve / atomic claim /
+  attempt journal / no-replay recovery / claim-bound runs), atomic 0600 files.
 - `integrity.ts` — HMAC-signs approvals (per-install key) and verifies at apply.
 - `connector.ts` — `applyPatchPlan`: the safety contract (approval filter,
   placeholder refusal, CAS, precondition/guard recheck, irreversible-op drift
   guard). Provider-agnostic.
 - `auditLog.ts` — hash-chained, signed export of every apply run.
+- `secureFile.ts` — atomic no-follow sensitive-file reads/writes.
+- `publicHttp.ts` — DNS-pinned, redirect-validating, bounded public-only HTTP.
 
 **Governed write verbs (each builds a plan; never writes directly)**
 - `bulkUpdate.ts`, `dedupe.ts`, `reassign.ts`, `route.ts` — filtered,

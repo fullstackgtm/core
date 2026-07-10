@@ -6,6 +6,15 @@
  * user confirms on any device. Requires a Connected App with device flow
  * enabled; only its consumer key (client id) is needed.
  */
+/**
+ * Normalize and validate a Salesforce credential-bearing origin.
+ *
+ * Salesforce API hosts are either the standard login/sandbox hosts or a
+ * Salesforce-owned instance/My Domain below salesforce.com.  Deliberately
+ * return an origin (not the input URL) so callers cannot accidentally retain
+ * paths, queries, credentials, or fragments from configuration.
+ */
+export declare function validateSalesforceOrigin(value: string, label?: string): string;
 export type SalesforceTokenSet = {
     accessToken: string;
     refreshToken?: string;

@@ -1,6 +1,6 @@
 {
   "name": "fullstackgtm",
-  "version": "0.48.0",
+  "version": "0.49.0",
   "description": "Open-source agentic GTM ops framework: canonical GTM data model, pluggable deterministic audits, reviewable dry-run patch plans, approval-gated write-back with conflict detection, and cross-system entity resolution. HubSpot, Salesforce, and Stripe connectors included.",
   "license": "Apache-2.0",
   "author": "Full Stack GTM LLC <ryan@fullstackgtm.com> (https://fullstackgtm.com)",
@@ -45,10 +45,12 @@
     "DATA-FLOWS.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
     "pretest": "test -d tests || { echo 'No tests/ in this directory. In the published mirror, tests live here and `npm test` works. In the monorepo, run package tests from the repo ROOT: `node --experimental-strip-types --test tests/fullstackgtm*.test.ts` (the tests live at the monorepo root tests/).' >&2; exit 1; }",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "prepublishOnly": "npm run build && npm pack --dry-run && node dist/bin.js --help && node dist/mcp-bin.js --help"
+    "verify:package": "npm run build && node scripts/verify-packed-install.mjs --with-peers",
+    "prepublishOnly": "npm run verify:package"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

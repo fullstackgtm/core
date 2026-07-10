@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULT_LOOPBACK_PORT, openInBrowser, runHubspotLoopbackLogin, validateHubspotToken } from "../connectors/hubspotAuth.js";
-import { pollSalesforceDeviceLogin, startSalesforceDeviceLogin, validateSalesforceToken } from "../connectors/salesforceAuth.js";
+import { pollSalesforceDeviceLogin, startSalesforceDeviceLogin, validateSalesforceOrigin, validateSalesforceToken } from "../connectors/salesforceAuth.js";
 import { activeProfile, credentialsPath, DEFAULT_PROFILE, deleteCredential, getCredential, storeCredential } from "../credentials.js";
 import { activeWorkspaceProfile, readHealthTimeline, summarizeHealth } from "../health.js";
 import { resolveLlmCredential, validateLlmKey } from "../llm.js";
@@ -229,7 +229,10 @@ async function salesforceLogin(args) {
             await guidedProviderLogin("salesforce", args, "--device requires --client-id (the consumer key of a Connected App with device flow enabled).");
             return;
         }
-        const loginUrl = option(args, "--login-url") ?? undefined;
+        const loginUrlInput = option(args, "--login-url") ?? undefined;
+        const loginUrl = loginUrlInput
+            ? validateSalesforceOrigin(loginUrlInput, "Salesforce --login-url")
+            : undefined;
         const authorization = await startSalesforceDeviceLogin({ clientId, loginUrl });
         console.error(`\nPairing code: ${authorization.userCode}\n\nConfirm this code at:\n\n  ${authorization.verificationUri}\n`);
         void openInBrowser(authorization.verificationUri);
@@ -254,11 +257,12 @@ async function salesforceLogin(args) {
         console.log("Tokens refresh silently; no further browser interaction is needed.");
         return;
     }
-    const instanceUrl = option(args, "--instance-url");
-    if (!instanceUrl) {
+    const instanceUrlInput = option(args, "--instance-url");
+    if (!instanceUrlInput) {
         await guidedProviderLogin("salesforce", args, "Salesforce login needs hosted OAuth, --device --client-id <consumer key>, or --instance-url <https://yourorg.my.salesforce.com> with the access token piped on stdin.");
         return;
     }
+    const instanceUrl = validateSalesforceOrigin(instanceUrlInput, "Salesforce --instance-url");
     const token = await readSecret("Salesforce access token");
     if (!token)
         throw new Error("No access token provided.");

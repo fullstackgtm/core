@@ -374,6 +374,8 @@ export function planStatusWord(status, p) {
         return p.yellow(status);
     if (status === "approved" || status === "applied")
         return p.green(status);
+    if (status === "applying")
+        return p.yellow(status);
     if (status === "rejected")
         return p.red(status);
     return status;

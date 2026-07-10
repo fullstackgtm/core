@@ -51,6 +51,16 @@ export type MarketWorksheet = {
         captureHash: string;
         text: string;
     }>;
+    /** Deterministic retrieval hints: page lines that contain claim terms. These are not labels. */
+    claimHints: Array<{
+        claimId: string;
+        matches: Array<{
+            url: string;
+            captureHash: string;
+            term: string;
+            quote: string;
+        }>;
+    }>;
     instructions: string;
 };
 export declare function buildWorksheet(config: MarketConfig, vendorId: string, options?: {

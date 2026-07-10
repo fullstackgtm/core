@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { lookup } from "node:dns/promises";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { isIP } from "node:net";
 import { join } from "node:path";
 import { credentialsDir } from "./credentials.js";
 import { MARKET_CAPTURE_STAGES, nullProgressEmitter } from "./progress.js";
+import { publicHttpGet } from "./publicHttp.js";
+export { assertPublicUrl } from "./publicHttp.js";
 const INTENSITY_RANK = {
     loud: 3,
     quiet: 2,
@@ -152,136 +152,16 @@ export function extractReadableText(html) {
  * any host that is or resolves to a private/loopback/link-local/metadata
  * address, and (3) follow redirects manually, re-validating each hop.
  *
- * Residual gap (documented, not defended here): TOCTOU DNS rebinding between
- * our lookup and fetch's own resolution. Out of scope for fetching public
- * competitor pages; a hardened deployment should fetch through an egress proxy.
+ * The default transport resolves once, rejects mixed public/private answers,
+ * and pins a validated address into socket creation to prevent DNS rebinding.
  */
 const MAX_REDIRECTS = 5;
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_BODY_BYTES = 5_000_000;
-function ipv4IsPrivate(ip) {
-    const parts = ip.split(".").map((n) => Number(n));
-    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
-        return true;
-    const [a, b] = parts;
-    if (a === 0 || a === 127)
-        return true; // this-host, loopback
-    if (a === 10)
-        return true; // private
-    if (a === 172 && b >= 16 && b <= 31)
-        return true; // private
-    if (a === 192 && b === 168)
-        return true; // private
-    if (a === 169 && b === 254)
-        return true; // link-local incl. 169.254.169.254 metadata
-    if (a === 100 && b >= 64 && b <= 127)
-        return true; // CGNAT
-    if (a >= 224)
-        return true; // multicast / reserved
-    return false;
-}
-function ipIsPrivate(ip) {
-    const family = isIP(ip);
-    if (family === 4)
-        return ipv4IsPrivate(ip);
-    if (family === 6) {
-        const lower = ip.toLowerCase();
-        if (lower === "::1" || lower === "::")
-            return true; // loopback / unspecified
-        // IPv4-mapped (::ffff:…) — Node normalizes ::ffff:127.0.0.1 to ::ffff:7f00:1,
-        // so accept both the dotted and the hex-pair forms, unwrap, check the v4.
-        const mapped = lower.match(/^::ffff:(.+)$/);
-        if (mapped) {
-            const rest = mapped[1];
-            if (rest.includes("."))
-                return ipv4IsPrivate(rest);
-            const groups = rest.split(":");
-            if (groups.length === 2) {
-                const hi = parseInt(groups[0], 16);
-                const lo = parseInt(groups[1], 16);
-                if (Number.isNaN(hi) || Number.isNaN(lo))
-                    return true;
-                return ipv4IsPrivate(`${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`);
-            }
-            return true; // unrecognized mapped form → refuse
-        }
-        if (lower.startsWith("fe8") || lower.startsWith("fe9") || lower.startsWith("fea") || lower.startsWith("feb"))
-            return true; // link-local fe80::/10
-        if (lower.startsWith("fc") || lower.startsWith("fd"))
-            return true; // unique-local fc00::/7
-        return false;
-    }
-    return true; // not a recognizable IP literal → refuse
-}
-export async function assertPublicUrl(rawUrl) {
-    let url;
-    try {
-        url = new URL(rawUrl);
-    }
-    catch {
-        throw new Error(`market capture: "${rawUrl}" is not a valid URL.`);
-    }
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-        throw new Error(`market capture refuses ${url.protocol} URLs (only http/https): ${rawUrl}`);
-    }
-    const host = url.hostname.replace(/^\[|\]$/g, ""); // strip IPv6 brackets
-    if (isIP(host)) {
-        if (ipIsPrivate(host))
-            throw new Error(`market capture refuses private/loopback address ${host} (SSRF guard).`);
-        return url;
-    }
-    // Hostname: resolve and refuse if ANY address is private.
-    const addrs = await lookup(host, { all: true });
-    for (const { address } of addrs) {
-        if (ipIsPrivate(address)) {
-            throw new Error(`market capture refuses ${host} — it resolves to private/internal address ${address} (SSRF guard).`);
-        }
-    }
-    return url;
-}
 const defaultFetchPage = async (url) => {
-    let current = url;
-    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-        await assertPublicUrl(current);
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-        let response;
-        try {
-            response = await fetch(current, {
-                headers: {
-                    "User-Agent": "fullstackgtm-market/0 (+https://github.com/fullstackgtm/core)",
-                    "Accept-Language": "en-US",
-                },
-                redirect: "manual",
-                signal: controller.signal,
-            });
-        }
-        finally {
-            clearTimeout(timer);
-        }
-        if (response.status >= 300 && response.status < 400 && response.headers.get("location")) {
-            current = new URL(response.headers.get("location"), current).toString();
-            continue; // re-validate the redirect target on the next iteration
-        }
-        const reader = response.body?.getReader();
-        if (!reader)
-            return { status: response.status, body: await response.text() };
-        const chunks = [];
-        let total = 0;
-        for (;;) {
-            const { done, value } = await reader.read();
-            if (done)
-                break;
-            total += value.length;
-            if (total > MAX_BODY_BYTES) {
-                await reader.cancel();
-                break;
-            }
-            chunks.push(value);
-        }
-        return { status: response.status, body: Buffer.concat(chunks).toString("utf8") };
-    }
-    throw new Error(`market capture: too many redirects (>${MAX_REDIRECTS}) for ${url}`);
+    const response = await publicHttpGet(url, { maxBytes: MAX_BODY_BYTES, maxRedirects: MAX_REDIRECTS,
+        timeoutMs: FETCH_TIMEOUT_MS, headers: { "User-Agent": "fullstackgtm-market/0 (+https://github.com/fullstackgtm/core)", "Accept-Language": "en-US" } });
+    return { status: response.status, body: Buffer.from(response.body).toString("utf8") };
 };
 export async function captureMarket(config, options = {}) {
     const store = options.store ?? createFileMarketStore(config.category, { capturesDir: options.dir });

@@ -10,6 +10,13 @@ CLI quick check: `fullstackgtm doctor --json`. Zero-credential demo:
 explicitly approved operation ids. Exit codes: 0 success, 1 error, 2 findings
 at/above `--fail-on`.
 
+MCP apply accepts only a stored `planId`; approvals and concrete values come
+from the HMAC-signed plan store, never the tool caller. MCP never executes rule
+packages or external plans. Store-backed apply is single-owner and journaled;
+an interrupted provider attempt remains uncertain and is never auto-replayed.
+After reconciling provider state, `plans recover <id>
+--acknowledge-uncertain-writes` clears approvals for a fresh human review.
+
 ## Docs
 
 - [README](https://github.com/fullstackgtm/core/blob/main/README.md): install, five-minute loop, auth ladder, MCP setup, programmatic use

@@ -183,6 +183,7 @@ Usage:
   fullstackgtm plans list [--status <s>] | show <id> | reject <id>
   fullstackgtm plans approve <id> --operations <ids|all> [--value <opId>=<v>]
   fullstackgtm plans approve <id> --values-from <suggestions.json> [--min-confidence high|low] [--include-creates]
+  fullstackgtm plans recover <id> --acknowledge-uncertain-writes
   fullstackgtm apply --plan-id <id> --provider <name>
   fullstackgtm apply --plan-id <id> --channel outbox          (render approved openers; transmits nothing)
   fullstackgtm apply --plan <path> --provider <name> --approve <ids|all> [options]
@@ -230,6 +231,8 @@ Audit options:
   --config <path>        Config file (default: ./fullstackgtm.config.json if present)
                          { "policy": {...}, "rules": {"enabled":[],"disabled":[]},
                            "rulePackages": ["./team-rules.mjs"] }
+  --allow-plugins        Execute rulePackages from an explicit --config path after review
+  --no-plugins           Ignore rulePackages; use declarative config and built-in rules only
   --rules <ids>          Comma-separated rule ids to run (default: all; see \`rules\`)
   --json                 Print the JSON patch plan instead of markdown
   --out <path>           Also write the JSON patch plan to a file
@@ -546,6 +549,7 @@ export const HELP: Record<string, HelpEntry> = {
       "fullstackgtm plans list [--status <s>] | show <id> | reject <id>",
       "fullstackgtm plans approve <id> --operations <ids|all> [--value <opId>=<v>]",
       "fullstackgtm plans approve <id> --values-from <suggestions.json> [--min-confidence high|low]",
+      "fullstackgtm plans recover <id> --acknowledge-uncertain-writes",
     ],
     detail: "Approval is explicit and per-operation; placeholders need a concrete --value or a suggestion to be approvable.",
     seeAlso: ["audit", "suggest", "apply"],
@@ -644,12 +648,12 @@ export const HELP: Record<string, HelpEntry> = {
 
 // Verbs that print their own richer multi-subcommand help; runCli routes their
 // `--help` to themselves, so commandHelp() only renders these via `help <verb>`.
-export const BESPOKE_HELP = ["init", "call", "market", "tam", "enrich", "bulk-update", "schedule", "signals", "icp", "draft"];
+export const BESPOKE_HELP = ["init", "call", "market", "tam", "enrich", "schedule", "signals", "icp", "draft"];
 
 export const GLOBAL_FLAGS = ["--help", "--full"];
 export const GLOBAL_SHORT_FLAGS = ["-h"];
 export const SOURCE_FLAGS = ["--provider", "--token-env", "--input", "--demo", "--sample", "--seed", "--today"];
-export const AUDIT_FLAGS = ["--config", "--rules", "--stale-days", "--fail-on", "--save", "--dry-run", "--json", "--out", "--full"];
+export const AUDIT_FLAGS = ["--config", "--allow-plugins", "--no-plugins", "--rules", "--stale-days", "--fail-on", "--save", "--dry-run", "--json", "--out", "--full"];
 
 // Complete per-command flag registry used by runCli's fail-closed flag
 // validation. Keep this next to HELP so focused help, machine capabilities,
@@ -666,13 +670,13 @@ export const COMMAND_FLAGS: Record<string, string[]> = {
   snapshot: [...SOURCE_FLAGS, "--since", "--out", "--archive"],
   audit: [...SOURCE_FLAGS, ...AUDIT_FLAGS],
   report: [...SOURCE_FLAGS, ...AUDIT_FLAGS, "--plan", "--client", "--title", "--prepared-by", "--format", "--max-examples"],
-  diff: ["--before", "--after", "--config", "--stale-days", "--today", "--json", "--fail-on-new-findings"],
-  rules: ["--config", "--json"],
+  diff: ["--before", "--after", "--config", "--allow-plugins", "--no-plugins", "--stale-days", "--today", "--json", "--fail-on-new-findings"],
+  rules: ["--config", "--allow-plugins", "--no-plugins", "--json"],
   resolve: [...SOURCE_FLAGS, "--name", "--domain", "--email", "--account-id", "--json"],
   hierarchy: [...SOURCE_FLAGS, "--json", "--out"],
   relationships: [...SOURCE_FLAGS, "--account-id", "--domain", "--json", "--out"],
   route: [...SOURCE_FLAGS, "--match", "--no-inherit-owner", "--reassign-owned", "--policy", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
-  fix: [...SOURCE_FLAGS, "--config", "--rule", "--provider", "--min-confidence", "--include-creates", "--yes", "--confirm", "--dry-run"],
+  fix: [...SOURCE_FLAGS, "--config", "--allow-plugins", "--no-plugins", "--rule", "--provider", "--min-confidence", "--include-creates", "--yes", "--confirm", "--dry-run"],
   "bulk-update": [...SOURCE_FLAGS, "--where", "--set", "--guard", "--require", "--create-task", "--archive", "--force-archive-duplicates", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
   dedupe: [...SOURCE_FLAGS, "--key", "--keep", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
   reassign: [...SOURCE_FLAGS, "--from", "--assign-unowned", "--to", "--objects", "--where", "--except-deal-stage", "--include-closed-deals", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
@@ -680,7 +684,7 @@ export const COMMAND_FLAGS: Record<string, string[]> = {
   enrich: [...SOURCE_FLAGS, "--config", "--source", "--icp", "--input", "--provider", "--stale-days", "--assign-owner", "--objects", "--max", "--staged-run", "--run-label", "--label", "--runs", "--save", "--dry-run", "--json", "--out"],
   call: [...SOURCE_FLAGS, "--transcript", "--title", "--source", "--model", "--deterministic", "--heuristics", "--llm", "--json", "--ndjson", "--out", "--call", "--call-type", "--rubric", "--list", "--list-rubrics", "--attendees", "--domain", "--deal", "--save", "--dry-run"],
   suggest: [...SOURCE_FLAGS, "--plan-id", "--plan", "--json", "--out"],
-  plans: ["--status", "--operations", "--value", "--values-from", "--min-confidence", "--include-creates", "--json"],
+  plans: ["--status", "--operations", "--value", "--values-from", "--min-confidence", "--include-creates", "--acknowledge-uncertain-writes", "--json"],
   apply: ["--plan", "--plan-id", "--provider", "--channel", "--token-env", "--approve", "--value", "--json", "--config"],
   "audit-log": ["--in", "--out", "--json"],
   merge: ["--input", "--out", "--json"],

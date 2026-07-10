@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createFilePlanStore } from "../planStore.js";
-import { captureMarket, computeFrontStates, createFileObservationStore, diffFrontStates, loadCaptureTexts, loadMarketConfig, starterMarketConfig, validateObservationSet, verifyEvidenceSpans } from "../market.js";
+import { captureMarket, computeFrontStates, createFileObservationStore, diffFrontStates, loadCaptureTexts, loadMarketConfig, observationId, starterMarketConfig, validateObservationSet, verifyEvidenceSpans } from "../market.js";
 import { assessAxes, axesReportToText } from "../marketAxes.js";
 import { computeDirectives, computeOverlayStats, directivesToPlan, overlayToMarkdown } from "../marketOverlay.js";
 import { computeScaleIndex, scaleReportToText } from "../marketScale.js";
@@ -24,6 +24,7 @@ import { unknownSubcommandError } from "./suggest.js";
  */
 const MARKET_SUBCOMMANDS = [
     "init", "capture", "classify", "worksheet", "observe", "fronts", "axes", "overlay", "scale", "report", "refresh",
+    "schema", "hints", "observe-template", "review",
 ];
 export async function marketCommand(args) {
     const [subcommand, ...rest] = args;
@@ -35,9 +36,13 @@ export async function marketCommand(args) {
 market init --category <name> [--out <path>]   write a starter market.config.json
 market init --category <name> --auto --vendor <url> [--vendor <url>...] [--anchor <url>] [--max-claims n]
                                                LLM-propose vendors + claim taxonomy from seed pages (needs an API key)
+market schema                                  print exact MarketConfig + ObservationSet shapes and a tiny example
 market capture [--config <path>] [--run <label>]
 market classify [--run <label>] [--capture-run <label>] [--vendor <id>] [--model m] [--out <path>]
 market worksheet --vendor <id> [--capture-run <label>] [--out <path>]
+market hints [--vendor <id>] [--capture-run <label>] [--json]
+market observe-template [--run <label>] [--out <path>]
+market review --from <observations.json> [--json]
 market observe --from <observations.json|sets.jsonl|spool-dir> [--unverified]
 market fronts [--config <path>] [--run <label>] [--diff <prior-run>] [--json]
 market axes [--config <path>] [--run <label>] [--json]
@@ -76,6 +81,63 @@ The taxonomy (vendors + claims) is config you review and version; captures
 and observations live under ~/.fullstackgtm/market/<category> (profile-scoped,
 one client's category intel never bleeds into another's). Front states are
 recomputed deterministically on every invocation — never stored.`);
+        return;
+    }
+    if (subcommand === "schema") {
+        console.log(`MarketConfig shape:
+{
+  "category": "string",
+  "anchorVendor": "optional vendor id",
+  "vendors": [{
+    "id": "stable-vendor-id",
+    "name": "Vendor Name",
+    "urls": { "home": "https://...", "pricing": null, "product": ["https://..."] },
+    "aliases": ["optional alternate names"]
+  }],
+  "claims": [{
+    "id": "stable-claim-id",
+    "capability": "Specific differentiating capability",
+    "icp": "buyer/segment this claim matters to",
+    "pricingStructure": "pricing motion implied by the claim, or unknown",
+    "definition": "How to judge LOUD vs QUIET vs ABSENT from page text",
+    "terms": ["buyer/search terms for deterministic mention matching"]
+  }],
+  "surfaceRule": "LOUD = hero/primary positioning; QUIET = supported but secondary; ABSENT = no support; UNOBSERVABLE = no usable capture."
+}
+
+ObservationSet shape:
+{
+  "id": "set_run1",
+  "category": "same category as config",
+  "runLabel": "run-1",
+  "runAt": "2026-06-11T00:00:00.000Z",
+  "extractor": "manual|agent:<model>|llm:<provider>:<model>",
+  "observations": [{
+    "id": "stable observation id (any unique string is accepted)",
+    "vendorId": "vendor id from config",
+    "claimId": "claim id from config",
+    "observedAt": "2026-06-11",
+    "intensity": "loud|quiet|absent|unobservable",
+    "confidence": "high|medium|low",
+    "reason": "one reviewer-facing sentence",
+    "evidence": [{
+      "id": "ev1",
+      "sourceSystem": "web",
+      "sourceObjectType": "page",
+      "sourceObjectId": "source URL",
+      "text": "VERBATIM quote from captured page text",
+      "metadata": { "url": "source URL", "captureHash": "hash from worksheet" }
+    }]
+  }]
+}
+
+Rules:
+- exactly one observation per vendor × claim cell
+- loud/quiet require ≥1 verbatim evidence quote
+- absent/unobservable use [] evidence
+- unobservable means no usable captured page exists for the vendor; if pages were captured but the claim is unsupported, use absent
+- submit with: fullstackgtm market observe --from observations.json
+- derive outputs with: fullstackgtm market fronts --json; fullstackgtm market report --format md --out market-report.md`);
         return;
     }
     if (subcommand === "init") {
@@ -148,7 +210,20 @@ recomputed deterministically on every invocation — never stored.`);
                 return;
             }
             if (!rest.includes("--unverified")) {
-                const { textByHash } = loadCaptureTexts(config.category);
+                const { entries, textByHash } = loadCaptureTexts(config.category);
+                const usableVendorIds = new Set(entries
+                    .filter((entry) => entry.runLabel === set.runLabel && entry.captureHash && textByHash.has(entry.captureHash))
+                    .map((entry) => entry.vendorId));
+                const unsupportedUnobservable = set.observations.filter((obs) => obs.intensity === "unobservable" && usableVendorIds.has(obs.vendorId));
+                if (unsupportedUnobservable.length > 0) {
+                    console.error(`Rejected: ${unsupportedUnobservable.length} unobservable reading(s) for vendors with usable captures`);
+                    for (const obs of unsupportedUnobservable.slice(0, 20)) {
+                        console.error(`  - ${obs.vendorId} × ${obs.claimId}: vendor has captured page text; unsupported claims should be absent, not unobservable`);
+                    }
+                    console.error("Use unobservable only when no usable captured page exists for that vendor/run. (--unverified skips this gate when captures genuinely live elsewhere.)");
+                    process.exitCode = 1;
+                    return;
+                }
                 const failures = verifyEvidenceSpans(set.observations, textByHash);
                 if (failures.length > 0) {
                     console.error(`Rejected: ${failures.length} evidence span(s) failed verification against the stored captures`);
@@ -179,6 +254,109 @@ recomputed deterministically on every invocation — never stored.`);
         else {
             console.log(payload);
         }
+        return;
+    }
+    if (subcommand === "hints") {
+        const vendorFilter = option(rest, "--vendor");
+        const vendorIds = vendorFilter ? [vendorFilter] : config.vendors.map((vendor) => vendor.id);
+        const worksheets = vendorIds.map((vendorId) => buildWorksheet(config, vendorId, { captureRun: option(rest, "--capture-run") ?? undefined }));
+        if (rest.includes("--json")) {
+            console.log(JSON.stringify({
+                category: config.category,
+                captureRun: worksheets[0]?.captureRun ?? null,
+                vendors: worksheets.map((worksheet) => ({ vendor: worksheet.vendor, claimHints: worksheet.claimHints })),
+            }, null, 2));
+            return;
+        }
+        for (const worksheet of worksheets) {
+            console.log(`\n## ${worksheet.vendor.id} — ${worksheet.vendor.name}`);
+            if (worksheet.pages.length === 0) {
+                console.log("No usable captures: classify every claim as unobservable.");
+                continue;
+            }
+            for (const hint of worksheet.claimHints) {
+                console.log(`\n${hint.claimId}`);
+                if (hint.matches.length === 0) {
+                    console.log("  no lexical matches in captured text (usually absent; still inspect pages for synonyms)");
+                    continue;
+                }
+                for (const match of hint.matches)
+                    console.log(`  - ${match.term} @ ${match.url}: ${match.quote}`);
+            }
+        }
+        return;
+    }
+    if (subcommand === "observe-template") {
+        const runLabel = option(rest, "--run") ?? "run-1";
+        const now = new Date().toISOString();
+        const observations = config.vendors.flatMap((vendor) => {
+            const worksheet = buildWorksheet(config, vendor.id, { captureRun: runLabel });
+            const noPages = worksheet.pages.length === 0;
+            return config.claims.map((claim) => ({
+                id: observationId(config.category, runLabel, vendor.id, claim.id),
+                vendorId: vendor.id,
+                claimId: claim.id,
+                observedAt: now.slice(0, 10),
+                intensity: noPages ? "unobservable" : "absent",
+                confidence: "low",
+                reason: noPages ? `No usable captures for ${vendor.name}; cannot judge.` : "TODO: inspect worksheet/hints and classify this cell.",
+                evidence: [],
+                _claimHints: worksheet.claimHints.find((hint) => hint.claimId === claim.id)?.matches ?? [],
+            }));
+        });
+        const set = { id: `set_${runLabel}`, category: config.category, runLabel, runAt: now, extractor: "manual-template", observations };
+        const payload = `${JSON.stringify(set, null, 2)}\n`;
+        const outPath = option(rest, "--out");
+        if (outPath) {
+            writeFileSync(resolve(process.cwd(), outPath), payload);
+            console.log(`Wrote ${outPath}: ${observations.length} template observations. Fill TODO cells, then run market review --from ${outPath}`);
+        }
+        else {
+            console.log(payload);
+        }
+        return;
+    }
+    if (subcommand === "review") {
+        const fromPath = option(rest, "--from");
+        if (!fromPath)
+            throw new Error("market review requires --from <observations.json>");
+        const set = JSON.parse(readFileSync(resolve(process.cwd(), fromPath), "utf8"));
+        const errors = validateObservationSet(config, set).map((detail) => ({ code: "invalid_observation_set", detail }));
+        const warnings = [];
+        const { entries, textByHash } = loadCaptureTexts(config.category);
+        const usableVendorIds = new Set(entries
+            .filter((entry) => entry.runLabel === set.runLabel && entry.captureHash && textByHash.has(entry.captureHash))
+            .map((entry) => entry.vendorId));
+        for (const obs of set.observations) {
+            if (obs.intensity === "unobservable" && usableVendorIds.has(obs.vendorId)) {
+                errors.push({ code: "unobservable_with_captures", detail: `${obs.vendorId} × ${obs.claimId}: vendor has captured page text; use absent when unsupported.` });
+            }
+            if ((obs.intensity === "absent" || obs.intensity === "unobservable") && usableVendorIds.has(obs.vendorId)) {
+                const hints = buildWorksheet(config, obs.vendorId, { captureRun: set.runLabel }).claimHints.find((hint) => hint.claimId === obs.claimId)?.matches ?? [];
+                if (hints.length > 0) {
+                    warnings.push({
+                        code: "support_candidate_marked_absent",
+                        detail: `${obs.vendorId} × ${obs.claimId}: ${hints.length} candidate snippet(s) matched terms but cell is ${obs.intensity}; verify absent vs quiet. Example: ${hints[0].quote}`,
+                    });
+                }
+            }
+        }
+        for (const failure of verifyEvidenceSpans(set.observations, textByHash)) {
+            errors.push({ code: "bad_evidence", detail: `${failure.vendorId} × ${failure.claimId}: ${failure.problem}` });
+        }
+        const summary = { ok: errors.length === 0, errors, warnings };
+        if (rest.includes("--json")) {
+            console.log(JSON.stringify(summary, null, 2));
+        }
+        else {
+            console.log(`${summary.ok ? "OK" : "FAILED"}: ${errors.length} error(s), ${warnings.length} warning(s)`);
+            for (const err of errors.slice(0, 20))
+                console.log(`ERROR ${err.code}: ${err.detail}`);
+            for (const warn of warnings.slice(0, 20))
+                console.log(`WARN  ${warn.code}: ${warn.detail}`);
+        }
+        if (errors.length > 0)
+            process.exitCode = 1;
         return;
     }
     if (subcommand === "classify") {

@@ -18,6 +18,22 @@ import { builtinAuditRules } from "./rules.js";
  * in version control.
  */
 export const CONFIG_FILE_NAME = "fullstackgtm.config.json";
+/**
+ * Translate the CLI's explicit trust flags into the library trust contract.
+ * Plugin execution requires both an explicit config path and --allow-plugins;
+ * discovering a config in the current directory is never a trust decision.
+ */
+export function rulePackageTrustFromCli(args, explicitConfigPath) {
+    const allow = args.includes("--allow-plugins");
+    const disable = args.includes("--no-plugins");
+    if (allow && disable) {
+        throw new Error("--allow-plugins and --no-plugins cannot be used together.");
+    }
+    if (allow && !explicitConfigPath) {
+        throw new Error("--allow-plugins requires --config <path>. Plugin code is never trusted from an implicitly discovered config.");
+    }
+    return { allowRulePackages: allow, disableRulePackages: disable };
+}
 export function loadConfig(explicitPath, cwd = process.cwd()) {
     const path = explicitPath ? resolve(cwd, explicitPath) : resolve(cwd, CONFIG_FILE_NAME);
     let raw;
@@ -51,9 +67,14 @@ export function mergePolicy(base, config) {
  * Build the effective rule set: built-ins plus rule-package exports, then
  * `enabled` (allow-list) and `disabled` filters.
  */
-export async function resolveConfiguredRules(loaded, baseRules = builtinAuditRules) {
+export async function resolveConfiguredRules(loaded, baseRules = builtinAuditRules, trust = {}) {
     let rules = [...baseRules];
-    for (const specifier of loaded?.config.rulePackages ?? []) {
+    const packages = loaded?.config.rulePackages ?? [];
+    if (packages.length && !trust.allowRulePackages && !trust.disableRulePackages) {
+        throw new Error(`Config ${loaded.path} declares executable rulePackages. Refusing to load plugin code without explicit trust. ` +
+            "For the CLI, pass --config <path> --allow-plugins after reviewing the modules, or pass --no-plugins to use only declarative policy and built-in rules.");
+    }
+    for (const specifier of trust.disableRulePackages ? [] : packages) {
         const resolvedSpecifier = specifier.startsWith(".") || isAbsolute(specifier)
             ? pathToFileURL(resolve(dirname(loaded.path), specifier)).href
             : specifier;

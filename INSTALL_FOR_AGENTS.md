@@ -33,9 +33,11 @@ machine — that is normal and does not block the next step.
 fullstackgtm audit --demo --json
 ```
 
-Expect a JSON patch plan with `dryRun: true` and 110 findings/110 operations over a generated,
-deliberately messy CRM. Deterministic per seed: `--seed 7` is the default, so
-two runs produce identical finding and operation ids. Exit code 0.
+Expect a JSON patch plan with `dryRun: true`, a non-empty `findings` array, and
+matching proposed operations over a generated, deliberately messy CRM. The
+exact count can grow as built-in rules are added; the stable contract is
+determinism per release and seed. `--seed 7` is the default, so two runs on the
+same version produce identical finding and operation ids. Exit code 0.
 
 This proves the whole pipeline (snapshot → audit → plan) without any account.
 
@@ -133,9 +135,15 @@ works from inside existing projects too.
 Tools exposed over stdio — read-only: `fullstackgtm_audit`,
 `fullstackgtm_capabilities`, `fullstackgtm_rules`, `fullstackgtm_suggest`,
 `fullstackgtm_call_parse`, `fullstackgtm_resolve`, `fullstackgtm_market_worksheet`. Gated:
-`fullstackgtm_apply` (requires explicit `approvedOperationIds`),
+`fullstackgtm_apply` (stored `planId` only; approvals and values must already be
+human-approved and HMAC-signed in the local plan store),
 `fullstackgtm_market_observe` (every quoted span is verified against the
 stored captures before anything is appended).
+
+MCP cannot execute rule packages, apply external plan files, or supply its own
+approvals/value overrides. For an interrupted apply, reconcile provider state,
+then run `fullstackgtm plans recover <id> --acknowledge-uncertain-writes`; this
+replays nothing and clears approvals so a fresh review is required.
 
 ## Troubleshooting
 
@@ -145,3 +153,4 @@ stored captures before anything is appended).
 | `No HubSpot credentials` (exit 1) | Set `HUBSPOT_ACCESS_TOKEN` or have a human run `fullstackgtm login hubspot --hosted` |
 | MCP server prints peer-dependency help | Install `@modelcontextprotocol/sdk` and `zod` (see step 6) |
 | Need machine state for orchestration | `fullstackgtm doctor --json` |
+| Plan is `applying` after an interrupted request | Reconcile provider state, then run `fullstackgtm plans recover <id> --acknowledge-uncertain-writes`; review and approve again |

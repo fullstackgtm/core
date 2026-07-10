@@ -14,6 +14,7 @@
  * env/credential store, never argv.
  */
 import type { CanonicalGtmSnapshot } from "../types.ts";
+import { ProviderHttpError } from "../providerError.ts";
 
 export type Prospect = {
   firstName?: string;
@@ -79,7 +80,7 @@ export async function fetchExploriumProspects(opts: {
     body: JSON.stringify({ mode: "full", size, page_size: size, page: 1, filters: opts.filters }),
   });
   if (!response.ok) {
-    throw new Error(`Explorium /v1/prospects failed: HTTP ${response.status} ${await safeText(response)}`);
+    throw new ProviderHttpError("Explorium", "prospect search", response.status);
   }
   const data = (await response.json()) as { data?: ExploriumRow[] };
   return (data.data ?? []).map((row) => ({
@@ -132,7 +133,7 @@ export async function fetchPipe0CrustdataProspects(opts: {
     }),
   });
   if (!response.ok) {
-    throw new Error(`pipe0 /v1/searches/run/sync failed: HTTP ${response.status} ${await safeText(response)}`);
+    throw new ProviderHttpError("pipe0", "prospect search", response.status);
   }
   const body = (await response.json()) as {
     results?: Array<Record<string, { value?: unknown }>>;
@@ -214,7 +215,7 @@ export async function probeExploriumBusinessCount(opts: {
     body: JSON.stringify({ mode: "full", page_size: 1, page: 1, filters: opts.filters }),
   });
   if (!response.ok) {
-    throw new Error(`Explorium /v1/businesses count failed: HTTP ${response.status} ${await safeText(response)}`);
+    throw new ProviderHttpError("Explorium", "business count", response.status);
   }
   const body = (await response.json()) as { total_results?: unknown };
   const total = body.total_results;
@@ -425,14 +426,6 @@ type Pipe0RunResponse = {
 function fieldValue(field: Pipe0Field | undefined): string | undefined {
   const v = field?.value;
   return typeof v === "string" && v.trim() ? v : undefined;
-}
-
-async function safeText(response: Response): Promise<string> {
-  try {
-    return (await response.text()).slice(0, 300);
-  } catch {
-    return "";
-  }
 }
 
 // ---------------------------------------------------------------------------

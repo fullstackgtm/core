@@ -7,7 +7,7 @@
  */
 export type CrmProvider = "salesforce" | "hubspot" | "mock" | "unknown" | (string & {});
 export type RiskLevel = "low" | "medium" | "high";
-export type ApprovalStatus = "draft" | "needs_approval" | "approved" | "rejected" | "applied";
+export type ApprovalStatus = "draft" | "needs_approval" | "approved" | "applying" | "rejected" | "applied";
 export type GtmObjectType = "account" | "contact" | "deal" | "user" | "activity";
 export type GtmEvidenceSourceSystem = "salesforce" | "hubspot" | "gong" | "chorus" | "fathom" | "manual" | "csv" | "mock" | "web" | "unknown";
 export type PatchOperationType = "set_field" | "clear_field" | "link_record" | "archive_record" | "create_task" | "create_record" | "merge_records";

@@ -1,10 +1,11 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync, } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, unlinkSync, } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { refreshHubspotToken } from "./connectors/hubspotAuth.js";
-import { refreshSalesforceToken } from "./connectors/salesforceAuth.js";
+import { refreshSalesforceToken, validateSalesforceOrigin } from "./connectors/salesforceAuth.js";
 import { detectKeychainBackend } from "./keychain.js";
+import { assertNoSymlinkComponents, readSecureRegularFile, UnsafeManagedPathError, writeSecureFileAtomic, } from "./secureFile.js";
 /**
  * Local CLI credential store: ~/.fullstackgtm/credentials.json (0600), or
  * $FSGTM_HOME/credentials.json when set. Environment tokens always win over
@@ -80,7 +81,9 @@ export function ensureSecureHomeDir() {
     // umask) only to directories it creates, and never to pre-existing ones.
     const levels = dir === baseHomeDir() ? [dir] : [baseHomeDir(), join(baseHomeDir(), "profiles"), dir];
     for (const level of levels) {
+        assertNoSymlinkComponents(level);
         mkdirSync(level, { recursive: true, mode: 0o700 });
+        assertNoSymlinkComponents(level);
         try {
             chmodSync(level, 0o700);
         }
@@ -92,13 +95,7 @@ export function ensureSecureHomeDir() {
 }
 /** Write a 0600 file under the home, enforcing the mode even on rewrite. */
 export function writeSecureFile(path, contents) {
-    writeFileSync(path, contents, { mode: 0o600 });
-    try {
-        chmodSync(path, 0o600);
-    }
-    catch {
-        // Non-POSIX filesystems ignore chmod.
-    }
+    writeSecureFileAtomic(path, contents);
 }
 /**
  * The 0600/0700 guarantee was write-only: a credentials.json inherited at
@@ -107,18 +104,12 @@ export function writeSecureFile(path, contents) {
  * mode on read too — re-tighten to 0600 and warn once — so a world-readable
  * credential store can't sit there silently leaking the token to other users.
  */
-function enforceCredentialFileMode(path) {
-    try {
-        const mode = statSync(path).mode & 0o777;
-        if ((mode & 0o077) !== 0) {
-            chmodSync(path, 0o600);
-            console.error(`fullstackgtm: tightened ${path} from ${mode.toString(8).padStart(3, "0")} to 600 ` +
-                "(it was readable or writable by other users).");
-        }
-    }
-    catch {
-        // Missing file or non-POSIX filesystem: nothing to enforce.
-    }
+function readCredentialFile(path) {
+    return readSecureRegularFile(path, {
+        tightenMode: 0o600,
+        onModeTightened: (mode) => console.error(`fullstackgtm: tightened ${path} from ${mode.toString(8).padStart(3, "0")} to 600 ` +
+            "(it was readable or writable by other users)."),
+    });
 }
 /**
  * Persistence backend for the credential blob: the OS keychain when
@@ -144,7 +135,7 @@ function migratePlaintextToKeychain(keychain) {
     if (!existsSync(credentialsPath()))
         return;
     try {
-        const fileParsed = JSON.parse(readFileSync(credentialsPath(), "utf8"));
+        const fileParsed = JSON.parse(readCredentialFile(credentialsPath()));
         if (fileParsed && fileParsed.version === 1 && fileParsed.providers) {
             const current = keychain.backend.get(keychain.account);
             const existing = current ? (JSON.parse(current).providers ?? {}) : {};
@@ -164,7 +155,7 @@ function readFile() {
     if (keychain)
         migratePlaintextToKeychain(keychain);
     try {
-        const raw = keychain ? keychain.backend.get(keychain.account) : (enforceCredentialFileMode(credentialsPath()), readFileSync(credentialsPath(), "utf8"));
+        const raw = keychain ? keychain.backend.get(keychain.account) : readCredentialFile(credentialsPath());
         if (raw) {
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed === "object" && parsed.version === 1 && parsed.providers) {
@@ -172,7 +163,9 @@ function readFile() {
             }
         }
     }
-    catch {
+    catch (error) {
+        if (error instanceof UnsafeManagedPathError)
+            throw error;
         // Missing or unreadable store falls through to an empty one.
     }
     return { version: 1, providers: {} };
@@ -192,6 +185,18 @@ export function getCredential(provider) {
     return readFile().providers[provider] ?? null;
 }
 export function storeCredential(provider, credential) {
+    if (provider === "salesforce") {
+        if (!credential.instanceUrl) {
+            throw new Error("Salesforce credentials require an instance URL.");
+        }
+        credential = {
+            ...credential,
+            instanceUrl: validateSalesforceOrigin(credential.instanceUrl, "Salesforce credential instance URL"),
+            ...(credential.loginUrl
+                ? { loginUrl: validateSalesforceOrigin(credential.loginUrl, "Salesforce credential login URL") }
+                : {}),
+        };
+    }
     const file = readFile();
     file.providers[provider] = credential;
     persist(file);
@@ -248,11 +253,15 @@ export async function resolveSalesforceConnection(options = {}) {
         if (!credential.instanceUrl) {
             throw new Error("Stored Salesforce credential has no instance URL. Run `fullstackgtm login salesforce` again.");
         }
+        const instanceUrl = validateSalesforceOrigin(credential.instanceUrl, "Stored Salesforce credential instance URL");
+        if (credential.loginUrl) {
+            validateSalesforceOrigin(credential.loginUrl, "Stored Salesforce credential login URL");
+        }
         const needsRefresh = credential.kind === "oauth" &&
             credential.expiresAt !== undefined &&
             Date.now() > credential.expiresAt - REFRESH_SKEW_MS;
         if (!needsRefresh) {
-            return { accessToken: credential.accessToken, instanceUrl: credential.instanceUrl };
+            return { accessToken: credential.accessToken, instanceUrl };
         }
         if (!credential.refreshToken || !credential.clientId) {
             throw new Error("Stored Salesforce token is expired and cannot be refreshed. Run `fullstackgtm login salesforce` again.");
@@ -279,9 +288,10 @@ export async function resolveSalesforceConnection(options = {}) {
     if (!minted.instanceUrl) {
         throw new Error("The hosted deployment returned no Salesforce instance URL.");
     }
+    const instanceUrl = validateSalesforceOrigin(minted.instanceUrl, "Hosted Salesforce credential instance URL");
     return {
         accessToken: minted.accessToken,
-        instanceUrl: minted.instanceUrl,
+        instanceUrl,
         fieldMappings: minted.fieldMappings,
     };
 }

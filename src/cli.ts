@@ -91,7 +91,7 @@ export async function runCli(argv: string[]) {
   }
   // Commands without bespoke help get focused per-command help on --help
   // instead of executing (audit used to silently run the sample audit) or
-  // dumping the whole surface. call/market/enrich/bulk-update/schedule print
+  // dumping the whole surface. call/market/enrich/schedule print
   // their own richer help. `--full` always escapes to the complete reference.
   if (!BESPOKE_HELP.includes(command) && (args.includes("--help") || args.includes("-h"))) {
     console.log(args.includes("--full") ? usage() : commandHelp(command));
