@@ -235,6 +235,12 @@ const CLAY_SENIORITY = {
     founder: "founder",
     senior: "senior",
 };
+const CLAY_REGION_COUNTRIES = {
+    "north america": ["United States", "Canada"],
+    europe: ["United Kingdom", "Germany", "France", "Netherlands", "Spain", "Italy", "Ireland", "Sweden", "Switzerland"],
+    "asia pacific": ["Australia", "New Zealand", "Singapore", "Japan", "India"],
+    apac: ["Australia", "New Zealand", "Singapore", "Japan", "India"],
+};
 /** Clay people-search filters using only fields confirmed in the live catalog. */
 export function icpToClayPeopleFilters(icp) {
     const filters = {};
@@ -247,7 +253,14 @@ export function icpToClayPeopleFilters(icp) {
     if (sizes.length)
         filters.company_sizes = sizes;
     if (icp.firmographics.geos?.length) {
-        filters.location_countries_include = icp.firmographics.geos.map((geo) => COUNTRY_NAMES[geo.toLowerCase()] ?? geo);
+        const countries = [...new Set(icp.firmographics.geos.flatMap((geo) => {
+                const normalized = geo.toLowerCase().trim();
+                if (normalized === "global" || normalized === "worldwide")
+                    return [];
+                return CLAY_REGION_COUNTRIES[normalized] ?? [COUNTRY_NAMES[normalized] ?? geo];
+            }))];
+        if (countries.length)
+            filters.location_countries_include = countries;
     }
     // Clay accepts a controlled industry catalog. Never invent a title-cased
     // enum for model-authored labels: unsupported values make the entire search
@@ -257,6 +270,35 @@ export function icpToClayPeopleFilters(icp) {
     if (industries.length)
         filters.company_industries_include = industries;
     return filters;
+}
+const ROLE_STOPWORDS = new Set(["chief", "head", "director", "manager", "senior", "vice", "president", "vp", "cmo", "officer", "lead", "of", "and", "the"]);
+function roleKeywords(icp) {
+    return [...new Set([
+            ...(icp.persona.departments ?? []),
+            ...(icp.persona.titleKeywords ?? []).flatMap((title) => title.split(/[^a-z0-9]+/i)),
+        ].map((word) => word.trim().toLowerCase()).filter((word) => word.length >= 4 && !ROLE_STOPWORDS.has(word)))];
+}
+/** Progressive Clay searches for an ICP. Each fallback removes only
+ * provider-side AND constraints; the canonical ICP still scores every person
+ * locally, so broader discovery does not become broader qualification. */
+export function clayPeopleFilterRoutes(icp) {
+    const exact = icpToClayPeopleFilters(icp);
+    const without = (...keys) => Object.fromEntries(Object.entries(exact).filter(([key]) => !keys.includes(key)));
+    const candidates = [
+        { id: "exact", filters: exact },
+        { id: "account-first", filters: without("job_title_seniority_levels_v2") },
+        { id: "persona-first", filters: without("company_industries_include", "company_sizes") },
+        { id: "title-first", filters: without("company_industries_include", "company_sizes", "job_title_seniority_levels_v2", "location_countries_include") },
+        { id: "function-first", filters: { job_title_keywords: roleKeywords(icp) } },
+    ];
+    const seen = new Set();
+    return candidates.filter((route) => {
+        const fingerprint = JSON.stringify(route.filters);
+        if (seen.has(fingerprint))
+            return false;
+        seen.add(fingerprint);
+        return true;
+    });
 }
 const ACRONYMS = new Set(["cro", "coo", "ceo", "cfo", "vp", "crm", "gtm", "saas"]);
 function titleCase(value) {
@@ -284,7 +326,7 @@ export function scoreProspectAgainstIcp(prospect, icp) {
     let weightSum = 0;
     if (keywords.length) {
         weightSum += 0.6;
-        const hit = keywords.find((k) => title.includes(k));
+        const hit = keywords.find((k) => title.includes(k)) ?? roleKeywords(icp).find((keyword) => title.includes(keyword));
         if (hit) {
             score += 0.6;
             reasons.push(`title matches ICP keyword "${hit}"`);

@@ -7,6 +7,23 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.53.0] — 2026-07-11
+
+### Added
+
+- Clay acquisition progressively relaxes over-constrained searches through
+  exact, account-first, persona-first, title-first, and function-first routes;
+  every broader candidate still passes through local ICP fit scoring.
+
+### Changed
+
+- Clay geography translation expands broad regions such as North America,
+  Europe, and APAC into valid country filters and treats global/worldwide as
+  an unconstrained geography rather than a fake country.
+- Phrase-style model-derived titles can qualify equivalent buyer functions,
+  allowing roles such as `VP, Global Brand Strategy` to match `Head of Brand`
+  without weakening the configured fit threshold.
+
 ## [0.52.4] — 2026-07-11
 
 ### Fixed

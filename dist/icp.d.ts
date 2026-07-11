@@ -106,6 +106,14 @@ export declare function icpToTheirStackFilters(icp: Icp): {
 export declare function icpToCrustdataFilters(icp: Icp): Record<string, unknown>;
 /** Clay people-search filters using only fields confirmed in the live catalog. */
 export declare function icpToClayPeopleFilters(icp: Icp): Record<string, unknown>;
+export type ClayPeopleFilterRoute = {
+    id: "exact" | "account-first" | "persona-first" | "title-first" | "function-first";
+    filters: Record<string, unknown>;
+};
+/** Progressive Clay searches for an ICP. Each fallback removes only
+ * provider-side AND constraints; the canonical ICP still scores every person
+ * locally, so broader discovery does not become broader qualification. */
+export declare function clayPeopleFilterRoutes(icp: Icp): ClayPeopleFilterRoute[];
 export type IcpFit = {
     score: number;
     reasons: string[];

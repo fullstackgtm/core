@@ -18,7 +18,7 @@ import { uploadHostedPatchPlan } from "../hostedPatchPlan.ts";
 import { progressReporter, reportCounts, reportEvent } from "../runReport.ts";
 import { ACQUIRE_STAGES, composeListeners, createProgressEmitter } from "../progress.ts";
 import { createLinkedInProvider, discoverLinkedInProspects } from "../acquireLinkedIn.ts";
-import { fitThreshold, icpToClayPeopleFilters, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp, type Icp } from "../icp.ts";
+import { clayPeopleFilterRoutes, fitThreshold, icpToClayPeopleFilters, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp, type Icp } from "../icp.ts";
 import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, type ApolloPullKey } from "../enrichApollo.ts";
 import type { CanonicalGtmSnapshot } from "../types.ts";
 import { isSpoolPath, readSpoolPath } from "../spoolFiles.ts";
@@ -589,7 +589,7 @@ async function acquireFromApi(
       "enrich acquire --source linkedin needs a HeyReach lead-list id: pass --list <id> or set acquire.discovery.linkedin.listId.",
     );
   }
-  const filters = disc.provider === "explorium"
+  let filters = disc.provider === "explorium"
     ? (icp ? icpToExploriumFilters(icp) : (disc.filters ?? {}))
     : disc.provider === "pipe0"
       ? (icp ? icpToCrustdataFilters(icp) : (disc.filters ?? {}))
@@ -648,6 +648,9 @@ async function acquireFromApi(
   const prospects: Prospect[] = [];
   const crmKeys = crmContactKeys(snapshot);
   const runSeen = new Set(seen);
+  const clayRoutes = disc.provider === "clay" && icp ? clayPeopleFilterRoutes(icp) : [];
+  let clayRouteIndex = 0;
+  const allowClayFallback = !resume;
 
   // Pull successive pages until we have enough fresh candidates or hit the
   // bounded scan ceiling. Page size follows the remaining target, so advancing
@@ -671,18 +674,26 @@ async function acquireFromApi(
       cursor = result.nextCursor;
       exhausted = result.nextCursor === null;
     } else if (disc.provider === "clay") {
-      if (!cursor) {
-        progress.note("creating Clay people-search iterator");
-        cursor = await createClaySearch({
-          apiKey: providerKey("clay"), sourceType: "people", filters,
-        });
+      while (true) {
+        if (!cursor) {
+          const route = clayRoutes[clayRouteIndex];
+          if (route) filters = route.filters;
+          progress.note(`creating Clay people-search iterator · ${route?.id ?? "configured"}`);
+          cursor = await createClaySearch({ apiKey: providerKey("clay"), sourceType: "people", filters });
+        }
+        const result = await runClayPeopleSearchPage({ apiKey: providerKey("clay"), searchId: cursor, limit: requestSize });
+        page = result.prospects;
+        offset += page.length;
+        exhausted = !result.hasMore;
+        if (page.length > 0 || !allowClayFallback || clayRouteIndex >= clayRoutes.length - 1) break;
+        const failed = clayRoutes[clayRouteIndex]?.id ?? "configured";
+        clayRouteIndex += 1;
+        const next = clayRoutes[clayRouteIndex];
+        progress.note(`Clay ${failed} route returned 0 · trying ${next.id}`);
+        cursor = null;
+        offset = 0;
+        exhausted = false;
       }
-      const result = await runClayPeopleSearchPage({
-        apiKey: providerKey("clay"), searchId: cursor, limit: requestSize,
-      });
-      page = result.prospects;
-      offset += page.length;
-      exhausted = !result.hasMore;
     } else if (disc.provider === "explorium") {
       const pageNumber = offset + 1;
       exploriumPage = pageNumber;
@@ -729,10 +740,25 @@ async function acquireFromApi(
     progress.note(
       `${discovered} scanned · ${qualified} qualified · ${prospects.length}/${targetFresh} fresh`,
     );
+    if (
+      disc.provider === "clay" && allowClayFallback && exhausted &&
+      prospects.length < targetFresh && clayRouteIndex < clayRoutes.length - 1 && discovered < scanLimit
+    ) {
+      const failed = clayRoutes[clayRouteIndex]?.id ?? "configured";
+      clayRouteIndex += 1;
+      progress.note(`Clay ${failed} route did not fill the target · trying ${clayRoutes[clayRouteIndex].id}`);
+      cursor = null;
+      offset = 0;
+      exhausted = false;
+    }
     // Explorium is page-number based. Only advance after consuming every fresh
     // candidate on that page; otherwise the next run safely re-reads the page
     // and CRM/seen dedupe exposes the remainder instead of losing it.
     if (exploriumPage !== null && partition.fresh.length <= remainingTarget) offset = exploriumPage;
+  }
+
+  if (disc.provider === "clay" && clayRouteIndex > 0 && discovered > 0) {
+    console.error(`Clay discovery relaxed to ${clayRoutes[clayRouteIndex].id} after narrower routes returned 0; all candidates still passed through local ICP fit scoring.`);
   }
 
   if (discovered === 0 && !resume) {
