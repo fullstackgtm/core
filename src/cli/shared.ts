@@ -356,15 +356,25 @@ export async function readSecret(label: string): Promise<string> {
 
   const readline = await import("node:readline");
   return new Promise<string>((resolveSecret) => {
+    process.stderr.write("Paste once, then press Enter. Input is masked.\n");
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stderr,
       terminal: true,
     });
     let muted = false;
-    const mutable = rl as unknown as { _writeToOutput?: (value: string) => void };
+    const mutable = rl as unknown as { _writeToOutput?: (value: string) => void; line?: string };
+    let renderQueued = false;
     mutable._writeToOutput = (value: string) => {
-      if (!muted) process.stderr.write(value);
+      if (!muted) { process.stderr.write(value); return; }
+      if (renderQueued) return;
+      renderQueued = true;
+      queueMicrotask(() => {
+        renderQueued = false;
+        const length = mutable.line?.length ?? 0;
+        const mask = `${"•".repeat(Math.min(length, 12))}${length > 12 ? "…" : ""}`;
+        process.stderr.write(`\r\u001b[2K${label}: ${mask} (${length} character${length === 1 ? "" : "s"} received)`);
+      });
     };
     rl.question(`${label}: `, (answer) => {
       rl.close();

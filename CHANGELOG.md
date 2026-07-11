@@ -7,6 +7,18 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.52.1] — 2026-07-11
+
+### Fixed
+
+- OpenRouter 401/403 failures now name `fullstackgtm login openrouter` as the
+  credential replacement path and explain that `OPENROUTER_API_KEY` overrides
+  the stored profile key.
+- Interactive secret prompts remain non-echoing but now confirm paste activity
+  with a masked glyph preview and received-character count.
+- Interactive ICP review cards cap their width, wrap long segment values, and
+  repaint only their own terminal rows instead of clearing the whole screen.
+
 ## [0.52.0] — 2026-07-11
 
 ### Added

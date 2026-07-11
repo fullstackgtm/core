@@ -10,7 +10,7 @@ import { createFileJudgeStore, DEFAULT_JUDGE_PROMPT, judgeRunId, judgeSignals } 
 import { DEFAULT_GOLDEN_NOW_ISO, DEFAULT_GOLDEN_SET, DEFAULT_MIN_ACCURACY, defaultJudgeFn, gradeAgainstOutcomes, gradeJudge, parseGoldenSet } from "../judgeEval.js";
 import { loadIcp, numericOption, option, readSecret, readSnapshot, resolveLlmBaseUrls, saveRequested } from "./shared.js";
 import { createStatusLine } from "./ui.js";
-import { box, colorEnabled, paint } from "./ui.js";
+import { box, colorEnabled, paint, truncateToWidth } from "./ui.js";
 import { getCredential, storeCredential } from "../credentials.js";
 import { deriveWebsiteIcp, icpReviewSegments, OPENROUTER_API_BASE } from "../icpDerive.js";
 import { unknownSubcommandError } from "./suggest.js";
@@ -43,11 +43,30 @@ function updateReviewSegment(icp, id, raw) {
 function renderDerivedIcp(result, selected = -1) {
     const p = paint(colorEnabled());
     const segments = icpReviewSegments(result.icp);
+    const contentWidth = Math.min(88, Math.max(64, (process.stdout.columns ?? 92) - 4));
+    const valueWidth = contentWidth - 18;
+    const segmentLines = segments.flatMap((segment, index) => {
+        const words = segment.value.split(/\s+/);
+        const wrapped = [];
+        let line = "";
+        for (const word of words) {
+            if (!line || line.length + word.length + 1 <= valueWidth)
+                line += `${line ? " " : ""}${word}`;
+            else {
+                wrapped.push(line);
+                line = word;
+            }
+        }
+        if (line)
+            wrapped.push(line);
+        const prefix = `${index === selected ? "›" : " "} ${segment.label.padEnd(15)} `;
+        return (wrapped.length ? wrapped : ["—"]).map((value, lineIndex) => `${lineIndex === 0 ? prefix : " ".repeat(18)}${truncateToWidth(value, valueWidth)}`);
+    });
     const lines = [
-        `${result.company.name}  ${result.company.domain}`,
+        truncateToWidth(`${result.company.name}  ${result.company.domain}`, contentWidth),
         `${Math.round(result.confidence * 100)}% confidence · ${result.derivation.model}`,
         "",
-        ...segments.map((segment, index) => `${index === selected ? "›" : " "} ${segment.label.padEnd(15)} ${segment.value}`),
+        ...segmentLines,
         "",
         selected >= 0 ? "↑/↓ select · enter edit · s save · q cancel" : `${result.evidence.length} website-verifiable evidence quote(s)`,
     ];
@@ -98,7 +117,14 @@ async function reviewDerivedIcp(result) {
         return result;
     let current = result;
     let selected = 0;
-    const render = () => process.stdout.write(`\u001b[2J\u001b[H${renderDerivedIcp(current, selected)}\n`);
+    let paintedLines = 0;
+    const render = (promptLines = 0) => {
+        const output = renderDerivedIcp(current, selected);
+        if (paintedLines > 0)
+            process.stdout.write(`\u001b[${paintedLines + promptLines}A\r\u001b[0J`);
+        process.stdout.write(`${output}\n`);
+        paintedLines = output.split("\n").length;
+    };
     emitKeypressEvents(process.stdin);
     process.stdin.setRawMode?.(true);
     process.stdin.resume();
@@ -137,7 +163,7 @@ async function reviewDerivedIcp(result) {
             emitKeypressEvents(process.stdin);
             process.stdin.setRawMode?.(true);
             process.stdin.on("keypress", onKey);
-            render();
+            render(2);
         };
         process.stdin.on("keypress", onKey);
     });

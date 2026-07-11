@@ -343,7 +343,7 @@ async function streamOpenAiToolCall(fetchImpl, url, body, options) {
         throw new Error(`Cannot reach ${new URL(url).hostname}${cause}. Check network access.`);
     }
     if (!response.ok)
-        throw new Error(`LLM API error ${response.status} ${response.statusText} from ${new URL(url).hostname}. Check the API key and model name.`);
+        throw llmApiError(response, url);
     if (!response.body)
         throw new Error("LLM API returned no streaming response body.");
     const reader = response.body.getReader();
@@ -407,9 +407,20 @@ async function llmFetch(fetchImpl, url, init) {
     }
     if (!response.ok) {
         // Status line only — provider error bodies can reflect request content.
-        throw new Error(`LLM API error ${response.status} ${response.statusText} from ${new URL(url).hostname}. Check the API key (\`fullstackgtm login anthropic|openai\`) and model name.`);
+        throw llmApiError(response, url);
     }
     return response.json();
+}
+function llmApiError(response, url) {
+    const host = new URL(url).hostname;
+    const prefix = `LLM API error ${response.status} ${response.statusText} from ${host}.`;
+    if ((response.status === 401 || response.status === 403) && host === "openrouter.ai") {
+        return new Error(`${prefix} Replace the saved key with \`fullstackgtm login openrouter\`. If OPENROUTER_API_KEY is set, update or unset it first because environment credentials override saved login.`);
+    }
+    if (response.status === 401 || response.status === 403) {
+        return new Error(`${prefix} Replace the API key with \`fullstackgtm login anthropic|openai\` (choose one provider), then retry.`);
+    }
+    return new Error(`${prefix} Check the model name, provider availability, and account limits.`);
 }
 function truncateTranscript(transcript) {
     if (transcript.length <= MAX_TRANSCRIPT_CHARS)
