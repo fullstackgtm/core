@@ -7,6 +7,13 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.52.2] — 2026-07-11
+
+### Fixed
+
+- Interactive `icp derive` resumes raw terminal input after editing a field,
+  returning to the ICP card for further edits instead of exiting the process.
+
 ## [0.52.1] — 2026-07-11
 
 ### Fixed

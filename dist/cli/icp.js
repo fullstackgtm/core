@@ -161,6 +161,10 @@ async function reviewDerivedIcp(result) {
             if (answer.trim())
                 current = { ...current, icp: updateReviewSegment(current.icp, segment.id, answer) };
             emitKeypressEvents(process.stdin);
+            // readline.close() pauses its input stream. Resume it before restoring
+            // raw keypress handling or Node sees no active input and exits after the
+            // first field edit instead of returning to the ICP review card.
+            process.stdin.resume();
             process.stdin.setRawMode?.(true);
             process.stdin.on("keypress", onKey);
             render(2);
