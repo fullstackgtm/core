@@ -7,6 +7,14 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.52.3] — 2026-07-11
+
+### Changed
+
+- OpenRouter ICP derivation replaces numeric reasoning-token heartbeats with
+  safe, subject-aware progress summaries inferred transiently from the model's
+  reasoning stream; raw chain-of-thought is never displayed or retained.
+
 ## [0.52.2] — 2026-07-11
 
 ### Fixed

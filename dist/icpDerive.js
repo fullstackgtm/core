@@ -98,7 +98,7 @@ DOMAIN: ${target.domain}
             model,
             ...(isOpenRouter ? {
                 onReasoningSummary: (summary) => args.onProgress?.({ stage: "model", message: `${model} reasoning summary: ${summary.slice(0, 240)}` }),
-                onReasoningActivity: (characters) => args.onProgress?.({ stage: "model", message: `${model} reasoning · ~${Math.max(1, Math.round(characters / 4)).toLocaleString("en-US")} tokens received` }),
+                onReasoningPhase: (phase) => args.onProgress?.({ stage: "model", message: `${model}: ${phase}` }),
             } : {}),
         });
     const companyName = typeof raw.companyName === "string" ? raw.companyName.trim().slice(0, 100) : target.domain;

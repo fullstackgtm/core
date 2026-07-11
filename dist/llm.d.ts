@@ -40,6 +40,9 @@ export type LlmCallOptions = {
      * deliberately not exposed; only provider-authored summaries and activity. */
     onReasoningSummary?: (summary: string) => void;
     onReasoningActivity?: (receivedCharacters: number) => void;
+    /** Safe, coarse phase inferred transiently from reasoning text. The raw text
+     * is never passed to callers, logged, or retained after the request. */
+    onReasoningPhase?: (phase: string) => void;
 };
 export type LlmExtractedInsight = ExtractedCallInsight & {
     owner?: string;

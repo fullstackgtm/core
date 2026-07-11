@@ -315,7 +315,7 @@ export async function forcedToolCall(prompt, toolName, schema, model, options) {
         tools: [{ type: "function", function: { name: toolName, parameters: schema } }],
         tool_choice: { type: "function", function: { name: toolName } },
     };
-    if (options.onReasoningSummary || options.onReasoningActivity) {
+    if (options.onReasoningSummary || options.onReasoningActivity || options.onReasoningPhase) {
         return streamOpenAiToolCall(fetchImpl, openaiUrl, requestBody, options);
     }
     const response = await llmFetch(fetchImpl, openaiUrl, {
@@ -352,7 +352,9 @@ async function streamOpenAiToolCall(fetchImpl, url, body, options) {
     let argumentsJson = "";
     let reasoningCharacters = 0;
     let lastActivityReport = 0;
+    let recentReasoning = "";
     const seenSummaries = new Set();
+    const seenPhases = new Set();
     while (true) {
         const { value, done } = await reader.read();
         buffer += decoder.decode(value, { stream: !done });
@@ -373,9 +375,18 @@ async function streamOpenAiToolCall(fetchImpl, url, body, options) {
             }
             const delta = chunk.choices?.[0]?.delta;
             argumentsJson += delta?.tool_calls?.[0]?.function?.arguments ?? "";
-            reasoningCharacters += delta?.reasoning?.length ?? 0;
+            const detailText = (delta?.reasoning_details ?? []).filter((detail) => detail.type === "reasoning.text").map((detail) => detail.text ?? "").join("");
+            const reasoningText = delta?.reasoning || detailText;
+            reasoningCharacters += reasoningText.length;
+            if (reasoningText) {
+                recentReasoning = `${recentReasoning}${reasoningText}`.slice(-600);
+                const phase = reasoningPhase(recentReasoning);
+                if (phase && !seenPhases.has(phase)) {
+                    seenPhases.add(phase);
+                    options.onReasoningPhase?.(phase);
+                }
+            }
             for (const detail of delta?.reasoning_details ?? []) {
-                reasoningCharacters += detail.text?.length ?? detail.summary?.length ?? 0;
                 if (detail.type !== "reasoning.summary" || !detail.summary)
                     continue;
                 const summary = detail.summary.replace(/\s+/g, " ").trim();
@@ -395,6 +406,18 @@ async function streamOpenAiToolCall(fetchImpl, url, body, options) {
     if (!argumentsJson)
         throw new Error("OpenAI-compatible model returned no streamed tool call — try again or a different --model.");
     return JSON.parse(argumentsJson);
+}
+function reasoningPhase(text) {
+    const normalized = text.toLowerCase();
+    const phases = [
+        [/quote|evidence|verbatim|source text|supporting claim/, "checking candidate evidence against website quotes"],
+        [/buyer|persona|job title|seniority|department|decision.?maker/, "resolving likely buyer roles, departments, and seniority"],
+        [/industr|employee|company size|firmographic|geograph|target account/, "narrowing target-account industries, size, and geography"],
+        [/intent|trigger|timing|why now|signal/, "identifying intent and timing signals"],
+        [/offer|product|service|value proposition|capabilit/, "interpreting the company offer and value proposition"],
+        [/schema|structured|json|field|assemble|final/, "assembling the structured ICP response"],
+    ];
+    return phases.find(([pattern]) => pattern.test(normalized))?.[1];
 }
 async function llmFetch(fetchImpl, url, init) {
     let response;
