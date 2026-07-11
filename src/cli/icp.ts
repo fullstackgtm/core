@@ -216,6 +216,7 @@ ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.
     } finally {
       status.done();
     }
+    const reviewedInteractively = !rest.includes("--json") && !rest.includes("--no-interactive") && Boolean(process.stdin.isTTY && process.stdout.isTTY);
     if (!rest.includes("--json") && !rest.includes("--no-interactive")) {
       const reviewed = await reviewDerivedIcp(derived);
       if (!reviewed) throw new Error("ICP review cancelled; no file was written.");
@@ -227,7 +228,8 @@ ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.
       writeFileSync(path, `${JSON.stringify(derived.icp, null, 2)}\n`);
       console.error(`Wrote reviewed ICP to ${path}. Next: fullstackgtm enrich acquire --source clay --icp ${path}`);
     }
-    console.log(rest.includes("--json") ? JSON.stringify(derived, null, 2) : renderDerivedIcp(derived));
+    if (rest.includes("--json")) console.log(JSON.stringify(derived, null, 2));
+    else if (!reviewedInteractively) console.log(renderDerivedIcp(derived));
     return;
   }
   if (sub === "set") {

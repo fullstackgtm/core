@@ -7,6 +7,13 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.52.4] — 2026-07-11
+
+### Fixed
+
+- Saving an interactively reviewed website-derived ICP no longer prints a
+  duplicate copy of the card below the file-written confirmation.
+
 ## [0.52.3] — 2026-07-11
 
 ### Changed
