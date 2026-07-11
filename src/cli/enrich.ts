@@ -20,12 +20,12 @@ import { ACQUIRE_STAGES, composeListeners, createProgressEmitter } from "../prog
 import { createLinkedInProvider, discoverLinkedInProspects } from "../acquireLinkedIn.ts";
 import { clayPeopleFilterRoutes, fitThreshold, icpToClayPeopleFilters, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp, type Icp } from "../icp.ts";
 import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, type ApolloPullKey } from "../enrichApollo.ts";
-import type { CanonicalGtmSnapshot } from "../types.ts";
+import type { CanonicalGtmSnapshot, CreateRecordPayload } from "../types.ts";
 import { isSpoolPath, readSpoolPath } from "../spoolFiles.ts";
 import { isOptionValue, loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.ts";
 import { providerKey } from "./tam.ts";
 import { unknownSubcommandError } from "./suggest.ts";
-import { colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, type Paint } from "./ui.ts";
+import { box, colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, truncateToWidth, type Paint } from "./ui.ts";
 import { compactPlan, verbosePlanRequested } from "./planOutput.ts";
 import type { AcquireBudget } from "../acquireMeter.ts";
 
@@ -903,8 +903,8 @@ function acquireGaugeLine(headroom: AcquireRemaining, budget: AcquireBudget, p: 
     const painter = fraction >= 0.9 ? p.red : fraction >= 0.7 ? p.yellow : p.green;
     parts.push(`${p.dim(label)} ${painter(formatBar(fraction, 10))} ${fmt(used)}/${fmt(cap)}`);
   };
-  segment("records/day", headroom.records.day, budget.records?.perDay, String);
-  segment("records/mo", headroom.records.month, budget.records?.perMonth, String);
+  segment("applied/day", headroom.records.day, budget.records?.perDay, String);
+  segment("applied/mo", headroom.records.month, budget.records?.perMonth, String);
   segment("spend/day", headroom.spendUsd.day, budget.spend?.perDay, (value) => `$${value.toFixed(2)}`);
   segment("spend/mo", headroom.spendUsd.month, budget.spend?.perMonth, (value) => `$${value.toFixed(2)}`);
   return parts.length > 0 ? parts.join("  ·  ") : null;
@@ -914,12 +914,31 @@ function formatAcquireMeter(headroom: AcquireRemaining, costPerRecord: number): 
   const n = (v: number | null) => (v === null ? "∞" : String(v));
   const money = (v: number | null) => (v === null ? "∞" : `$${v.toFixed(2)}`);
   const max = headroom.maxRecords === null ? "unlimited" : `${headroom.maxRecords}`;
-  return (
-    `Acquire meter — creatable now: ${max} lead(s). ` +
-    `Records left: ${n(headroom.records.day)}/day, ${n(headroom.records.month)}/month · ` +
-    `Spend left: ${money(headroom.spendUsd.day)}/day, ${money(headroom.spendUsd.month)}/month ` +
-    `(≈$${costPerRecord.toFixed(2)}/lead).`
-  );
+  return `Apply budget (not market size) — up to ${max} more create(s) may be applied now; ` +
+    `${n(headroom.records.day)} left today, ${n(headroom.records.month)} this month · ` +
+    `spend headroom ${money(headroom.spendUsd.day)}/day, ${money(headroom.spendUsd.month)}/month ` +
+    `(≈$${costPerRecord.toFixed(2)}/lead). Dry runs do not consume this budget.`;
+}
+
+function renderAcquireLeadCards(result: ReturnType<typeof buildAcquirePlan>): string {
+  const p = paint(colorEnabled(process.stdout));
+  const evidence = new Map((result.plan.evidence ?? []).map((item) => [item.id, item]));
+  return result.plan.operations.map((operation, index) => {
+    const payload = operation.afterValue as CreateRecordPayload;
+    const props = payload.properties ?? {};
+    const name = [props.firstname, props.lastname].filter(Boolean).join(" ") || payload.matchValue;
+    const title = props.jobtitle || "Title unavailable";
+    const company = props.company || payload.associateCompanyName || "Company unavailable";
+    let fit: number | undefined;
+    const item = operation.evidenceIds?.[0] ? evidence.get(operation.evidenceIds[0]) : undefined;
+    try { fit = Number((JSON.parse(item?.text ?? "{}") as { fitScore?: unknown }).fitScore); } catch { /* malformed evidence remains display-only */ }
+    const lines = [
+      truncateToWidth(name, 84),
+      truncateToWidth(`${title} · ${company}`, 84),
+      truncateToWidth([payload.associateCompanyDomain, props.hs_linkedin_url].filter(Boolean).join(" · "), 84),
+    ];
+    return box(lines, p, `Lead ${index + 1}/${result.plan.operations.length}${Number.isFinite(fit) ? ` · ${Math.round((fit ?? 0) * 100)}% fit` : ""}`).join("\n");
+  }).join("\n");
 }
 
 function printAcquireOutput(options: {
@@ -959,12 +978,11 @@ function printAcquireOutput(options: {
     console.log(`  Budget     ${gaugeLine ?? meterLine}`);
     if (hostedPlanUrl) console.log(`  Plan       ${hostedPlanUrl}`);
   } else if (planSaved || !saved) {
+    if (result.plan.operations.length > 0) console.log(renderAcquireLeadCards(result));
     console.log(compactPlan(result.plan, { saved: planSaved }));
     console.log(meterLine);
-    if (gaugeLine) console.log(gaugeLine);
   } else {
     console.log(meterLine);
-    if (gaugeLine) console.log(gaugeLine);
     console.log("No net-new leads to create (everything sourced already matched, or was withheld by the meter).");
   }
 

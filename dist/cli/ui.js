@@ -266,6 +266,12 @@ export function createChecklist(items, stream = process.stderr, env = process.en
         // newline on every repaint can scroll the old top row into permanent
         // history when the board sits at the bottom of the terminal, producing
         // apparent duplicate/errored frames in terminal captures.
+        // Reserve the board's rows before the first paint. Writing populated rows
+        // directly at the terminal bottom can scroll the first rows into history,
+        // after which cursor-up repaints target the wrong lines and leave fragments.
+        if (painted === 0 && lines.length > 1) {
+            stream.write(`${"\n".repeat(lines.length - 1)}\u001b[${lines.length - 1}A`);
+        }
         const up = painted > 1 ? `\u001b[${painted - 1}A` : "";
         stream.write(`${up}${lines.map((line) => `\u001b[2K${line}`).join("\n")}`);
         painted = lines.length;

@@ -23,7 +23,7 @@ import { isSpoolPath, readSpoolPath } from "../spoolFiles.js";
 import { isOptionValue, loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.js";
 import { providerKey } from "./tam.js";
 import { unknownSubcommandError } from "./suggest.js";
-import { colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint } from "./ui.js";
+import { box, colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, truncateToWidth } from "./ui.js";
 import { compactPlan, verbosePlanRequested } from "./planOutput.js";
 /**
  * The enrich layer: governed append/refresh of third-party data (Apollo pull,
@@ -785,8 +785,8 @@ function acquireGaugeLine(headroom, budget, p) {
         const painter = fraction >= 0.9 ? p.red : fraction >= 0.7 ? p.yellow : p.green;
         parts.push(`${p.dim(label)} ${painter(formatBar(fraction, 10))} ${fmt(used)}/${fmt(cap)}`);
     };
-    segment("records/day", headroom.records.day, budget.records?.perDay, String);
-    segment("records/mo", headroom.records.month, budget.records?.perMonth, String);
+    segment("applied/day", headroom.records.day, budget.records?.perDay, String);
+    segment("applied/mo", headroom.records.month, budget.records?.perMonth, String);
     segment("spend/day", headroom.spendUsd.day, budget.spend?.perDay, (value) => `$${value.toFixed(2)}`);
     segment("spend/mo", headroom.spendUsd.month, budget.spend?.perMonth, (value) => `$${value.toFixed(2)}`);
     return parts.length > 0 ? parts.join("  ·  ") : null;
@@ -795,10 +795,33 @@ function formatAcquireMeter(headroom, costPerRecord) {
     const n = (v) => (v === null ? "∞" : String(v));
     const money = (v) => (v === null ? "∞" : `$${v.toFixed(2)}`);
     const max = headroom.maxRecords === null ? "unlimited" : `${headroom.maxRecords}`;
-    return (`Acquire meter — creatable now: ${max} lead(s). ` +
-        `Records left: ${n(headroom.records.day)}/day, ${n(headroom.records.month)}/month · ` +
-        `Spend left: ${money(headroom.spendUsd.day)}/day, ${money(headroom.spendUsd.month)}/month ` +
-        `(≈$${costPerRecord.toFixed(2)}/lead).`);
+    return `Apply budget (not market size) — up to ${max} more create(s) may be applied now; ` +
+        `${n(headroom.records.day)} left today, ${n(headroom.records.month)} this month · ` +
+        `spend headroom ${money(headroom.spendUsd.day)}/day, ${money(headroom.spendUsd.month)}/month ` +
+        `(≈$${costPerRecord.toFixed(2)}/lead). Dry runs do not consume this budget.`;
+}
+function renderAcquireLeadCards(result) {
+    const p = paint(colorEnabled(process.stdout));
+    const evidence = new Map((result.plan.evidence ?? []).map((item) => [item.id, item]));
+    return result.plan.operations.map((operation, index) => {
+        const payload = operation.afterValue;
+        const props = payload.properties ?? {};
+        const name = [props.firstname, props.lastname].filter(Boolean).join(" ") || payload.matchValue;
+        const title = props.jobtitle || "Title unavailable";
+        const company = props.company || payload.associateCompanyName || "Company unavailable";
+        let fit;
+        const item = operation.evidenceIds?.[0] ? evidence.get(operation.evidenceIds[0]) : undefined;
+        try {
+            fit = Number(JSON.parse(item?.text ?? "{}").fitScore);
+        }
+        catch { /* malformed evidence remains display-only */ }
+        const lines = [
+            truncateToWidth(name, 84),
+            truncateToWidth(`${title} · ${company}`, 84),
+            truncateToWidth([payload.associateCompanyDomain, props.hs_linkedin_url].filter(Boolean).join(" · "), 84),
+        ];
+        return box(lines, p, `Lead ${index + 1}/${result.plan.operations.length}${Number.isFinite(fit) ? ` · ${Math.round((fit ?? 0) * 100)}% fit` : ""}`).join("\n");
+    }).join("\n");
 }
 function printAcquireOutput(options) {
     const { args, result, meter, meterLine, gaugeLine, saved, planSaved, hostedPlanUrl } = options;
@@ -827,15 +850,13 @@ function printAcquireOutput(options) {
             console.log(`  Plan       ${hostedPlanUrl}`);
     }
     else if (planSaved || !saved) {
+        if (result.plan.operations.length > 0)
+            console.log(renderAcquireLeadCards(result));
         console.log(compactPlan(result.plan, { saved: planSaved }));
         console.log(meterLine);
-        if (gaugeLine)
-            console.log(gaugeLine);
     }
     else {
         console.log(meterLine);
-        if (gaugeLine)
-            console.log(gaugeLine);
         console.log("No net-new leads to create (everything sourced already matched, or was withheld by the meter).");
     }
     if (planSaved) {

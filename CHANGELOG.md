@@ -7,6 +7,21 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.53.1] — 2026-07-11
+
+### Changed
+
+- Human-readable `enrich acquire` output shows compact lead cards by default
+  before the governed plan preview; `--verbose` remains the full forensic dump.
+- Acquisition budget counters are labeled as applied-create policy headroom,
+  explicitly distinguished from market size, and no longer duplicated by a
+  second gauge in compact output.
+
+### Fixed
+
+- Multi-line progress renderers reserve their terminal rows before painting,
+  preventing partial spinner frames from scrolling into final output.
+
 ## [0.53.0] — 2026-07-11
 
 ### Added
