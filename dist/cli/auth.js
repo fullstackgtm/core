@@ -317,20 +317,28 @@ export async function login(args) {
         console.log(`Logged in to Stripe. Credentials stored in ${credentialsPath()}.`);
         return;
     }
-    if (provider === "anthropic" || provider === "openai") {
+    if (provider === "anthropic" || provider === "openai" || provider === "openrouter") {
         rejectArgvSecret(args, "--token", "--key", "--api-key");
-        const key = await readSecret(`${provider} API key (${provider === "anthropic" ? "sk-ant-..." : "sk-..."})`);
+        const key = await readSecret(`${provider} API key (${provider === "anthropic" ? "sk-ant-..." : provider === "openrouter" ? "sk-or-..." : "sk-..."})`);
         if (!key)
             throw new Error(`No ${provider} key provided.`);
         if (!args.includes("--no-validate")) {
-            const validation = await validateLlmKey(provider, key);
-            if (!validation.ok)
-                throw new Error(`${provider} rejected the key: ${validation.detail}`);
-            console.log(validation.detail);
+            if (provider === "openrouter") {
+                const response = await fetch("https://openrouter.ai/api/v1/key", { headers: { Authorization: `Bearer ${key}` } });
+                if (!response.ok)
+                    throw new Error(`openrouter rejected the key: ${safeStatus(response)}`);
+                console.log("Key accepted by OpenRouter.");
+            }
+            else {
+                const validation = await validateLlmKey(provider, key);
+                if (!validation.ok)
+                    throw new Error(`${provider} rejected the key: ${validation.detail}`);
+                console.log(validation.detail);
+            }
         }
         const stamp = new Date().toISOString();
         storeCredential(provider, { kind: "api_key", accessToken: key, createdAt: stamp, updatedAt: stamp });
-        console.log(`Stored ${provider} API key in ${credentialsPath()}. \`fullstackgtm call parse\` and \`call score\` use it automatically.`);
+        console.log(`Stored ${provider} API key in ${credentialsPath()}. \`fullstackgtm icp derive\` uses it automatically${provider === "openrouter" ? "." : "; call parse/score use it too."}`);
         return;
     }
     if (provider === "apollo") {
@@ -382,7 +390,7 @@ export async function login(args) {
         return;
     }
     if (provider !== "hubspot") {
-        throw new Error("login supports: hubspot, salesforce, stripe, anthropic, openai, apollo, clay, pipe0, explorium, heyreach, theirstack, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com");
+        throw new Error("login supports: hubspot, salesforce, stripe, anthropic, openai, openrouter, apollo, clay, pipe0, explorium, heyreach, theirstack, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com");
     }
     const now = new Date().toISOString();
     rejectArgvSecret(args, "--token");
@@ -470,6 +478,9 @@ export function doctorReport(env = process.env) {
         clay: env.CLAY_API_KEY
             ? { source: "env", detail: "CLAY_API_KEY" }
             : providerStatus("clay", null),
+        openrouter: env.OPENROUTER_API_KEY
+            ? { source: "env", detail: "OPENROUTER_API_KEY" }
+            : providerStatus("openrouter", null),
     };
     const llm = resolveLlmCredential(env);
     const missingPeers = ["@modelcontextprotocol/sdk", "zod"].filter((name) => {

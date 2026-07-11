@@ -1,15 +1,20 @@
 // Extracted verbatim from src/cli.ts (mechanical split, no behavior change).
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { emitKeypressEvents } from "node:readline";
+import { createInterface } from "node:readline/promises";
 import { resolve } from "node:path";
-import { resolveLlmCredential } from "../llm.ts";
+import { resolveLlmCredential, type LlmCallOptions } from "../llm.ts";
 import { fitThreshold, icpFromAnswers, icpToCrustdataFilters, icpToExploriumFilters, INTERVIEW_SPEC } from "../icp.ts";
 import { createFileSignalStore, DEFAULT_SIGNALS_CONFIG, type SignalsConfig } from "../signals.ts";
 import { createFileJudgeStore, DEFAULT_JUDGE_PROMPT, judgeRunId, judgeSignals } from "../judge.ts";
 import { DEFAULT_GOLDEN_NOW_ISO, DEFAULT_GOLDEN_SET, DEFAULT_MIN_ACCURACY, defaultJudgeFn, gradeAgainstOutcomes, gradeJudge, parseGoldenSet } from "../judgeEval.ts";
-import type { LlmCallOptions } from "../llm.ts";
-import { loadIcp, numericOption, option, readSnapshot, resolveLlmBaseUrls, saveRequested } from "./shared.ts";
+import { loadIcp, numericOption, option, readSecret, readSnapshot, resolveLlmBaseUrls, saveRequested } from "./shared.ts";
 import { createStatusLine } from "./ui.ts";
+import { box, colorEnabled, paint } from "./ui.ts";
+import { getCredential, storeCredential } from "../credentials.ts";
+import { deriveWebsiteIcp, icpReviewSegments, OPENROUTER_API_BASE, type WebsiteIcpDerivation } from "../icpDerive.ts";
+import type { Icp } from "../icp.ts";
 import { unknownSubcommandError } from "./suggest.ts";
 
 function renderJudgeDecisions(decisions: Awaited<ReturnType<typeof judgeSignals>>): string {
@@ -22,6 +27,110 @@ function renderJudgeDecisions(decisions: Awaited<ReturnType<typeof judgeSignals>
     if (decision.play) lines.push(`            Next: ${decision.play.replace(/\s+/g, " ").trim()}`);
   }
   return lines.join("\n");
+}
+
+function updateReviewSegment(icp: Icp, id: string, raw: string): Icp {
+  const values = raw.split(",").map((value) => value.trim()).filter(Boolean);
+  if (id === "threshold") return { ...icp, scoring: { ...icp.scoring, threshold: Number(raw) } };
+  if (["industries", "employeeBands", "geos", "technologies"].includes(id)) {
+    return { ...icp, firmographics: { ...icp.firmographics, [id]: values } };
+  }
+  if (["titleKeywords", "jobLevels", "departments"].includes(id)) {
+    return { ...icp, persona: { ...icp.persona, [id]: values } };
+  }
+  return { ...icp, signals: { ...icp.signals, intentTopics: values } };
+}
+
+function renderDerivedIcp(result: WebsiteIcpDerivation, selected = -1): string {
+  const p = paint(colorEnabled());
+  const segments = icpReviewSegments(result.icp);
+  const lines = [
+    `${result.company.name}  ${result.company.domain}`,
+    `${Math.round(result.confidence * 100)}% confidence · ${result.derivation.model}`,
+    "",
+    ...segments.map((segment, index) => `${index === selected ? "›" : " "} ${segment.label.padEnd(15)} ${segment.value}`),
+    "",
+    selected >= 0 ? "↑/↓ select · enter edit · s save · q cancel" : `${result.evidence.length} website-verifiable evidence quote(s)`,
+  ];
+  return box(lines, p, "ICP preview").join("\n");
+}
+
+async function resolveIcpDeriveLlm(args: string[]): Promise<LlmCallOptions> {
+  const requested = option(args, "--provider")?.toLowerCase();
+  if (requested && !["openrouter", "openai", "anthropic"].includes(requested)) {
+    throw new Error(`icp derive --provider must be openrouter, openai, or anthropic; got "${requested}".`);
+  }
+  const openRouterKey = process.env.OPENROUTER_API_KEY ?? getCredential("openrouter")?.accessToken;
+  const normal = resolveLlmCredential();
+  if ((!requested || requested === "openrouter") && openRouterKey) {
+    return { provider: "openai", apiKey: openRouterKey, openaiBaseUrl: OPENROUTER_API_BASE };
+  }
+  if (requested === "openai" || requested === "anthropic") {
+    const envKey = requested === "openai" ? process.env.OPENAI_API_KEY : process.env.ANTHROPIC_API_KEY;
+    const key = envKey ?? getCredential(requested)?.accessToken;
+    if (key) return { provider: requested, apiKey: key, ...resolveLlmBaseUrls() };
+  }
+  if (normal && (!requested || requested === normal.provider)) return { ...normal, ...resolveLlmBaseUrls() };
+  const provider = requested as "openrouter" | "openai" | "anthropic" | undefined;
+  if (!process.stdin.isTTY || process.env.CI) {
+    throw new Error(
+      "ICP derivation needs an LLM key. Run one of:\n" +
+      "  fullstackgtm login openrouter\n  fullstackgtm login openai\n  fullstackgtm login anthropic\n" +
+      "Then rerun the same icp derive command.",
+    );
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const answer = provider ?? ((await rl.question("LLM provider [openrouter/openai/anthropic] (openrouter): ")).trim().toLowerCase() || "openrouter");
+  rl.close();
+  if (!['openrouter', 'openai', 'anthropic'].includes(answer)) throw new Error(`Unknown LLM provider "${answer}".`);
+  const selectedProvider = answer as "openrouter" | "openai" | "anthropic";
+  const key = await readSecret(`${selectedProvider} API key`);
+  if (!key) throw new Error(`No ${answer} API key provided.`);
+  const now = new Date().toISOString();
+  storeCredential(selectedProvider, { kind: "api_key", accessToken: key, createdAt: now, updatedAt: now });
+  console.error(`Stored ${selectedProvider} key in the active FullStackGTM profile.`);
+  return selectedProvider === "openrouter"
+    ? { provider: "openai", apiKey: key, openaiBaseUrl: OPENROUTER_API_BASE }
+    : { provider: selectedProvider, apiKey: key };
+}
+
+async function reviewDerivedIcp(result: WebsiteIcpDerivation): Promise<WebsiteIcpDerivation | null> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return result;
+  let current = result;
+  let selected = 0;
+  const render = () => process.stdout.write(`\u001b[2J\u001b[H${renderDerivedIcp(current, selected)}\n`);
+  emitKeypressEvents(process.stdin);
+  process.stdin.setRawMode?.(true);
+  process.stdin.resume();
+  render();
+  return new Promise((resolveReview) => {
+    const finish = (value: WebsiteIcpDerivation | null) => {
+      process.stdin.off("keypress", onKey);
+      process.stdin.setRawMode?.(false);
+      process.stdin.pause();
+      resolveReview(value);
+    };
+    const onKey = async (_input: string, key: { name?: string; ctrl?: boolean }) => {
+      const segments = icpReviewSegments(current.icp);
+      if (key.ctrl && key.name === "c" || key.name === "q") return finish(null);
+      if (key.name === "up") { selected = (selected - 1 + segments.length) % segments.length; return render(); }
+      if (key.name === "down") { selected = (selected + 1) % segments.length; return render(); }
+      if (key.name === "s") return finish(current);
+      if (key.name !== "return") return;
+      process.stdin.off("keypress", onKey);
+      process.stdin.setRawMode?.(false);
+      const segment = segments[selected];
+      const rl = createInterface({ input: process.stdin, output: process.stderr });
+      const answer = await rl.question(`\n${segment.label} [${segment.value}]: `);
+      rl.close();
+      if (answer.trim()) current = { ...current, icp: updateReviewSegment(current.icp, segment.id, answer) };
+      emitKeypressEvents(process.stdin);
+      process.stdin.setRawMode?.(true);
+      process.stdin.on("keypress", onKey);
+      render();
+    };
+    process.stdin.on("keypress", onKey);
+  });
 }
 
 
@@ -38,6 +147,8 @@ export async function icpCommand(args: string[]) {
   if (!sub || args.includes("--help") || args.includes("-h")) {
     console.log(`Usage:
   fullstackgtm icp interview                      emit the interview spec (an agent drives it with AskUserQuestion)
+  fullstackgtm icp derive --domain <site> [--model <id>] [--out icp.json] [--json]
+                                                derive an evidence-backed ICP from a public website (OpenRouter/OpenAI/Anthropic)
   fullstackgtm icp set <answers.json> [--name <n>] [--out <path>]   write icp.json from interview answers
   fullstackgtm icp show [--icp <path>]            render the ICP + the discovery filters it produces
   fullstackgtm icp judge [--signals-from latest|<label>] [--with-history] [--prompt <path>] [--min-score 0] [--save]   rank unjudged signals into send/nurture/skip decisions (timing x fit x memory)
@@ -63,6 +174,36 @@ ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.
         2,
       ),
     );
+    return;
+  }
+  if (sub === "derive") {
+    const domain = option(rest, "--domain");
+    if (!domain) throw new Error("Usage: fullstackgtm icp derive --domain <company.com> [--out icp.json] [--json]");
+    const llm = await resolveIcpDeriveLlm(rest);
+    const status = createStatusLine();
+    let derived: WebsiteIcpDerivation;
+    try {
+      derived = await deriveWebsiteIcp({
+        domain,
+        llm,
+        model: option(rest, "--model") ?? undefined,
+        onProgress: (event) => status.set(event.message),
+      });
+    } finally {
+      status.done();
+    }
+    if (!rest.includes("--json") && !rest.includes("--no-interactive")) {
+      const reviewed = await reviewDerivedIcp(derived);
+      if (!reviewed) throw new Error("ICP review cancelled; no file was written.");
+      derived = reviewed;
+    }
+    const out = option(rest, "--out");
+    if (out) {
+      const path = resolve(process.cwd(), out);
+      writeFileSync(path, `${JSON.stringify(derived.icp, null, 2)}\n`);
+      console.error(`Wrote reviewed ICP to ${path}. Next: fullstackgtm enrich acquire --source clay --icp ${path}`);
+    }
+    console.log(rest.includes("--json") ? JSON.stringify(derived, null, 2) : renderDerivedIcp(derived));
     return;
   }
   if (sub === "set") {

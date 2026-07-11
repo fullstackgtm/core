@@ -7,6 +7,25 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.52.0] — 2026-07-11
+
+### Added
+
+- `fullstackgtm icp derive --domain <site>` derives an evidence-backed ICP
+  from a public website with OpenRouter, OpenAI, or Anthropic, then offers an
+  interactive arrow-key review before writing `icp.json`.
+- `fullstackgtm login openrouter` stores and validates a profile-scoped API key
+  for website-to-ICP derivation.
+- OpenRouter derivation streams reasoning activity and provider-authored
+  reasoning summaries into the CLI status line during the model's longest wait.
+
+### Changed
+
+- Public website fetching retains DNS pinning while disabling Node's automatic
+  address-family selection, avoiding custom-lookup failures on current Node.
+- ICP-to-Clay filters map only supported catalog industries rather than
+  inventing unsupported provider labels.
+
 ## [0.51.0] — 2026-07-11
 
 ### Added

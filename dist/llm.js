@@ -309,21 +309,92 @@ export async function forcedToolCall(prompt, toolName, schema, model, options) {
         return block.input;
     }
     const openaiUrl = resolveLlmUrl(options.openaiBaseUrl, OPENAI_URL, "/v1/chat/completions");
+    const requestBody = {
+        model,
+        messages: [{ role: "user", content: prompt }],
+        tools: [{ type: "function", function: { name: toolName, parameters: schema } }],
+        tool_choice: { type: "function", function: { name: toolName } },
+    };
+    if (options.onReasoningSummary || options.onReasoningActivity) {
+        return streamOpenAiToolCall(fetchImpl, openaiUrl, requestBody, options);
+    }
     const response = await llmFetch(fetchImpl, openaiUrl, {
         method: "POST",
         headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-            model,
-            messages: [{ role: "user", content: prompt }],
-            tools: [{ type: "function", function: { name: toolName, parameters: schema } }],
-            tool_choice: { type: "function", function: { name: toolName } },
-        }),
+        body: JSON.stringify(requestBody),
     });
     const call = response
         .choices?.[0]?.message?.tool_calls?.[0];
     if (!call?.function?.arguments)
         throw new Error("OpenAI returned no tool call — try again or a different --model.");
     return JSON.parse(call.function.arguments);
+}
+async function streamOpenAiToolCall(fetchImpl, url, body, options) {
+    let response;
+    try {
+        response = await fetchImpl(url, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ ...body, stream: true, reasoning: { enabled: true, exclude: false } }),
+        });
+    }
+    catch (error) {
+        const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+        throw new Error(`Cannot reach ${new URL(url).hostname}${cause}. Check network access.`);
+    }
+    if (!response.ok)
+        throw new Error(`LLM API error ${response.status} ${response.statusText} from ${new URL(url).hostname}. Check the API key and model name.`);
+    if (!response.body)
+        throw new Error("LLM API returned no streaming response body.");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let argumentsJson = "";
+    let reasoningCharacters = 0;
+    let lastActivityReport = 0;
+    const seenSummaries = new Set();
+    while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+            if (!line.startsWith("data:"))
+                continue;
+            const data = line.slice(5).trim();
+            if (!data || data === "[DONE]")
+                continue;
+            let chunk;
+            try {
+                chunk = JSON.parse(data);
+            }
+            catch {
+                continue;
+            }
+            const delta = chunk.choices?.[0]?.delta;
+            argumentsJson += delta?.tool_calls?.[0]?.function?.arguments ?? "";
+            reasoningCharacters += delta?.reasoning?.length ?? 0;
+            for (const detail of delta?.reasoning_details ?? []) {
+                reasoningCharacters += detail.text?.length ?? detail.summary?.length ?? 0;
+                if (detail.type !== "reasoning.summary" || !detail.summary)
+                    continue;
+                const summary = detail.summary.replace(/\s+/g, " ").trim();
+                if (summary && !seenSummaries.has(summary)) {
+                    seenSummaries.add(summary);
+                    options.onReasoningSummary?.(summary);
+                }
+            }
+            if (reasoningCharacters - lastActivityReport >= 800) {
+                lastActivityReport = reasoningCharacters;
+                options.onReasoningActivity?.(reasoningCharacters);
+            }
+        }
+        if (done)
+            break;
+    }
+    if (!argumentsJson)
+        throw new Error("OpenAI-compatible model returned no streamed tool call — try again or a different --model.");
+    return JSON.parse(argumentsJson);
 }
 async function llmFetch(fetchImpl, url, init) {
     let response;

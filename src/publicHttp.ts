@@ -84,9 +84,15 @@ export type PublicRequestHop = (url: URL, addresses: PublicAddress[], headers: R
 
 const requestHop: PublicRequestHop = (url, addresses, headers, timeoutMs, maxBytes) => new Promise((resolve, reject) => {
   let cursor = 0;
-  const options: RequestOptions = {
+  const options: RequestOptions & { autoSelectFamily?: boolean } = {
     protocol: url.protocol, hostname: url.hostname, port: url.port || undefined,
     path: `${url.pathname}${url.search}`, method: "GET", headers,
+    // Node 20+ enables family autoselection by default and calls custom lookup
+    // functions with `{ all: true }`. This transport already resolved and
+    // validated every address, then pins one exact address per socket attempt;
+    // disable the second selection layer so the callback keeps the classic
+    // single-address contract and can never fall back to system DNS.
+    autoSelectFamily: false,
     lookup: (_hostname, options, callback) => {
       const requestedFamily = typeof options === "number" ? options : options?.family;
       const eligible = requestedFamily ? addresses.filter((a) => a.family === requestedFamily) : addresses;

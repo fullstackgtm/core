@@ -1,5 +1,18 @@
 export { auditSnapshot, defaultPolicy } from "./audit.ts";
 export {
+  DEFAULT_ICP_DERIVATION_MODEL,
+  OPENROUTER_API_BASE,
+  deriveWebsiteIcp,
+  normalizeCompanyWebsite,
+  websiteText,
+  icpReviewSegments,
+  type WebsiteIcpDerivation,
+  type WebsiteIcpEvidence,
+  type IcpReviewSegment,
+  type IcpDerivationProgress,
+} from "./icpDerive.ts";
+
+export {
   acquireCheckpointId,
   acquireCheckpointsDir,
   createFileAcquireCheckpointStore,

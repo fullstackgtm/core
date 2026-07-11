@@ -36,6 +36,10 @@ export type LlmCallOptions = {
      * endpoint). Origin → `/v1/chat/completions` appended; a base ending in
      * `/chat/completions` is used verbatim. Threaded from `OPENAI_API_BASE_URL`. */
     openaiBaseUrl?: string;
+    /** Optional OpenAI-compatible streaming telemetry. Raw reasoning text is
+     * deliberately not exposed; only provider-authored summaries and activity. */
+    onReasoningSummary?: (summary: string) => void;
+    onReasoningActivity?: (receivedCharacters: number) => void;
 };
 export type LlmExtractedInsight = ExtractedCallInsight & {
     owner?: string;

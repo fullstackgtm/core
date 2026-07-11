@@ -698,7 +698,7 @@ export const COMMAND_FLAGS: Record<string, string[]> = {
   merge: ["--input", "--out", "--json"],
   market: ["--category", "--config", "--vendor", "--snapshot", "--task-account", "--task-deal", "--capture-run", "--run", "--prior-run", "--diff", "--from", "--calls", "--anchor", "--min-mentions", "--max-claims", "--promote-lift", "--model", "--format", "--auto", "--unverified", "--save", "--dry-run", "--verbose", "--json", "--out"],
   tam: [...SOURCE_FLAGS, "--source", "--name", "--icp", "--accounts", "--acv", "--acv-basis", "--acv-from-crm", "--deal-period", "--buyers-per-account", "--cross-checks", "--max", "--max-credits", "--usd-per-credit", "--dry-run", "--confirm", "--cron", "--label", "--save", "--verbose", "--json", "--out"],
-  icp: [...SOURCE_FLAGS, "--name", "--signals-from", "--with-history", "--prompt", "--min-score", "--from-judge", "--golden", "--against-outcomes", "--min-accuracy", "--model", "--label", "--save", "--verbose", "--json", "--out"],
+  icp: [...SOURCE_FLAGS, "--name", "--icp", "--domain", "--no-interactive", "--signals-from", "--with-history", "--prompt", "--min-score", "--from-judge", "--golden", "--against-outcomes", "--min-accuracy", "--model", "--label", "--save", "--verbose", "--json", "--out"],
   signals: ["--bucket", "--source", "--connector", "--connector-opt", "--watchlist", "--keywords", "--from", "--label", "--since", "--account", "--contact", "--unjudged", "--touch", "--result", "--save", "--verbose", "--json", "--explain"],
   draft: ["--from-judge", "--min-score", "--prompt", "--model", "--channel", "--save", "--dry-run", "--verbose", "--json", "--out"],
   schedule: ["--cron", "--label", "--provider", "--trigger", "--timer", "--runs", "--verbose", "--json"],

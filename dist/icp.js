@@ -249,7 +249,11 @@ export function icpToClayPeopleFilters(icp) {
     if (icp.firmographics.geos?.length) {
         filters.location_countries_include = icp.firmographics.geos.map((geo) => COUNTRY_NAMES[geo.toLowerCase()] ?? geo);
     }
-    const industries = [...new Set((icp.firmographics.industries ?? []).flatMap((industry) => CLAY_INDUSTRY[industry.toLowerCase()] ?? [titleCase(industry)]))];
+    // Clay accepts a controlled industry catalog. Never invent a title-cased
+    // enum for model-authored labels: unsupported values make the entire search
+    // fail with HTTP 400. Keep those labels in the editable ICP, but send only
+    // mappings we have confirmed against Clay's live catalog.
+    const industries = [...new Set((icp.firmographics.industries ?? []).flatMap((industry) => CLAY_INDUSTRY[industry.toLowerCase()] ?? []))];
     if (industries.length)
         filters.company_industries_include = industries;
     return filters;
