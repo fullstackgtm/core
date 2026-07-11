@@ -22,6 +22,7 @@ import { progressReporter } from "../runReport.ts";
 import type { PatchPlan, PatchPlanRun } from "../types.ts";
 import { confirmRequested, connectorFor, isOptionValue, numericOption, option, readSnapshot, repeatedOption, saveRequested } from "./shared.ts";
 import { box, colorEnabled, createProgressRenderer, paint } from "./ui.ts";
+import { compactPlan, verbosePlanRequested } from "./planOutput.ts";
 
 
 /**
@@ -107,8 +108,10 @@ async function emitPlan(plan: PatchPlan, args: string[]) {
   }
   if (args.includes("--json")) {
     console.log(JSON.stringify(plan, null, 2));
-  } else {
+  } else if (verbosePlanRequested(args)) {
     console.log(patchPlanToMarkdown(plan));
+  } else {
+    console.log(compactPlan(plan, { saved: saveRequested(args) }));
   }
 }
 
@@ -181,8 +184,7 @@ export async function reassignCommand(args: string[]) {
   const store = saveRequested(args) ? createFilePlanStore() : null;
   for (const plan of plans) {
     if (store) await store.save(plan);
-    console.log(`${plan.id}  ${String(plan.operations.length).padStart(3)} operation(s)  ${plan.title}`);
-    console.log(`    ${plan.summary}`);
+    console.log(verbosePlanRequested(args) ? patchPlanToMarkdown(plan) : compactPlan(plan, { saved: Boolean(store) }));
   }
   if (store) {
     console.log(

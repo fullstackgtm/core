@@ -7,6 +7,7 @@ import { createFileSignalStore } from "../signals.js";
 import { createFileJudgeStore } from "../judge.js";
 import { authorOpeners, DEFAULT_DRAFT_PROMPT, DRAFT_CHANNELS, draft } from "../draft.js";
 import { numericOption, option, resolveLlmBaseUrls, saveRequested } from "./shared.js";
+import { compactPlan, verbosePlanRequested } from "./planOutput.js";
 /**
  * `draft` — author ONE trigger-grounded opener per hot judge decision as a
  * governed create_task plan. Structurally a proposal: never sends, never writes
@@ -68,7 +69,16 @@ LLM key it emits a clearly-labeled stub rather than fake authored copy.`);
         channel,
         openers,
     });
-    console.log(JSON.stringify({ drafts, rejected }, null, 2));
+    if (args.includes("--json")) {
+        console.log(JSON.stringify({ drafts, rejected }, null, 2));
+    }
+    else if (verbosePlanRequested(args)) {
+        console.log(JSON.stringify({ drafts, rejected }, null, 2));
+        console.log(compactPlan(plan, { saved: save }));
+    }
+    else {
+        console.log(compactPlan(plan, { saved: save }));
+    }
     const stale = drafts.filter((d) => d.staleTrigger);
     console.error(`${drafts.length} opener(s) staged as create_task proposals (channel ${channel}, min score ${minScore})` +
         `${rejected.length ? `; ${rejected.length} rejected (ungrounded first line)` : ""}` +

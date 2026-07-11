@@ -131,7 +131,7 @@ export async function connectorFor(provider, args, progress) {
     throw new Error(`Unknown provider: ${provider}.${providerSuggestion ? ` Did you mean ${providerSuggestion}?` : ""} ` +
         "Supported providers: hubspot, salesforce, stripe");
 }
-export async function readSnapshot(args, progress) {
+export async function readSnapshot(args, progress, options = {}) {
     const provider = option(args, "--provider");
     if (provider) {
         // A verb driving its own progress board (e.g. `backfill stripe`) passes
@@ -153,7 +153,7 @@ export async function readSnapshot(args, progress) {
             return await connector.fetchSnapshot();
         }
         finally {
-            renderer.done();
+            renderer.done({ persist: options.persistProgress });
         }
     }
     if (args.includes("--demo")) {

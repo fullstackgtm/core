@@ -24,7 +24,7 @@ export async function fetchExploriumProspects(opts) {
     const response = await fetchImpl(`${base}/v1/prospects`, {
         method: "POST",
         headers: { "api_key": opts.apiKey, "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "full", size, page_size: size, page: 1, filters: opts.filters }),
+        body: JSON.stringify({ mode: "full", size, page_size: size, page: opts.page ?? 1, filters: opts.filters }),
     });
     if (!response.ok) {
         throw new ProviderHttpError("Explorium", "prospect search", response.status);
@@ -48,14 +48,24 @@ export async function fetchExploriumProspects(opts) {
 // (no separate connection needed). Returns profiles; pair with
 // pipe0ResolveWorkEmails to get real emails.
 export async function fetchPipe0CrustdataProspects(opts) {
+    return (await fetchPipe0CrustdataProspectPage(opts)).prospects;
+}
+/**
+ * Fetch one page and expose its continuation cursor. The array-returning
+ * `fetchPipe0CrustdataProspects` remains available for existing consumers.
+ */
+export async function fetchPipe0CrustdataProspectPage(opts) {
     const fetchImpl = opts.fetchImpl ?? fetch;
     const base = (opts.apiBaseUrl ?? "https://api.pipe0.com").replace(/\/$/, "");
     const limit = Math.min(opts.limit ?? 25, 100);
+    const config = { limit, filters: opts.filters };
+    if (opts.cursor !== undefined)
+        config.cursor = opts.cursor;
     const response = await fetchImpl(`${base}/v1/searches/run/sync`, {
         method: "POST",
         headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-            searches: [{ search_id: "people:profiles:crustdata@1", config: { limit, filters: opts.filters } }],
+            searches: [{ search_id: "people:profiles:crustdata@1", config }],
         }),
     });
     if (!response.ok) {
@@ -68,7 +78,7 @@ export async function fetchPipe0CrustdataProspects(opts) {
     if (upstreamErrors.length > 0 && !(body.results ?? []).length) {
         throw new Error(`pipe0/Crustdata search error: ${upstreamErrors.map((e) => `${e.code ?? "error"}: ${e.message ?? ""}`).join("; ")}`);
     }
-    return (body.results ?? []).map((row) => {
+    const prospects = (body.results ?? []).map((row) => {
         const fullName = strField(row.name);
         const { firstName, lastName } = splitName(fullName);
         return {
@@ -81,6 +91,14 @@ export async function fetchPipe0CrustdataProspects(opts) {
             sourceId: strField(row.profile_url) ?? fullName,
         };
     });
+    // Current pipe0 responses expose `next_cursor` at the top level. Accept the
+    // status-envelope variants too so older deployments remain usable.
+    const status = body.search_statuses?.[0];
+    const rawCursor = body.next_cursor ?? status?.next_cursor ?? status?.cursor;
+    return {
+        prospects,
+        nextCursor: typeof rawCursor === "string" && rawCursor.length > 0 ? rawCursor : null,
+    };
 }
 function strField(field) {
     const v = field?.value;
@@ -295,7 +313,7 @@ function fieldValue(field) {
     return typeof v === "string" && v.trim() ? v : undefined;
 }
 // ---------------------------------------------------------------------------
-// Pre-email dedup: identity keys shared between prospects and CRM contacts, so
+// Pre-enrichment dedup: identity keys shared between prospects and CRM contacts, so
 // we can drop already-in-CRM / already-seen people BEFORE paying for emails.
 function normName(value) {
     return (value ?? "").trim().toLowerCase().replace(/\s+/g, " ");

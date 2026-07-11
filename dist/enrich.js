@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { credentialsDir, ensureSecureHomeDir, writeSecureFile } from "./credentials.js";
 import { HUBSPOT_DEFAULT_FIELD_MAPPINGS } from "./mappings.js";
 import { parseAssignmentPolicy, resolveAssignment } from "./assign.js";
+import { validateContactWaterfall } from "./contactProviders.js";
 export const ENRICH_CONFIG_FILE_NAME = "enrich.config.json";
 export const DEFAULT_STALE_DAYS = 90;
 const OBJECT_TYPES = ["company", "contact"];
@@ -12,7 +13,7 @@ const MATCH_KEYS = {
     contact: ["email", "name", "linkedin"],
 };
 /** API source ids the MVP can pull from. */
-export const SUPPORTED_API_SOURCES = ["apollo", "explorium", "pipe0", "linkedin"];
+export const SUPPORTED_API_SOURCES = ["apollo", "explorium", "pipe0", "clay", "linkedin"];
 /**
  * Canonical fields enrich may target, plus the HubSpot property spellings the
  * config may use for them (so `"crm": "numberofemployees"` and
@@ -189,6 +190,22 @@ export function parseEnrichConfig(raw) {
             fail(error instanceof Error ? error.message : String(error));
         }
     }
+    for (const [sourceId, discovery] of Object.entries(config.acquire?.discovery ?? {})) {
+        if (discovery.provider === "clay" && (discovery.sourceType ?? "people") !== "people") {
+            fail(`acquire.discovery.${sourceId}.sourceType currently supports only "people" for Clay`);
+        }
+        if (discovery.contactWaterfall !== undefined) {
+            try {
+                discovery.contactWaterfall = validateContactWaterfall(discovery.contactWaterfall);
+            }
+            catch (error) {
+                fail(`acquire.discovery.${sourceId}.${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+        if (discovery.resolveEmailsWith !== undefined && discovery.resolveEmailsWith !== "pipe0") {
+            fail(`acquire.discovery.${sourceId}.resolveEmailsWith must be "pipe0"`);
+        }
+    }
     return config;
 }
 /**
@@ -236,6 +253,34 @@ export function builtinAcquirePreset(source) {
                 budget: { records: { perDay: 50, perMonth: 500 } },
                 costPerRecord: { linkedin: 0 },
                 discovery: { linkedin: { provider: "linkedin", size: 25 } },
+                create: {
+                    contact: {
+                        matchKey: "linkedin",
+                        properties: {
+                            hs_linkedin_url: "linkedin",
+                            firstname: "firstName",
+                            lastname: "lastName",
+                            jobtitle: "jobTitle",
+                            company: "companyName",
+                            email: "email",
+                        },
+                        associateCompanyFrom: "companyName",
+                        associateCompanyDomainFrom: "companyDomain",
+                    },
+                },
+            },
+        };
+    }
+    if (provider === "clay") {
+        return {
+            sources: { clay: { kind: "api" } },
+            match: { contact: { keys: ["linkedin", "email"], onAmbiguous: "skip" } },
+            fields: {},
+            policy: { overwrite: "never" },
+            acquire: {
+                budget: { records: { perDay: 50, perMonth: 500 } },
+                costPerRecord: { clay: 0 },
+                discovery: { clay: { provider: "clay", sourceType: "people", size: 25 } },
                 create: {
                     contact: {
                         matchKey: "linkedin",

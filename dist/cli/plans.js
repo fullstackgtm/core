@@ -14,9 +14,10 @@ import { createFilePlanStore } from "../planStore.js";
 import { ENRICH_CONFIG_FILE_NAME, loadEnrichConfig } from "../enrich.js";
 import { loadMeter, recordConsumption, remaining } from "../acquireMeter.js";
 import { progressReporter, reportCounts } from "../runReport.js";
+import { claimHostedPlanApply, reconcileHostedPatchPlan, releaseHostedPlanApply, reportHostedPlanLifecycle, uploadHostedPatchPlan } from "../hostedPatchPlan.js";
 import { APPLY_STAGES, composeListeners, createProgressEmitter } from "../progress.js";
 import { connectorFor, isOptionValue, numericOption, option, repeatedOption, selectedRules } from "./shared.js";
-import { colorEnabled, createProgressRenderer, paint, planStatusWord, stylizePlanMarkdown, table, truncateToWidth } from "./ui.js";
+import { box, colorEnabled, createProgressRenderer, createStatusLine, formatDuration, paint, planStatusWord, stylizePlanMarkdown, table, truncateToWidth } from "./ui.js";
 import { unknownSubcommandError } from "./suggest.js";
 function parseValueOverrides(args) {
     const valueOverrides = {};
@@ -27,6 +28,119 @@ function parseValueOverrides(args) {
         valueOverrides[pair.slice(0, separator)] = pair.slice(separator + 1);
     }
     return valueOverrides;
+}
+function recordHeadline(operation) {
+    const after = operation.afterValue && typeof operation.afterValue === "object" && !Array.isArray(operation.afterValue)
+        ? operation.afterValue : {};
+    const properties = after.properties && typeof after.properties === "object" && !Array.isArray(after.properties)
+        ? after.properties : {};
+    const first = typeof properties.firstname === "string" ? properties.firstname : "";
+    const last = typeof properties.lastname === "string" ? properties.lastname : "";
+    const company = typeof properties.company === "string" ? properties.company
+        : typeof after.associateCompanyName === "string" ? after.associateCompanyName : undefined;
+    const title = [first, last].filter(Boolean).join(" ") || company || operation.objectId || operation.id;
+    const role = typeof properties.jobtitle === "string" ? properties.jobtitle : undefined;
+    return { title, ...(role ? { subtitle: role } : {}), ...(company ? { company } : {}) };
+}
+function planEffect(stored) {
+    const total = stored.plan.operations.length;
+    const approved = stored.approvedOperationIds.length;
+    if (stored.status === "applied") {
+        const results = stored.runs.at(-1)?.results ?? [];
+        const applied = results.filter((result) => result.status === "applied").length;
+        const skipped = results.filter((result) => result.status === "skipped").length;
+        return `Completed ${applied} operation${applied === 1 ? "" : "s"}${skipped ? `; ${skipped} skipped` : ""}. No further writes will run.`;
+    }
+    if (stored.status === "approved")
+        return `Apply will execute ${approved} selected operation${approved === 1 ? "" : "s"}; ${total - approved} will not run.`;
+    if (stored.status === "rejected")
+        return "Rejected. No provider writes can run.";
+    return `No provider writes can run until operations are approved (0 of ${total} selected).`;
+}
+function printPlanCards(stored, hostedUrl) {
+    const p = paint(colorEnabled(process.stdout));
+    const total = stored.plan.operations.length;
+    const approved = new Set(stored.approvedOperationIds);
+    const width = Math.max(56, Math.min(100, (process.stdout.columns ?? 100) - 4));
+    const fit = (value) => truncateToWidth(value, width);
+    const summary = [
+        fit(stored.plan.title),
+        `Status     ${stored.status.toUpperCase().replaceAll("_", " ")}`,
+        `Selection  ${approved.size} of ${total} operation${total === 1 ? "" : "s"} approved`,
+        `Runs       ${stored.runs.length}`,
+        fit(`Effect     ${planEffect(stored)}`),
+    ];
+    console.log(box(summary, p, "Plan").join("\n"));
+    if (hostedUrl)
+        console.log(`Hosted: ${hostedUrl}`);
+    console.log("\nOperations");
+    let operationIndex = 0;
+    const latestResults = new Map((stored.runs.at(-1)?.results ?? []).map((result) => [result.operationId, result.status]));
+    for (const operation of stored.plan.operations) {
+        const selected = approved.has(operation.id);
+        const resultStatus = latestResults.get(operation.id);
+        const headline = recordHeadline(operation);
+        const action = operation.operation === "create_record"
+            ? `Create ${operation.objectType}${headline.company ? ` and resolve/link ${headline.company}` : ""}`
+            : `${operation.operation.replaceAll("_", " ")} ${operation.objectType}`;
+        const lines = [
+            fit(headline.title),
+            ...(headline.subtitle || headline.company
+                ? [fit([headline.subtitle, headline.company].filter(Boolean).join(" · "))]
+                : []),
+            fit(`Action     ${action}`),
+            `Operation  ${operation.id}`,
+        ];
+        if (operationIndex++ > 0)
+            console.log("");
+        const state = resultStatus === "applied" ? "✓ APPLIED"
+            : resultStatus && selected ? `! ${resultStatus.toUpperCase()}`
+                : selected ? "✓ APPROVED" : stored.status === "applied" ? "○ EXCLUDED" : "○ NOT APPROVED";
+        console.log(box(lines, p, state).join("\n"));
+    }
+    if (stored.status === "approved") {
+        console.log(`\nNext: fullstackgtm apply --plan-id ${stored.plan.id} --provider <hubspot|salesforce>`);
+    }
+    console.log(`Details: fullstackgtm plans show ${stored.plan.id} --verbose`);
+}
+function printApplyCards(run, plan, approvedOperationIds, planIdStored) {
+    const p = paint(colorEnabled(process.stdout));
+    const approved = new Set(approvedOperationIds);
+    const operations = new Map(plan.operations.map((operation) => [operation.id, operation]));
+    const counts = { applied: 0, skipped: 0, failed: 0, conflict: 0 };
+    for (const result of run.results)
+        counts[result.status] += 1;
+    const elapsed = Math.max(0, Date.parse(run.finishedAt) - Date.parse(run.startedAt));
+    const summary = [
+        `Status    ${run.status.toUpperCase()}`,
+        `Provider  ${run.provider}`,
+        `Outcome   ${counts.applied} applied · ${run.results.length - approved.size} excluded · ${counts.failed + counts.conflict} failed/conflicted`,
+        `Duration  ${formatDuration(elapsed)}`,
+        ...(planIdStored ? ["Receipt   recorded locally; hosted reconciliation requested"] : []),
+    ];
+    console.log(box(summary, p, "Apply result").join("\n"));
+    console.log("\nOperations");
+    let index = 0;
+    for (const result of run.results) {
+        const operation = operations.get(result.operationId);
+        if (!operation)
+            continue;
+        const selected = approved.has(result.operationId);
+        const headline = recordHeadline(operation);
+        const state = !selected ? "○ EXCLUDED" : result.status === "applied" ? "✓ APPLIED" : `! ${result.status.toUpperCase()}`;
+        const lines = [
+            headline.title,
+            ...(headline.subtitle || headline.company ? [[headline.subtitle, headline.company].filter(Boolean).join(" · ")] : []),
+            `Operation  ${result.operationId}`,
+            ...(result.detail ? [truncateToWidth(`Result     ${result.detail}`, 100)] : []),
+        ];
+        if (index++ > 0)
+            console.log("");
+        console.log(box(lines, p, state).join("\n"));
+    }
+    if (planIdStored)
+        console.log(`\nInspect: fullstackgtm plans show ${run.planId}`);
+    console.log("Details: rerun with --verbose; machine output: --json");
 }
 function tryLoadAcquireConfig(args) {
     try {
@@ -132,9 +246,20 @@ export async function apply(args) {
     let valueOverrides;
     const store = planId ? createFilePlanStore() : null;
     if (planId && store) {
-        const stored = await store.get(planId);
+        let stored = await store.get(planId);
         if (!stored)
             throw new Error(`No stored plan with id ${planId}.`);
+        const reconciliation = await reconcileHostedPatchPlan(store, stored);
+        if (reconciliation.status === "conflict")
+            throw new Error(`Refusing to apply plan ${planId}: ${reconciliation.reason}.`);
+        if (reconciliation.status === "updated") {
+            stored = reconciliation.stored;
+            console.error(`Synced hosted ${reconciliation.remoteStatus} state for ${planId}.`);
+        }
+        if (stored.status === "applied") {
+            console.log(`Plan ${planId} was already applied by another replica; imported its execution receipt. No provider writes were attempted.`);
+            return;
+        }
         if (stored.status !== "approved") {
             throw new Error(`Plan ${planId} is ${stored.status}; approve operations first with \`fullstackgtm plans approve ${planId} --operations <ids|all>\`.`);
         }
@@ -211,11 +336,38 @@ export async function apply(args) {
     // transmits nothing; a CRM provider writes records. Same governed apply path.
     const connector = channel ? createChannelConnector(channel) : await connectorFor(provider, args);
     let applyClaimId;
+    let hostedApplyClaimId;
     if (planId && store) {
         const claimed = await store.claimApply(planId, { provider: provider ?? `channel:${channel}`, source: "cli" });
         applyClaimId = claimed.claimId;
+        const hostedClaim = await claimHostedPlanApply(claimed.stored);
+        if (hostedClaim.status === "applied") {
+            await store.abortApplyPreflight(planId, claimed.claimId, "Another replica completed apply before provider I/O.");
+            const refreshed = await store.get(planId);
+            if (refreshed)
+                await reconcileHostedPatchPlan(store, refreshed);
+            console.log(`Plan ${planId} was already applied by another replica. No provider writes were attempted.`);
+            return;
+        }
+        if (hostedClaim.status === "conflict") {
+            await store.abortApplyPreflight(planId, claimed.claimId, `Hosted execution claim failed: ${hostedClaim.reason}`);
+            throw new Error(`Refusing to apply plan ${planId}: could not coordinate with its hosted replica (${hostedClaim.reason}).`);
+        }
+        if (hostedClaim.status === "unavailable") {
+            console.error(`Hosted replica is unavailable (${hostedClaim.reason}); continuing local-first. Resolve-before-create and provider conflict guards remain active, and the execution receipt will sync on a later check-in.`);
+        }
+        if (hostedClaim.status === "claimed") {
+            hostedApplyClaimId = hostedClaim.claimId;
+            await store.recordHostedClaim(planId, claimed.claimId, hostedClaim.claimId);
+        }
         const claimedVerification = verifyApprovalDigests(claimed.stored.plan.operations, claimed.stored.approvedOperationIds, claimed.stored.valueOverrides, claimed.stored.approvalDigests);
         if (!claimedVerification.ok) {
+            if (hostedApplyClaimId) {
+                const released = await releaseHostedPlanApply(claimed.stored, hostedApplyClaimId, "Approval integrity verification failed after claim and before provider I/O.");
+                if (released.status === "conflict" || released.status === "unavailable") {
+                    console.error(`Hosted apply claim may require recovery: ${released.reason}.`);
+                }
+            }
             await store.abortApplyPreflight(planId, claimed.claimId, "Approval integrity verification failed after the claim and before provider I/O.");
             throw new Error(`Refusing to apply plan ${planId}: approval changed while acquiring the apply claim.`);
         }
@@ -248,7 +400,12 @@ export async function apply(args) {
         renderer.done();
     }
     if (planId && store) {
-        await store.recordRun(planId, run, applyClaimId);
+        const recorded = await store.recordRun(planId, run, applyClaimId);
+        const durableHostedClaimId = recorded.applyAttempts?.find((attempt) => attempt.id === applyClaimId)?.hostedClaimId;
+        const mirrored = await reportHostedPlanLifecycle(recorded, { claimId: durableHostedClaimId ?? hostedApplyClaimId });
+        if (mirrored.status === "unavailable" || mirrored.status === "conflict") {
+            console.error(`Hosted plan status is stale: ${mirrored.reason}. Local apply history remains authoritative.`);
+        }
     }
     // Charge the acquire meter for the creates that actually landed.
     if (createOps.length > 0) {
@@ -278,8 +435,11 @@ export async function apply(args) {
     if (args.includes("--json")) {
         console.log(JSON.stringify(run, null, 2));
     }
-    else {
+    else if (args.includes("--verbose")) {
         console.log(formatPatchPlanRun(run));
+    }
+    else {
+        printApplyCards(run, plan, approvedOperationIds, Boolean(planId && store));
     }
     if (run.status === "failed")
         process.exitCode = 1;
@@ -353,7 +513,14 @@ export async function plansCommand(args) {
     const [subcommand, ...rest] = args;
     if (subcommand === "list" || subcommand === undefined) {
         const status = option(rest, "--status");
-        const plans = await store.list(status ?? undefined);
+        let plans = await store.list(status ?? undefined);
+        const synced = await Promise.all(plans.map(async (stored) => {
+            const result = await reconcileHostedPatchPlan(store, stored);
+            if (result.status === "updated")
+                return result.stored;
+            return stored;
+        }));
+        plans = status ? synced.filter((stored) => stored.status === status) : synced;
         if (rest.includes("--json") || args.includes("--json")) {
             console.log(JSON.stringify(plans.map((stored) => ({
                 id: stored.plan.id,
@@ -371,30 +538,47 @@ export async function plansCommand(args) {
         }
         const p = paint(colorEnabled(process.stdout));
         if (p.enabled) {
-            // Interactive terminals get an aligned table with status color-banding;
-            // the plain per-line format below is unchanged for pipes.
+            const statusCounts = new Map();
+            for (const stored of plans)
+                statusCounts.set(stored.status, (statusCounts.get(stored.status) ?? 0) + 1);
+            const awaiting = plans.filter((stored) => stored.status === "needs_approval").length;
+            const approved = plans.filter((stored) => stored.status === "approved").length;
+            console.log(box([
+                `${plans.length} plan${plans.length === 1 ? "" : "s"} · ${awaiting} awaiting approval · ${approved} ready to apply`,
+                [...statusCounts.entries()].map(([name, count]) => `${name.replaceAll("_", " ")}: ${count}`).join("  ·  "),
+            ], p, "Change queue").join("\n"));
+            console.log("");
+            // Interactive terminals get an aligned decision table; the plain
+            // per-line format below remains stable for pipes and scripts.
             const rows = plans.map((stored) => [
-                stored.plan.id,
                 stored.status,
-                `${stored.approvedOperationIds.length} approved`,
+                stored.plan.title,
+                `${stored.approvedOperationIds.length}/${stored.plan.operations.length} selected`,
                 `${stored.runs.length} run${stored.runs.length === 1 ? "" : "s"}`,
-                stored.plan.summary,
+                stored.plan.id,
             ]);
             // Long summaries would wrap and break the table's alignment. The summary
             // is the LAST column: cap it to what's left of the terminal width after
             // the fixed columns and their two-space gutters (floor of 24 so narrow
             // terminals still show something useful).
             const columns = process.stdout.columns ?? 80;
-            const fixedWidth = [0, 1, 2, 3].reduce((sum, index) => sum + Math.max(...rows.map((row) => row[index].length)), 0) + 2 * 4;
-            const summaryWidth = Math.max(24, columns - fixedWidth);
+            const fixedWidth = [0, 2, 3, 4].reduce((sum, index) => sum + Math.max(...rows.map((row) => row[index].length)), 0) + 2 * 4;
+            const titleWidth = Math.max(24, columns - fixedWidth);
             for (const row of rows)
-                row[4] = truncateToWidth(row[4], summaryWidth);
+                row[1] = truncateToWidth(row[1], titleWidth);
             const statusPainter = (cell) => {
                 const painted = planStatusWord(cell.trimEnd(), p);
                 return painted + cell.slice(cell.trimEnd().length);
             };
-            for (const line of table(rows, [null, statusPainter, p.dim, p.dim, null])) {
+            for (const line of table(rows, [statusPainter, null, p.dim, p.dim, p.dim])) {
                 console.log(line);
+            }
+            const next = plans.find((stored) => stored.status === "approved") ?? plans.find((stored) => stored.status === "needs_approval");
+            if (next) {
+                const command = next.status === "approved"
+                    ? `fullstackgtm apply --plan-id ${next.plan.id} --provider <name>`
+                    : `fullstackgtm plans show ${next.plan.id}`;
+                console.log(`\nNext: ${command}`);
             }
             return;
         }
@@ -407,18 +591,26 @@ export async function plansCommand(args) {
         const planId = rest.find((arg) => !arg.startsWith("--"));
         if (!planId)
             throw new Error("Usage: fullstackgtm plans show <planId>");
-        const stored = await store.get(planId);
+        let stored = await store.get(planId);
         if (!stored)
             throw new Error(`No stored plan with id ${planId}.`);
+        const reconciliation = await reconcileHostedPatchPlan(store, stored);
+        if (reconciliation.status === "updated") {
+            stored = reconciliation.stored;
+            console.error(`Synced hosted ${reconciliation.remoteStatus} state for ${planId}.`);
+        }
+        else if (reconciliation.status === "conflict") {
+            console.error(`Hosted sync conflict: ${reconciliation.reason}.`);
+        }
         if (rest.includes("--json")) {
             console.log(JSON.stringify(stored, null, 2));
             return;
         }
-        const showPaint = paint(colorEnabled(process.stdout));
-        console.log(`Status: ${planStatusWord(stored.status, showPaint)}`);
-        console.log(`Approved operations: ${stored.approvedOperationIds.join(", ") || "none"}`);
-        console.log(`Runs: ${stored.runs.length}`);
-        if (stored.applyAttempts?.length) {
+        const mirror = await uploadHostedPatchPlan(stored);
+        printPlanCards(stored, mirror.status === "saved" ? mirror.state.url : undefined);
+        if (mirror.status === "unavailable" || mirror.status === "conflict")
+            console.log(`Hosted sync pending: ${mirror.reason}`);
+        if (rest.includes("--verbose") && stored.applyAttempts?.length) {
             console.log("Apply attempts:");
             for (const attempt of stored.applyAttempts) {
                 console.log(`  ${attempt.id}  ${attempt.status}  ${attempt.provider} via ${attempt.source}  ${attempt.claimedAt}`);
@@ -426,8 +618,11 @@ export async function plansCommand(args) {
                     console.log(`    ${attempt.note}`);
             }
         }
-        console.log("");
-        console.log(stylizePlanMarkdown(patchPlanToMarkdown(stored.plan), showPaint));
+        if (rest.includes("--verbose")) {
+            const showPaint = paint(colorEnabled(process.stdout));
+            console.log("\nFull plan document\n");
+            console.log(stylizePlanMarkdown(patchPlanToMarkdown(stored.plan), showPaint));
+        }
         return;
     }
     if (subcommand === "approve") {
@@ -470,6 +665,10 @@ export async function plansCommand(args) {
             ...fileOverrides,
             ...explicitOverrides,
         });
+        const mirror = await reportHostedPlanLifecycle(updated);
+        if (mirror.status === "unavailable" || mirror.status === "conflict") {
+            console.error(`Hosted plan status is stale: ${mirror.reason}. Local approval remains authoritative.`);
+        }
         console.log(`Approved ${updated.approvedOperationIds.length} operation(s) on ${planId}. Apply with \`fullstackgtm apply --plan-id ${planId} --provider <name>\`.`);
         return;
     }
@@ -477,7 +676,11 @@ export async function plansCommand(args) {
         const planId = rest.find((arg) => !arg.startsWith("--"));
         if (!planId)
             throw new Error("Usage: fullstackgtm plans reject <planId>");
-        await store.reject(planId);
+        const rejected = await store.reject(planId);
+        const mirror = await reportHostedPlanLifecycle(rejected);
+        if (mirror.status === "unavailable" || mirror.status === "conflict") {
+            console.error(`Hosted plan status is stale: ${mirror.reason}. Local rejection remains authoritative.`);
+        }
         console.log(`Rejected ${planId}.`);
         return;
     }
@@ -503,5 +706,47 @@ export async function plansCommand(args) {
             `No writes were replayed. Re-audit provider state, review the plan, then approve operations again before any apply.`);
         return;
     }
-    throw unknownSubcommandError("plans", subcommand, ["list", "show", "approve", "reject", "recover"]);
+    if (subcommand === "sync") {
+        const plans = await store.list();
+        let updated = 0;
+        let completed = 0;
+        const warnings = [];
+        const status = createStatusLine();
+        status.set(`Synchronizing plan replicas 0/${plans.length}`);
+        // A workspace can accumulate hundreds of local plans. Reconcile with a
+        // small worker pool so one network round-trip per plan does not turn into
+        // a minutes-long silent serial wait, without stampeding the hosted API.
+        let next = 0;
+        const worker = async () => {
+            while (next < plans.length) {
+                const stored = plans[next++];
+                const result = await reconcileHostedPatchPlan(store, stored);
+                if (result.status === "updated")
+                    updated += 1;
+                else if (result.status === "conflict" || result.status === "unavailable")
+                    warnings.push(`${stored.plan.id}: ${result.reason}`);
+                // Historical local-only plans have no remote row to receive a receipt.
+                // `backfill runs` is the explicit import path for that old history.
+                if (stored.status === "applied" && result.status !== "missing" && (stored.applyAttempts?.length ?? 0) > 0) {
+                    const hostedClaimId = [...(stored.applyAttempts ?? [])].reverse().find((attempt) => attempt.hostedClaimId)?.hostedClaimId;
+                    const pushed = await reportHostedPlanLifecycle(stored, { claimId: hostedClaimId });
+                    if (pushed.status === "conflict" || pushed.status === "unavailable")
+                        warnings.push(`${stored.plan.id} receipt: ${pushed.reason}`);
+                }
+                completed += 1;
+                status.set(`Synchronizing plan replicas ${completed}/${plans.length}`);
+            }
+        };
+        try {
+            await Promise.all(Array.from({ length: Math.min(6, plans.length) }, () => worker()));
+        }
+        finally {
+            status.done();
+        }
+        console.log(`Plan replicas synchronized: ${updated} updated, ${plans.length - updated} unchanged.`);
+        for (const warning of warnings)
+            console.error(`  ${warning}`);
+        return;
+    }
+    throw unknownSubcommandError("plans", subcommand, ["list", "show", "sync", "approve", "reject", "recover"]);
 }

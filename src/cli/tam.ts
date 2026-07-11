@@ -6,6 +6,7 @@ import { getCredential } from "../credentials.ts";
 import { appendCoverage, computeCoverage, coverageCountsFromSnapshot, classifyCoverage, coverageToText, deriveAcvFromClosedWon, deriveBuyersPerAccount, estimateTam, loadTamModel, projectEta, readCoverageTimeline, saveTamModel, tamReportToMarkdown, type AcvBasis, type TamCrossCheck } from "../tam.ts";
 import { probeExploriumBusinessCount } from "../connectors/prospectSources.ts";
 import { theirStackCountCompanies, theirStackPullCost, theirStackSearchCompanies } from "../connectors/theirstack.ts";
+import { clayApiKey } from "../connectors/clay.ts";
 import { icpToExploriumBusinessFilters, icpToTheirStackFilters } from "../icp.ts";
 import { scheduleCommand } from "./schedule.ts";
 import { loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.ts";
@@ -14,7 +15,8 @@ import { unknownSubcommandError } from "./suggest.ts";
 
 /** Best-effort enrich-config load for apply-time acquire-budget enforcement. */
 /** Provider API key: env override first, then the credential store (`login`). */
-export function providerKey(provider: "explorium" | "pipe0" | "heyreach" | "theirstack"): string {
+export function providerKey(provider: "explorium" | "pipe0" | "clay" | "heyreach" | "theirstack"): string {
+  if (provider === "clay") return clayApiKey();
   const envName =
     provider === "explorium"
       ? "EXPLORIUM_API_KEY"
@@ -44,7 +46,7 @@ export async function tamCommand(args: string[]) {
   fullstackgtm tam accounts [--name <n>] [--icp <path>] --source theirstack [--max <n>] [--dry-run | --confirm] [--max-credits <n>] [--usd-per-credit <r>] [--out <file.csv> | --json]
   fullstackgtm tam status   [--name <n>] <source options> [--save] [--json]
   fullstackgtm tam report   [--name <n>] [--out <path>]
-  fullstackgtm tam populate [--name <n>] --cron "<expr>" [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--label <l>]
+  fullstackgtm tam populate [--name <n>] --cron "<expr>" [--source pipe0|explorium|clay|linkedin] [--provider hubspot|salesforce] [--label <l>]
 
 Estimate the reachable market FROM your ICP: a real account count × a confirmed
 ANNUAL ACV (--acv <annual-usd>, or --acv-from-crm --deal-period monthly|quarterly|
@@ -275,8 +277,15 @@ RevOps universe, with real names. --source explorium is a firmographic count onl
     if (out) {
       writeFileSync(resolve(process.cwd(), out), md);
       console.log(`Wrote ${out}.`);
-    } else {
+    } else if (rest.includes("--verbose")) {
       console.log(md);
+    } else if (timeline.length > 0) {
+      console.log(coverageToText(model, timeline.at(-1)!, eta));
+      console.log("\nUse --verbose for assumptions, cross-checks, and the full coverage history.");
+    } else {
+      console.log(`TAM "${model.name}" · ${model.universe.accounts.toLocaleString()} accounts · ${model.universe.contacts.toLocaleString()} buyers · $${Math.round(model.tamUsd).toLocaleString()}`);
+      console.log(`ICP ${model.icpName} · ${model.acv.basis}-basis ACV $${Math.round(model.acv.valueUsd).toLocaleString()} (${model.acv.source})`);
+      console.log("No coverage readings yet. Run `fullstackgtm tam status --save` to establish one; use --verbose for the full assumptions report.");
     }
     return;
   }

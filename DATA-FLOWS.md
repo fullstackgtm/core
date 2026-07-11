@@ -26,6 +26,7 @@ is no fullstackgtm-operated server in the data path for the open package.**
 | `enrich append --source apollo`, `enrich refresh` | **Apollo** (api.apollo.io) | The company domain / contact email being enriched | Your `APOLLO_API_KEY` (BYO) |
 | `market capture`, `market refresh` | **Public vendor websites** you list in `market.config.json` | A bounded HTTP GET; DNS answers are validated and pinned, mixed/private/reserved answers are refused, and every redirect is revalidated | none |
 | `login --via <url>` (optional) | **Your hosted deployment's broker** | A pairing handshake; the broker mints short-lived CRM tokens | broker pairing token |
+| paired `enrich acquire` checkpoint sync (optional) | **Your hosted deployment** | Opaque query fingerprint plus provider cursor/list offset, exhaustion flag, and CAS revision. No prospect records, emails, names, or provider credentials. Scoped to the broker token's organization. | broker pairing token |
 
 Commands not listed (`plans`, `rules`, `doctor`, `schedule`, `audit-log`,
 `diff`, `merge`, report rendering) make **no network calls**.

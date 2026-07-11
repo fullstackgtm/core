@@ -15,6 +15,7 @@ import { progressReporter } from "../runReport.ts";
 import { unknownSubcommandError } from "./suggest.ts";
 import { option, readSnapshot, saveRequested } from "./shared.ts";
 import { colorEnabled, createProgressRenderer, paint, stylizePlanMarkdown, table } from "./ui.ts";
+import { compactPlan, verbosePlanRequested } from "./planOutput.ts";
 
 /** STRIPE_SECRET_KEY env ∨ stored `login stripe` credential (same ladder as `--provider stripe`). */
 function resolveStripeKey(): string {
@@ -93,6 +94,8 @@ export async function backfillCommand(args: string[]) {
         2,
       ),
     );
+  } else if (!verbosePlanRequested(rest)) {
+    console.log(compactPlan(result.plan, { saved: save && result.plan.operations.length > 0 }));
   } else {
     // TTY-only styling; piped output stays byte-identical plain text.
     console.log(

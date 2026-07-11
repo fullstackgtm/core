@@ -133,8 +133,8 @@ export const BACKFILL_STRIPE_STAGES = ["invoices", "snapshot", "matching", "plan
 /** `backfill runs` — replaying local plan runs + health history to the broker. */
 export const RUNS_REPLAY_STAGES = ["runs", "health"];
 export const APPLY_STAGES = ["preflight", "operations", "results"];
-/** `enrich acquire` — routing sourced candidate rows into a create plan. */
-export const ACQUIRE_STAGES = ["candidates"];
+/** `enrich acquire` — discovery through a governed create plan. */
+export const ACQUIRE_STAGES = ["discovery", "resolution", "plan"];
 export const MARKET_CAPTURE_STAGES = ["sources", "capture", "classify", "persist"];
 /** No-op emitter for callers that don't care (keeps signatures simple). */
 export function nullProgressEmitter() {

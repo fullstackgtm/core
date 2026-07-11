@@ -14,6 +14,7 @@ import { progressReporter } from "../runReport.js";
 import { unknownSubcommandError } from "./suggest.js";
 import { option, readSnapshot, saveRequested } from "./shared.js";
 import { colorEnabled, createProgressRenderer, paint, stylizePlanMarkdown, table } from "./ui.js";
+import { compactPlan, verbosePlanRequested } from "./planOutput.js";
 /** STRIPE_SECRET_KEY env ∨ stored `login stripe` credential (same ladder as `--provider stripe`). */
 function resolveStripeKey() {
     const key = process.env.STRIPE_SECRET_KEY ?? getCredential("stripe")?.accessToken;
@@ -72,6 +73,9 @@ export async function backfillCommand(args) {
     }
     if (rest.includes("--json")) {
         console.log(JSON.stringify({ plan: result.plan, counts: result.counts, unmatched: result.unmatched, proposedAccounts: result.proposedAccounts }, null, 2));
+    }
+    else if (!verbosePlanRequested(rest)) {
+        console.log(compactPlan(result.plan, { saved: save && result.plan.operations.length > 0 }));
     }
     else {
         // TTY-only styling; piped output stays byte-identical plain text.

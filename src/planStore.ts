@@ -32,6 +32,7 @@ export type StoredPlan = {
     id: string;
     claimedAt: string;
     revision: number;
+    hostedClaimId?: string;
   };
   /** Durable journal of apply ownership. An unresolved entry must never be replayed automatically. */
   applyAttempts?: ApplyAttempt[];
@@ -49,6 +50,7 @@ export type ApplyAttempt = {
   resolvedAt?: string;
   /** Deliberately generic: provider errors can contain CRM data or credentials. */
   note?: string;
+  hostedClaimId?: string;
 };
 
 export interface PlanStore {
@@ -62,11 +64,21 @@ export interface PlanStore {
   ): Promise<StoredPlan>;
   reject(planId: string): Promise<StoredPlan>;
   claimApply(planId: string, metadata?: Pick<ApplyAttempt, "provider" | "source">): Promise<{ stored: StoredPlan; claimId: string }>;
+  recordHostedClaim(planId: string, claimId: string, hostedClaimId: string): Promise<StoredPlan>;
   recordRun(planId: string, run: PatchPlanRun, claimId: string): Promise<StoredPlan>;
   abortApplyPreflight(planId: string, claimId: string, note: string): Promise<StoredPlan>;
   markApplyUncertain(planId: string, claimId: string): Promise<StoredPlan>;
   recoverApply(planId: string): Promise<StoredPlan>;
+  reconcileReplica(planId: string, remote: ReplicaPlanState): Promise<{ stored: StoredPlan; changed: boolean }>;
 }
+
+/** A validated lifecycle snapshot received from another plan replica. */
+export type ReplicaPlanState = {
+  status: "approved" | "rejected" | "applied";
+  approvedOperationIds: string[];
+  valueOverrides?: Record<string, unknown>;
+  run?: PatchPlanRun;
+};
 
 /**
  * Plans as JSON files in a directory (default `$FSGTM_HOME/plans`), one file
@@ -294,6 +306,21 @@ export function createFilePlanStore(directory?: string): PlanStore {
       });
     },
 
+    async recordHostedClaim(planId, claimId, hostedClaimId) {
+      return withPlanLock(planId, () => {
+        const stored = mustRead(planId);
+        if (stored.status !== "applying" || stored.applyClaim?.id !== claimId) {
+          throw new Error(`Refusing to attach hosted claim for plan ${planId}: local apply claim does not match.`);
+        }
+        return write({
+          ...stored,
+          applyClaim: { ...stored.applyClaim, hostedClaimId },
+          applyAttempts: (stored.applyAttempts ?? []).map((attempt) =>
+            attempt.id === claimId ? { ...attempt, hostedClaimId } : attempt),
+        });
+      });
+    },
+
     async abortApplyPreflight(planId, claimId, note) {
       return withPlanLock(planId, () => {
         const stored = mustRead(planId);
@@ -346,6 +373,66 @@ export function createFilePlanStore(directory?: string): PlanStore {
               ? { ...attempt, status: "uncertain" as const, resolvedAt: new Date().toISOString(), note: "Operator acknowledged uncertain provider state; approval cleared before any retry." }
               : attempt),
         });
+      });
+    },
+
+    async reconcileReplica(planId, remote) {
+      return withPlanLock(planId, () => {
+        const stored = mustRead(planId);
+        if (stored.status === "applying" || stored.applyClaim) {
+          throw new Error(`Plan ${planId} is applying locally; replica reconciliation will retry after it finishes.`);
+        }
+        const known = new Set(stored.plan.operations.map((operation) => operation.id));
+        const approvedOperationIds = Array.from(new Set(remote.approvedOperationIds));
+        if (approvedOperationIds.some((id) => !known.has(id))) {
+          throw new Error(`Replica state for ${planId} contains an unknown operation.`);
+        }
+        // Terminal receipts are monotonic. A delayed approval or rejection can
+        // never roll an already-applied local replica backwards.
+        if (stored.status === "applied" && remote.status !== "applied") {
+          return { stored, changed: false };
+        }
+        if (remote.status === "rejected") {
+          if (stored.status === "rejected") return { stored, changed: false };
+          return { stored: write({
+            ...stored, status: "rejected", approvedOperationIds: [], valueOverrides: {},
+            approvalDigests: undefined, applyClaim: undefined,
+          }), changed: true };
+        }
+        if (approvedOperationIds.length === 0) {
+          throw new Error(`Replica ${remote.status} state for ${planId} has no approved operations.`);
+        }
+        const valueOverrides = remote.valueOverrides ?? {};
+        const approvalDigests = computeApprovalDigests(
+          stored.plan.operations, approvedOperationIds, valueOverrides, loadOrCreateSigningKey(),
+        );
+        if (remote.status === "approved") {
+          const unchanged = stored.status === "approved"
+            && JSON.stringify(stored.approvedOperationIds) === JSON.stringify(approvedOperationIds)
+            && JSON.stringify(stored.valueOverrides) === JSON.stringify(valueOverrides);
+          if (unchanged) return { stored, changed: false };
+          return { stored: write({
+            ...stored, status: "approved", approvedOperationIds, valueOverrides, approvalDigests,
+          }), changed: true };
+        }
+        if (!remote.run || remote.run.planId !== planId) {
+          throw new Error(`Replica applied state for ${planId} is missing a matching execution receipt.`);
+        }
+        if (remote.run.results.some((result) => !known.has(result.operationId))) {
+          throw new Error(`Replica execution receipt for ${planId} contains an unknown operation.`);
+        }
+        const runKey = (run: PatchPlanRun) => `${run.startedAt}\0${run.finishedAt}\0${run.provider}`;
+        const alreadyRecorded = stored.runs.some((run) => runKey(run) === runKey(remote.run!));
+        if (stored.status === "applied" && alreadyRecorded) return { stored, changed: false };
+        return { stored: write({
+          ...stored,
+          status: "applied",
+          approvedOperationIds,
+          valueOverrides,
+          approvalDigests,
+          applyClaim: undefined,
+          runs: alreadyRecorded ? stored.runs : [...stored.runs, remote.run],
+        }), changed: true };
       });
     },
   };

@@ -1,5 +1,16 @@
 export { auditSnapshot, defaultPolicy } from "./audit.ts";
 export {
+  acquireCheckpointId,
+  acquireCheckpointsDir,
+  createFileAcquireCheckpointStore,
+  validateAcquireCheckpoint,
+  validateAcquireCheckpointKey,
+  type AcquireCheckpoint,
+  type AcquireCheckpointKey,
+  type AcquireCheckpointStore,
+  type AcquireContinuation,
+} from "./acquireCheckpoint.ts";
+export {
   matchesTerritory,
   parseAssignmentPolicy,
   resolveAssignment,
@@ -45,6 +56,20 @@ export {
 } from "./config.ts";
 export { applyPatchPlan, type ApplyPatchPlanOptions } from "./connector.ts";
 export {
+  CONTACT_PROVIDER_CAPABILITIES,
+  runContactWaterfall,
+  validateContactWaterfall,
+  type ContactField,
+  type ContactInputShape,
+  type ContactProviderAdapter,
+  type ContactProviderBilling,
+  type ContactProviderCapability,
+  type ContactProviderExecution,
+  type ContactWaterfallAttempt,
+  type ContactWaterfallResult,
+  type ContactWaterfallStep,
+} from "./contactProviders.ts";
+export {
   APPLY_STAGES,
   BACKFILL_STRIPE_STAGES,
   composeListeners,
@@ -59,6 +84,17 @@ export {
   type ProgressSnapshot,
 } from "./progress.ts";
 export { createHubspotConnector, type HubspotConnectorOptions } from "./connectors/hubspot.ts";
+export {
+  CLAY_PUBLIC_API_BASE,
+  clayApiKey,
+  createClaySearch,
+  normalizeClayPerson,
+  runClayPeopleSearchPage,
+  validateClayApiKey,
+  type ClayPeopleSearchPage,
+  type ClaySearchSourceType,
+  type ClayKeyValidation,
+} from "./connectors/clay.ts";
 export {
   DEFAULT_LOOPBACK_PORT,
   DEFAULT_OAUTH_SCOPES,
@@ -132,6 +168,7 @@ export {
   stagedSourceRecords,
   staleDaysFor,
   type BuildEnrichPlanOptions,
+  type AcquireDiscoveryCheckpoint,
   type EnrichAmbiguity,
   type EnrichConfig,
   type EnrichCounts,
@@ -148,6 +185,14 @@ export {
   type EnrichWorkItem,
   type MatchOutcome,
 } from "./enrich.ts";
+export {
+  readHostedAcquireCheckpoint,
+  writeHostedAcquireCheckpoint,
+  type HostedAcquireCheckpoint,
+  type HostedCheckpointReadResult,
+  type HostedCheckpointWriteResult,
+} from "./hostedAcquireCheckpoint.ts";
+export { claimHostedPlanApply, hostedPlanDigest, hostedReviewDocument, readHostedPatchPlan, reconcileHostedPatchPlan, releaseHostedPlanApply, reportHostedPlanLifecycle, uploadHostedPatchPlan } from "./hostedPatchPlan.ts";
 export {
   scaffoldWorkspace,
   starterEnrichConfig,

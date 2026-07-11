@@ -45,7 +45,7 @@ export function starterIcp() {
 export function starterEnrichConfig(source) {
     const preset = builtinAcquirePreset(source);
     if (!preset?.acquire) {
-        // builtinAcquirePreset covers pipe0/explorium/linkedin, so this is unreachable
+        // builtinAcquirePreset covers pipe0/explorium/clay/linkedin, so this is unreachable
         // for the typed InitSource set — guard anyway rather than emit a broken file.
         throw new Error(`init: no acquire preset for source "${source}"`);
     }

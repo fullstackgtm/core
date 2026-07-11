@@ -25,6 +25,8 @@ export type DiscoverLinkedInOptions = {
     sourceId?: string;
     /** Hard cap on prospects pulled. */
     max?: number;
+    /** Opaque provider continuation cursor. */
+    cursor?: string;
 };
 /**
  * Discovery branch for `acquireFromApi`: read prospects from a LinkedIn source

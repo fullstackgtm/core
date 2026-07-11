@@ -5,6 +5,7 @@ import { getCredential } from "../credentials.js";
 import { appendCoverage, computeCoverage, coverageCountsFromSnapshot, classifyCoverage, coverageToText, deriveAcvFromClosedWon, deriveBuyersPerAccount, estimateTam, loadTamModel, projectEta, readCoverageTimeline, saveTamModel, tamReportToMarkdown } from "../tam.js";
 import { probeExploriumBusinessCount } from "../connectors/prospectSources.js";
 import { theirStackCountCompanies, theirStackPullCost, theirStackSearchCompanies } from "../connectors/theirstack.js";
+import { clayApiKey } from "../connectors/clay.js";
 import { icpToExploriumBusinessFilters, icpToTheirStackFilters } from "../icp.js";
 import { scheduleCommand } from "./schedule.js";
 import { loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.js";
@@ -12,6 +13,8 @@ import { unknownSubcommandError } from "./suggest.js";
 /** Best-effort enrich-config load for apply-time acquire-budget enforcement. */
 /** Provider API key: env override first, then the credential store (`login`). */
 export function providerKey(provider) {
+    if (provider === "clay")
+        return clayApiKey();
     const envName = provider === "explorium"
         ? "EXPLORIUM_API_KEY"
         : provider === "pipe0"
@@ -41,7 +44,7 @@ export async function tamCommand(args) {
   fullstackgtm tam accounts [--name <n>] [--icp <path>] --source theirstack [--max <n>] [--dry-run | --confirm] [--max-credits <n>] [--usd-per-credit <r>] [--out <file.csv> | --json]
   fullstackgtm tam status   [--name <n>] <source options> [--save] [--json]
   fullstackgtm tam report   [--name <n>] [--out <path>]
-  fullstackgtm tam populate [--name <n>] --cron "<expr>" [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--label <l>]
+  fullstackgtm tam populate [--name <n>] --cron "<expr>" [--source pipe0|explorium|clay|linkedin] [--provider hubspot|salesforce] [--label <l>]
 
 Estimate the reachable market FROM your ICP: a real account count × a confirmed
 ANNUAL ACV (--acv <annual-usd>, or --acv-from-crm --deal-period monthly|quarterly|
@@ -253,8 +256,17 @@ RevOps universe, with real names. --source explorium is a firmographic count onl
             writeFileSync(resolve(process.cwd(), out), md);
             console.log(`Wrote ${out}.`);
         }
-        else {
+        else if (rest.includes("--verbose")) {
             console.log(md);
+        }
+        else if (timeline.length > 0) {
+            console.log(coverageToText(model, timeline.at(-1), eta));
+            console.log("\nUse --verbose for assumptions, cross-checks, and the full coverage history.");
+        }
+        else {
+            console.log(`TAM "${model.name}" · ${model.universe.accounts.toLocaleString()} accounts · ${model.universe.contacts.toLocaleString()} buyers · $${Math.round(model.tamUsd).toLocaleString()}`);
+            console.log(`ICP ${model.icpName} · ${model.acv.basis}-basis ACV $${Math.round(model.acv.valueUsd).toLocaleString()} (${model.acv.source})`);
+            console.log("No coverage readings yet. Run `fullstackgtm tam status --save` to establish one; use --verbose for the full assumptions report.");
         }
         return;
     }

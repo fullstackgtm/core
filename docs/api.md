@@ -229,6 +229,15 @@ webhook landing-zone format (docs/signal-spool-format.md).
 
 ## Acquire (net-new lead generation)
 
+API discovery is continuation-aware. Completed acquire runs persist a
+provider/source/list/query-keyed Pipe0 cursor, Explorium page, or HeyReach list
+offset, plus the discovered → qualified → deduped → resolved → proposed funnel.
+Each list progresses independently. If a broker credential exists, GET/POST
+`/api/cli/acquisition-checkpoint` synchronizes the opaque checkpoint inside the
+token's organization using numeric compare-and-swap revisions; unpaired and
+offline CLIs remain local-first. A changed ICP/list starts a new traversal. CLI
+`--max` sets desired new leads while `--scan-limit` bounds raw candidates.
+
 `buildAcquirePlan` turns sourced-but-unmatched prospects into `create_record`
 operations (matched / ambiguous are skipped — resolve-first never creates over
 a possible dup), capped by the meter's headroom. `builtinAcquirePreset` is the
@@ -252,6 +261,22 @@ domain stamped — so the acquired account is immediately signal-watchable
   waterfall, chunked, surfaces upstream errors), `fetchPipe0CrustdataProspects`
   (people search). `prospectIdentityKeys` / `crmContactKeys` /
   `partitionFreshProspects` power the pre-email dedup.
+- **Clay Search** (`connectors/clay.ts`): `createClaySearch` creates Clay's
+  forward-only server iterator and `runClayPeopleSearchPage` advances it.
+  `enrich acquire --source clay` uses the stored `login clay` credential,
+  translates the common ICP title/seniority/industry/size/country constraints,
+  normalizes people to `Prospect`, checkpoints the search id on saved runs, and
+  keys proposed contacts by LinkedIn URL. It performs no paid contact routine
+  by default; add an explicit `contactWaterfall` when contact fields are needed.
+- **Contact provider router** (`contactProviders.ts`):
+  `CONTACT_PROVIDER_CAPABILITIES`, `validateContactWaterfall`, and
+  `runContactWaterfall` provide an ordered, fill-only field router. Configure
+  `acquire.discovery.<source>.contactWaterfall` as steps such as
+  `[{ "provider": "pipe0", "fields": ["work_email"] }]`. Later steps receive
+  only records still missing a requested field and cannot overwrite an earlier
+  accepted value. The registry advertises implemented operations only; the
+  broader candidate backlog does not become valid configuration until its
+  adapter lands.
 - **LinkedIn source** (`connectors/linkedin.ts`, `acquireLinkedIn.ts`): the
   injectable `LinkedInProvider` interface with a default HeyReach adapter
   (`createHeyReachProvider`, `HEYREACH_BASE`, `X-API-KEY`, `normalizeHeyReachLead`)
@@ -262,7 +287,8 @@ domain stamped — so the acquired account is immediately signal-watchable
   apply are reused unchanged. Phase 1 is discovery-only — read-only, never sends.
   `linkedin` is a `SUPPORTED_API_SOURCES` source, so an explicit config can set
   discovery `size` (read a whole list, not the preset's 25). A LinkedIn list
-  carries no emails; opt into resolution with
+  carries no emails; opt into resolution with `contactWaterfall`, or use the
+  backward-compatible
   `acquire.discovery.linkedin.resolveEmailsWith: "pipe0"` — email resolution is
   no longer gated on the dedupe key being `email`, so a profile-URL-keyed source
   still creates outreach-ready, emailed contacts. ICP scoring matches title
@@ -307,6 +333,21 @@ before another apply. Provider APIs do not all expose idempotency keys, so this
 operator reconciliation remains necessary after a timeout or crash.
 
 ## Schedule
+
+## Hosted patch-plan mirror
+
+`uploadHostedPatchPlan(stored)` mirrors a bounded review document when the
+active profile has a secure broker pairing. `readHostedPatchPlan(planId)` reads
+the org-scoped hosted decision, and `reportHostedPlanLifecycle(stored)` reflects
+local approval/rejection/application. Upload is local-first and best-effort;
+immutable hash conflicts fail closed. Hosted approval does not carry local
+signing material: `apply --plan-id` verifies the hash and operation set before
+`PlanStore.approveOperations` generates machine-local approval digests.
+
+The hosted transport intentionally excludes findings, evidence, signing
+digests/keys, apply claims and attempt notes, provider results, and raw run
+errors. Operation before/after values are included because the paired
+organization needs them to review the proposed CRM changes.
 
 The horizontal scheduler: a declarative schedule-entry store, a
 dependency-free 5-field cron parser, and the read/plan-side `SCHEDULABLE`

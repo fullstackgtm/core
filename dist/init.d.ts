@@ -17,7 +17,7 @@
 import { type EnrichConfig } from "./enrich.ts";
 import { type Icp } from "./icp.ts";
 export type InitProvider = "hubspot" | "salesforce";
-export type InitSource = "pipe0" | "explorium" | "linkedin";
+export type InitSource = "pipe0" | "explorium" | "clay" | "linkedin";
 export type ScaffoldOptions = {
     /** discovery source the acquire preset + playbook are wired for. Default "pipe0". */
     source?: InitSource;

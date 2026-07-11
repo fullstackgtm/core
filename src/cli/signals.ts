@@ -27,6 +27,21 @@ function resolveSignalsConfig(args: string[]): SignalsConfig {
 /** A watchlist entry: an account domain plus optional per-source board tokens. */
 type WatchlistAccount = { domain: string; boards?: Partial<Record<AtsBoardSource, string>> };
 
+function concise(value: string, max = 72): string {
+  const oneLine = value.replace(/\s+/g, " ").trim();
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
+}
+
+function renderSignals(signals: Signal[]): string {
+  if (signals.length === 0) return "No signals matched.";
+  const lines = [`Fresh signals (${signals.length})`, ""];
+  for (const signal of signals) {
+    lines.push(`${signal.weight.toFixed(2).padStart(5)}  ${signal.accountDomain}  · ${signal.bucket}`);
+    lines.push(`       ${concise(signal.trigger)}`);
+  }
+  return lines.join("\n");
+}
+
 /**
  * Resolve the watchlist of accounts to scan. Sources, in precedence order:
  *  - a --watchlist file (JSON array of {domain, boards?} or bare domain strings),
@@ -228,7 +243,7 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
     const ranked = [...fresh].sort((a, b) => b.weight - a.weight || a.accountDomain.localeCompare(b.accountDomain));
 
     // Ranked fresh signals to stdout; guidance to stderr.
-    console.log(JSON.stringify(ranked, null, 2));
+    console.log(rest.includes("--json") || rest.includes("--verbose") ? JSON.stringify(ranked, null, 2) : renderSignals(ranked));
     console.error(
       `Fetched ${fetched} candidate signal(s); ${fresh.length} fresh, ${deduped.length} deduped ` +
         `(window ${config.dedupWindowDays}d). NO plan emitted — signals are read-only re: CRM.`,
@@ -275,7 +290,7 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
       return true;
     });
     const ranked = filtered.sort((a, b) => b.weight - a.weight || a.accountDomain.localeCompare(b.accountDomain));
-    console.log(JSON.stringify(ranked, null, 2));
+    console.log(rest.includes("--json") || rest.includes("--verbose") ? JSON.stringify(ranked, null, 2) : renderSignals(ranked));
     console.error(`${ranked.length} signal(s)${unjudgedOnly ? " (unjudged)" : ""}.`);
     return;
   }
@@ -305,7 +320,11 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
     const outcomes = await store.listOutcomes();
     const signalsById = new Map((await store.allSignals()).map((s) => [s.id, s]));
     const weights = computeWeights(config, outcomes, signalsById);
-    console.log(JSON.stringify(weights, null, 2));
+    if (rest.includes("--json") || rest.includes("--verbose")) {
+      console.log(JSON.stringify(weights, null, 2));
+    } else {
+      console.log(["Learned signal weights", "", ...SIGNAL_BUCKETS.map((bucket) => `${bucket.padEnd(10)} ${weights[bucket].toFixed(4)}`)].join("\n"));
+    }
     if (rest.includes("--explain")) {
       // Per-bucket config default vs learned + booked/total over credited signals.
       const booked = new Map<SignalBucket, number>();

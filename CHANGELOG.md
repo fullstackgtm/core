@@ -7,6 +7,104 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.51.0] — 2026-07-11
+
+### Added
+
+- Native Clay Public API authentication and people search for governed lead
+  acquisition, including ICP-to-Clay filter translation and resumable search
+  checkpoints.
+- A provider-neutral, fill-only contact waterfall contract for work email,
+  mobile, and direct-dial enrichment, with Pipe0 as the first registered
+  provider and compatibility for existing Pipe0 email resolution.
+- Clay acquisition presets, initialization, doctor diagnostics, public API
+  exports, strategy documentation, and live-safe credential validation.
+
+### Changed
+
+- `enrich acquire` now uses the shared decision-first presentation contract:
+  compact cards by default, full evidence with `--verbose`, and a stable JSON
+  envelope with counts, cost, meter, and persistence state under `--json`.
+- Pre-enrichment deduplication and avoided-spend reporting are provider-neutral
+  so the same acquisition pipeline can support additional contact sources.
+
+## [0.50.1] — 2026-07-10
+
+### Added
+
+- Decision-first CLI presentation across plan previews, plan queues, apply
+  outcomes, doctor, schedules, signals, ICP, market, TAM, and call analysis.
+  Human defaults use compact cards and ranked summaries; `--verbose` restores
+  full audit detail and `--json` retains the stable machine contract.
+
+### Fixed
+
+- HubSpot 429/5xx responses now retry with bounded backoff, honor
+  `Retry-After`, and report accurate live throttle feedback.
+- Multi-line progress boards no longer scroll intermediate paint frames into
+  terminal history.
+- `plans sync` reconciles historical workspaces concurrently with visible
+  progress, skips absent legacy mirrors, and avoids echoing hosted-origin
+  receipts back to hosted.
+- CLI apply reports only the exact approved receipt subset to hosted while
+  retaining excluded rows in the complete local audit trail.
+- Plan and apply output now distinguish approved, applied, excluded, skipped,
+  and failed operations without exposing the immutable document's stale
+  creation-time status as the current lifecycle state.
+
+## [0.50.0] — 2026-07-10
+
+### Added
+
+- CLI and hosted now act as local-first replicas of one immutable patch plan.
+  Either surface may execute when it has a compatible CRM connection; online
+  execution uses a shared claim, while offline CLI work remains available and
+  reconciles later through stable provider idempotency and exact receipts.
+- `fullstackgtm plans sync` explicitly exchanges approval revisions, terminal
+  state, and per-operation execution receipts. Plan list, show, and apply also
+  perform best-effort ambient check-ins.
+- Hosted can execute fully synchronized CLI-origin plans through its connected
+  HubSpot or Salesforce connector. The CLI imports hosted runs without replaying
+  provider writes, and hosted imports exact CLI outcomes rather than inferring
+  success for every approved row.
+
+### Security
+
+- Shared execution claims are bound to the immutable plan, exact approved
+  subset, replica, and paired CLI token. Approval edits freeze during apply;
+  stranded claims require an explicit audited recovery, and preflight release
+  is permitted only before provider I/O by the owning replica.
+- Hosted ingestion recomputes the immutable document digest and verifies an
+  exact one-to-one operation set. Terminal transitions require complete,
+  duplicate-free receipts for the approved subset and cannot widen authority.
+
+### Fixed
+
+- Paired CLIs now mirror saved plans into the hosted Patch Plans queue and
+  print an exact review deep-link. Mirrors are org-scoped, immutable and
+  idempotent; hosted approvals are hash/operation-verified and locally
+  HMAC-signed before CLI execution. Security state and evidence/findings stay
+  local, while bounded provider receipts replicate between capable executors.
+- `enrich acquire` now reports discovery, resolution, and plan-building progress
+  across the previously silent provider/dedupe middle. Paired hosted runs render
+  the same live stage, counters, and generic progress notes on their detail page.
+- Interactive acquisition runs retain both the CRM snapshot and acquisition
+  checklists in terminal history, then print a compact plan summary, copyable
+  review/approve/apply commands, and the paired hosted Runs deep-link.
+- Persistent progress completion freezes the already-painted final frame rather
+  than repainting it, preventing duplicate live/final checklists in scrollback.
+- Acquisition now persists query-bound Pipe0 cursors and HeyReach/Explorium
+  offsets so scheduled runs traverse the full audience instead of repeatedly
+  exhausting the first 25 results. `--max` controls desired new leads and the
+  new `--scan-limit` bounds raw duplicate-heavy scanning. Run history records
+  the complete discovery funnel and provider-confirmed exhaustion state.
+- Checkpoints now live in a dedicated profile-scoped store keyed independently
+  by provider/source/list/query. Paired CLIs synchronize opaque continuation to
+  an organization-scoped hosted record using broker authentication and
+  compare-and-swap revisions; conflicts retain the newer hosted checkpoint.
+- The documented LinkedIn `--list <id>` flag is accepted by strict CLI parsing,
+  and NAICS-only software ICPs retain their industry constraint on Pipe0.
+
 ## [0.49.0] — 2026-07-10
 
 ### Security

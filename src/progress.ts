@@ -186,8 +186,8 @@ export const RUNS_REPLAY_STAGES = ["runs", "health"] as const;
 
 export const APPLY_STAGES = ["preflight", "operations", "results"] as const;
 
-/** `enrich acquire` — routing sourced candidate rows into a create plan. */
-export const ACQUIRE_STAGES = ["candidates"] as const;
+/** `enrich acquire` — discovery through a governed create plan. */
+export const ACQUIRE_STAGES = ["discovery", "resolution", "plan"] as const;
 
 export const MARKET_CAPTURE_STAGES = ["sources", "capture", "classify", "persist"] as const;
 

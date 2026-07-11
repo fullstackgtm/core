@@ -481,8 +481,21 @@ Rules:
             writeFileSync(resolve(process.cwd(), outPath), output);
             console.log(`Wrote ${outPath}`);
         }
-        else {
+        else if (rest.includes("--verbose") || option(rest, "--format")) {
             console.log(output);
+        }
+        else {
+            const fronts = computeFrontStates(config, set);
+            const counts = new Map();
+            for (const front of fronts)
+                counts.set(front.state, (counts.get(front.state) ?? 0) + 1);
+            console.log(`${config.category} market · ${set.runLabel}`);
+            console.log(`${fronts.length} claim fronts · ${["open", "contested", "owned", "saturated", "vacant"].filter((state) => counts.has(state)).map((state) => `${counts.get(state)} ${state}`).join(" · ")}`);
+            for (const front of fronts) {
+                const owner = front.loudVendorIds.length ? ` · ${front.loudVendorIds.join(", ")}` : "";
+                console.log(`\n${front.state.toUpperCase()}  ${front.claimId}${owner}`);
+            }
+            console.log("\nUse --verbose for the full evidence report, or --out <path> to write it.");
         }
         return;
     }

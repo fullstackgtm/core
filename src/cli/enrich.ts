@@ -1,18 +1,24 @@
 // Extracted verbatim from src/cli.ts (mechanical split, no behavior change).
 
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { getCredential } from "../credentials.ts";
 import { patchPlanToMarkdown } from "../format.ts";
 import { createFilePlanStore } from "../planStore.ts";
 import { buildAcquirePlan, buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, builtinAcquirePreset, builtinEnrichPreset, enrichRunId, inferIngestObjectType, latestStamps, loadEnrichConfig, parseCsv, resolveCrmField, selectStaleWork, stagedSourceRecords, staleDaysFor, type EnrichConfig, type EnrichCounts, type EnrichObjectType, type EnrichRun, type EnrichRunStore, type EnrichSourceRecord } from "../enrich.ts";
 import { loadMeter, remaining, type AcquireRemaining } from "../acquireMeter.ts";
-import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspects, partitionFreshProspects, pipe0ResolveCompanyDomains, pipe0ResolveWorkEmails, prospectIdentityKeys, type Prospect } from "../connectors/prospectSources.ts";
+import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspectPage, partitionFreshProspects, pipe0ResolveCompanyDomains, pipe0ResolveWorkEmails, prospectIdentityKeys, type Prospect } from "../connectors/prospectSources.ts";
+import { createClaySearch, runClayPeopleSearchPage } from "../connectors/clay.ts";
+import { runContactWaterfall, type ContactProviderAdapter, type ContactWaterfallStep } from "../contactProviders.ts";
 import { loadSeen, recordSeen } from "../acquireSeen.ts";
+import { acquireCheckpointId, createFileAcquireCheckpointStore, type AcquireCheckpointKey } from "../acquireCheckpoint.ts";
+import { readHostedAcquireCheckpoint, writeHostedAcquireCheckpoint } from "../hostedAcquireCheckpoint.ts";
+import { uploadHostedPatchPlan } from "../hostedPatchPlan.ts";
 import { progressReporter, reportCounts, reportEvent } from "../runReport.ts";
 import { ACQUIRE_STAGES, composeListeners, createProgressEmitter } from "../progress.ts";
 import { createLinkedInProvider, discoverLinkedInProspects } from "../acquireLinkedIn.ts";
-import { fitThreshold, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp, type Icp } from "../icp.ts";
+import { fitThreshold, icpToClayPeopleFilters, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp, type Icp } from "../icp.ts";
 import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, type ApolloPullKey } from "../enrichApollo.ts";
 import type { CanonicalGtmSnapshot } from "../types.ts";
 import { isSpoolPath, readSpoolPath } from "../spoolFiles.ts";
@@ -20,6 +26,7 @@ import { isOptionValue, loadIcp, numericOption, option, readSnapshot, saveReques
 import { providerKey } from "./tam.ts";
 import { unknownSubcommandError } from "./suggest.ts";
 import { colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, type Paint } from "./ui.ts";
+import { compactPlan, verbosePlanRequested } from "./planOutput.ts";
 import type { AcquireBudget } from "../acquireMeter.ts";
 
 
@@ -43,7 +50,7 @@ enrich append  [--source apollo] [--objects companies,contacts] [--save] [--conf
 enrich refresh [--source apollo] [--stale-days <n>] [--save] [--config <path>]
                [source options] [--run-label <label>] [--json]
 enrich ingest  <file.csv|payload.json|spool.jsonl|spool-dir> --source clay [--run-label <label>] [--objects companies|contacts] [--config <path>]
-enrich acquire [--source <id>] [--max <n>] [--list <id>] [--assign-owner <id>] [--save] [--config <path>] [--json]
+enrich acquire [--source <id>] [--max <new-leads>] [--scan-limit <candidates>] [--list <id>] [--assign-owner <id>] [--save] [--config <path>] [--json]
 enrich status  [--runs] [--source <id>] [--config <path>] [--json]
 
 acquire creates NET-NEW leads from a staged prospect list (ingest first):
@@ -53,6 +60,9 @@ it dedupes each sourced row against the CRM, skips matches and ambiguities
 remaining budget (records + spend, per day and per month; whichever is hit
 first). Approval-gated like every write: \`--save\` → plans approve → apply.
 The meter is charged only when a create actually lands at apply.
+\`--max\` controls the desired net-new plan size; \`--scan-limit\` separately
+bounds raw candidates scanned after ICP and dedupe filtering. Continuation is
+persisted per query so scheduled runs advance instead of rereading page one.
 Discovery sources (zero-config presets): explorium | pipe0 (ICP-driven search),
 and linkedin (reads a HeyReach lead list — pass --list <id>, key on the LinkedIn
 URL, $0/record; \`login heyreach\` or HEYREACH_API_KEY).
@@ -141,7 +151,7 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
 
     // Prospects come from an API source (net-new discovery, e.g. Explorium +
     // pipe0 work-email) or a staged ingest list (Clay/CSV/webhook).
-    const snapshot = await readSnapshot(rest);
+    const snapshot = await readSnapshot(rest, undefined, { persistProgress: true });
     const icp = loadIcp(rest);
     if (sourceConfig.kind === "api" && !icp) {
       console.error(
@@ -159,16 +169,39 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
       );
     }
     const seen = loadSeen();
+    const now = new Date();
+    const costPerRecord = config.acquire.costPerRecord?.[source] ?? 0;
+    const headroom = remaining(loadMeter(now), config.acquire.budget, costPerRecord, now);
+    const explicitMax = numericOption(rest, "--max");
+    const desiredCreates = explicitMax ?? config.acquire.discovery?.[source]?.size ?? 25;
+    const cap = headroom.maxRecords === null ? desiredCreates : Math.min(headroom.maxRecords, desiredCreates);
     let records: EnrichSourceRecord[];
     let apiSkippedCrm = 0;
     let apiSkippedSeen = 0;
     let apiProcessedKeys: string[] = [];
+    let acquireTelemetry: NonNullable<EnrichRun["acquireTelemetry"]> | undefined;
+    let acquireCheckpointSync: { key: AcquireCheckpointKey; hostedVersion: number | null } | undefined;
+    const renderer = createProgressRenderer(ACQUIRE_STAGES);
+    const acquireProgress = createProgressEmitter(
+      composeListeners(renderer.listener, progressReporter()),
+    );
     if (sourceConfig.kind === "api") {
-      const api = await acquireFromApi(config, source, rest, icp, snapshot, seen);
+      const priorRun = await store.latest({ source, mode: "acquire" });
+      acquireProgress.stage(ACQUIRE_STAGES[0], 0, ACQUIRE_STAGES.length);
+      acquireProgress.note("loading saved audience position");
+      let api: Awaited<ReturnType<typeof acquireFromApi>>;
+      try {
+        api = await acquireFromApi(config, source, rest, icp, snapshot, seen, priorRun, cap, save, acquireProgress);
+      } catch (error) {
+        renderer.done({ persist: true });
+        throw error;
+      }
       records = api.records;
       apiSkippedCrm = api.skippedCrm;
       apiSkippedSeen = api.skippedSeen;
       apiProcessedKeys = api.processedKeys;
+      acquireTelemetry = api.telemetry;
+      acquireCheckpointSync = { key: api.checkpointKey, hostedVersion: api.hostedVersion };
     } else {
       const stagedLabel = option(rest, "--staged-run");
       const stagedRun = stagedLabel
@@ -184,18 +217,15 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
 
     // Meter: how many MORE leads may we create right now? --max is an
     // additional per-run ceiling, never a way to exceed the budget.
-    const now = new Date();
-    const costPerRecord = config.acquire.costPerRecord?.[source] ?? 0;
     if (apiSkippedCrm || apiSkippedSeen) {
       console.error(
-        `Pre-email dedup: skipped ${apiSkippedCrm} already-in-CRM + ${apiSkippedSeen} seen before paying for emails ` +
-          `(≈$${((apiSkippedCrm + apiSkippedSeen) * costPerRecord).toFixed(2)} enrichment saved).`,
+        `Pre-enrichment dedup: skipped ${apiSkippedCrm} already-in-CRM + ${apiSkippedSeen} previously seen ` +
+          `(≈$${((apiSkippedCrm + apiSkippedSeen) * costPerRecord).toFixed(2)} downstream spend avoided).`,
       );
     }
-    const headroom = remaining(loadMeter(now), config.acquire.budget, costPerRecord, now);
-    const explicitMax = numericOption(rest, "--max");
-    let cap = headroom.maxRecords;
-    if (explicitMax !== undefined) cap = cap === null ? explicitMax : Math.min(cap, explicitMax);
+    // `cap` is the desired create count bounded by the persistent meter. Raw
+    // discovery scanning has its own --scan-limit and may cross many duplicate-
+    // heavy pages to fill this target.
 
     // Assignment: never create an ownerless lead. An explicit `acquire.assign`
     // policy wins; a `--assign-owner <id>` flag is a quick fixed override;
@@ -229,13 +259,10 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
     // piped) and, via the composed reporter, heartbeat to a paired hosted app.
     // The meter reading (creates vs headroom + budget burn) rides the same
     // emitter, feeding the dashboard's gauge without printing anything new.
-    const renderer = createProgressRenderer(ACQUIRE_STAGES);
-    const acquireProgress = createProgressEmitter(
-      composeListeners(renderer.listener, progressReporter()),
-    );
     let result: ReturnType<typeof buildAcquirePlan>;
     try {
-      acquireProgress.stage(ACQUIRE_STAGES[0], 0, ACQUIRE_STAGES.length);
+      acquireProgress.stage(ACQUIRE_STAGES[2], 2, ACQUIRE_STAGES.length);
+      acquireProgress.note("building governed create plan");
       if (config.acquire.budget?.records?.perDay && headroom.records.day !== null) {
         acquireProgress.meter(
           config.acquire.budget.records.perDay - headroom.records.day,
@@ -253,7 +280,7 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
         progress: acquireProgress,
       });
     } finally {
-      renderer.done();
+      renderer.done({ persist: true });
     }
 
     if (result.counts.unassigned > 0 && result.counts.created > 0) {
@@ -276,50 +303,74 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
     const meterLine = formatAcquireMeter(headroom, costPerRecord);
     const gaugeLine = acquireGaugeLine(headroom, config.acquire.budget ?? {}, paint(colorEnabled(process.stdout)));
     if (!save) {
-      if (rest.includes("--json")) {
-        console.log(
-          JSON.stringify(
-            { plan: result.plan, counts: result.counts, estCostUsd: result.estCostUsd, meter: headroom },
-            null,
-            2,
-          ),
-        );
-      } else {
-        console.log(patchPlanToMarkdown(result.plan));
-        console.log(meterLine);
-        if (gaugeLine) console.log(gaugeLine);
-        console.log("\nDry run — nothing written. Re-run with --save to persist the plan, then approve + apply.");
-      }
+      printAcquireOutput({
+        args: rest,
+        result,
+        meter: headroom,
+        meterLine,
+        gaugeLine,
+        saved: false,
+        planSaved: false,
+        hostedPlanUrl: null,
+      });
       return;
     }
 
-    const run = await openEnrichRun(store, source, "append", option(rest, "--run-label"), today);
+    const run = await openEnrichRun(store, source, "acquire", option(rest, "--run-label"), today);
     const planIds: string[] = [];
+    let hostedPlanUrl: string | null = null;
     if (result.plan.operations.length > 0) {
-      await createFilePlanStore().save(result.plan);
+      const storedPlan = await createFilePlanStore().save(result.plan);
       planIds.push(result.plan.id);
       reportEvent("plan_saved", result.plan.id);
+      const mirror = await uploadHostedPatchPlan(storedPlan);
+      if (mirror.status === "saved") {
+        hostedPlanUrl = mirror.state.url;
+        reportEvent("plan_mirrored", mirror.state.patchPlanId);
+      } else if (mirror.status === "unavailable" || mirror.status === "conflict") {
+        console.error(`Hosted plan sync pending: ${mirror.reason}. The local signed plan remains authoritative.`);
+      }
+    }
+    if (acquireTelemetry) {
+      acquireTelemetry.funnel.proposed = result.counts.created;
+      acquireTelemetry.funnel.withheldByMeter = result.counts.withheldByMeter;
     }
     await store.update({
       ...run,
       completedAt: new Date().toISOString(),
-      cursor: null,
+      cursor: acquireTelemetry?.discovery.cursor ?? null,
+      counts: acquireTelemetry
+        ? {
+            fetched: acquireTelemetry.funnel.discovered,
+            matched: acquireTelemetry.funnel.skippedCrm + acquireTelemetry.funnel.skippedSeen,
+            unmatched: acquireTelemetry.funnel.resolved,
+            ambiguous: result.counts.ambiguous,
+            opsEmitted: acquireTelemetry.funnel.proposed,
+          }
+        : run.counts,
+      acquireTelemetry,
       planIds: [...(run.planIds ?? []), ...planIds],
     });
     // Remember everyone we email-resolved this run so the next run skips them
     // pre-email (cross-run credit saver). Committed (--save) runs only.
     if (apiProcessedKeys.length > 0) recordSeen(apiProcessedKeys, now);
-    console.log(meterLine);
-    if (gaugeLine) console.log(gaugeLine);
-    if (planIds.length > 0) {
-      console.log(
-        `Saved plan ${result.plan.id} — ${result.counts.created} net-new lead(s), est. $${result.estCostUsd.toFixed(2)}. ` +
-          `Review \`fullstackgtm plans show ${result.plan.id}\`, approve \`fullstackgtm plans approve ${result.plan.id} --operations all\`, ` +
-          `then \`fullstackgtm apply --plan-id ${result.plan.id} --provider hubspot\`. The meter is charged only when a create lands at apply.`,
+    if (acquireTelemetry && acquireCheckpointSync) {
+      await persistAcquireCheckpoint(
+        acquireCheckpointSync.key,
+        acquireTelemetry.discovery,
+        acquireCheckpointSync.hostedVersion,
       );
-    } else {
-      console.log("No net-new leads to create (everything sourced already matched, or was withheld by the meter).");
     }
+    printAcquireOutput({
+      args: rest,
+      result,
+      meter: headroom,
+      meterLine,
+      gaugeLine,
+      saved: true,
+      planSaved: planIds.length > 0,
+      hostedPlanUrl,
+    });
     return;
   }
 
@@ -454,7 +505,7 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
     if (rest.includes("--json")) {
       console.log(JSON.stringify(result.plan, null, 2));
     } else {
-      console.log(patchPlanToMarkdown(result.plan));
+      console.log(verbosePlanRequested(rest) ? patchPlanToMarkdown(result.plan) : compactPlan(result.plan));
       console.log(formatEnrichCounts(result.counts, result.ambiguities.length));
       console.log("\nDry run — nothing written. Re-run with --save to persist the plan and the run record.");
     }
@@ -500,8 +551,9 @@ function formatEnrichCounts(counts: EnrichCounts, ambiguities: number) {
 /**
  * Pull net-new prospects from an API acquire source into source records the
  * acquire builder dedupes + turns into create_record ops. Explorium discovers;
- * pipe0 (when resolveEmailsWith=pipe0) fills real work emails. Only rows that
- * carry the dedupe key (email) survive — you cannot resolve-first without it.
+ * A field-level provider waterfall fills missing contact data. Existing
+ * email-keyed and resolveEmailsWith=pipe0 configs translate to an implicit
+ * Pipe0 work-email step. Only rows that carry the configured dedupe key survive.
  */
 async function acquireFromApi(
   config: EnrichConfig,
@@ -510,47 +562,180 @@ async function acquireFromApi(
   icp: Icp | undefined,
   snapshot: CanonicalGtmSnapshot,
   seen: Set<string>,
-): Promise<{ records: EnrichSourceRecord[]; skippedCrm: number; skippedSeen: number; processedKeys: string[] }> {
+  priorRun: EnrichRun | null,
+  targetFresh: number,
+  persistCheckpoint: boolean,
+  progress: ReturnType<typeof createProgressEmitter>,
+): Promise<{
+  records: EnrichSourceRecord[];
+  skippedCrm: number;
+  skippedSeen: number;
+  processedKeys: string[];
+  telemetry: NonNullable<EnrichRun["acquireTelemetry"]>;
+  checkpointKey: AcquireCheckpointKey;
+  hostedVersion: number | null;
+}> {
   const acquire = config.acquire!;
   const disc = acquire.discovery?.[source];
   if (!disc) {
     throw new Error(`enrich acquire: api source "${source}" needs an "acquire.discovery.${source}" config (provider + size).`);
   }
   const matchKey = acquire.create.contact?.matchKey ?? "email";
-  const maxOverride = numericOption(rest, "--max");
-  const size = maxOverride !== undefined ? Math.min(maxOverride, disc.size ?? 25) : disc.size ?? 25;
-
-  // 1. Discover. Filters come from the ICP when one is loaded (the whole point —
-  //    targeted, not random); otherwise from the hand-written disc.filters.
-  let prospects: Prospect[];
-  if (disc.provider === "explorium") {
-    const filters = icp
-      ? icpToExploriumFilters(icp)
-      : ((disc.filters ?? {}) as Record<string, { values?: string[]; value?: boolean }>);
-    prospects = await fetchExploriumProspects({ apiKey: providerKey("explorium"), filters, size });
-  } else if (disc.provider === "pipe0") {
-    const filters = icp ? icpToCrustdataFilters(icp) : (disc.filters ?? {});
-    prospects = await fetchPipe0CrustdataProspects({ apiKey: providerKey("pipe0"), filters, limit: size });
-  } else if (disc.provider === "linkedin" || disc.provider === "heyreach") {
-    // LinkedIn reads a pre-populated lead list (not an ICP-driven query); the ICP
-    // scores the pulled list below. List id: disc.listId or --list <id>.
-    const listId = disc.listId ?? option(rest, "--list") ?? undefined;
-    if (!listId) {
-      throw new Error(
-        "enrich acquire --source linkedin needs a HeyReach lead-list id: pass --list <id> or set acquire.discovery.linkedin.listId.",
+  const explicitScanLimit = numericOption(rest, "--scan-limit");
+  const scanLimit = Math.max(targetFresh, Math.min(explicitScanLimit ?? disc.scanLimit ?? Math.max(100, targetFresh * 10), 5_000));
+  const listId = disc.listId ?? option(rest, "--list") ?? undefined;
+  if ((disc.provider === "linkedin" || disc.provider === "heyreach") && !listId) {
+    throw new Error(
+      "enrich acquire --source linkedin needs a HeyReach lead-list id: pass --list <id> or set acquire.discovery.linkedin.listId.",
+    );
+  }
+  const filters = disc.provider === "explorium"
+    ? (icp ? icpToExploriumFilters(icp) : (disc.filters ?? {}))
+    : disc.provider === "pipe0"
+      ? (icp ? icpToCrustdataFilters(icp) : (disc.filters ?? {}))
+      : disc.provider === "clay"
+        ? (icp ? icpToClayPeopleFilters(icp) : (disc.filters ?? {}))
+        : {};
+  const queryFingerprint = createHash("sha256")
+    .update(JSON.stringify({ source, provider: disc.provider, listId, filters, icp: icp ?? null }))
+    .digest("hex");
+  const checkpointKey: AcquireCheckpointKey = {
+    provider: disc.provider,
+    source,
+    listId: listId ?? null,
+    queryFingerprint,
+  };
+  const checkpointStore = createFileAcquireCheckpointStore();
+  const localCheckpoint = await checkpointStore.get(checkpointKey);
+  const hostedRead = await readHostedAcquireCheckpoint(acquireCheckpointId(checkpointKey));
+  const hostedRecord = hostedRead.status === "found" ? hostedRead.record : null;
+  const hostedVersion = hostedRecord?.version ?? null;
+  // Once paired, hosted state lets another authenticated worker resume this
+  // audience. A newer offline local checkpoint is still preserved and pushed
+  // with CAS; otherwise hosted wins. Legacy run telemetry is a one-time
+  // migration source only when neither dedicated store has this exact key.
+  let persisted = localCheckpoint?.continuation;
+  if (
+    hostedRecord &&
+    (!localCheckpoint || hostedRecord.updatedAt >= Date.parse(localCheckpoint.updatedAt))
+  ) {
+    persisted = hostedRecord.checkpoint;
+    if (persistCheckpoint) {
+      await checkpointStore.put(
+        checkpointKey,
+        {
+          cursor: hostedRecord.checkpoint.cursor,
+          offset: hostedRecord.checkpoint.offset,
+          exhausted: hostedRecord.checkpoint.exhausted,
+        },
+        new Date(hostedRecord.updatedAt),
       );
     }
-    const provider = createLinkedInProvider(disc.provider, providerKey("heyreach"));
-    prospects = await discoverLinkedInProspects(provider, { sourceId: listId, max: size });
-  } else {
-    throw new Error(`enrich acquire: unknown discovery provider "${disc.provider}" (explorium | pipe0 | linkedin).`);
+  }
+  const prior = priorRun?.acquireTelemetry?.discovery;
+  const resume = persisted ?? (
+    prior?.queryFingerprint === queryFingerprint
+      ? { cursor: prior.cursor, offset: prior.offset, exhausted: prior.exhausted }
+      : undefined
+  );
+  let cursor = resume?.cursor ?? null;
+  let offset = resume?.offset ?? 0;
+  let exhausted = resume?.exhausted ?? false;
+  let discovered = 0;
+  let qualified = 0;
+  let skippedCrm = 0;
+  let skippedSeen = 0;
+  const prospects: Prospect[] = [];
+  const crmKeys = crmContactKeys(snapshot);
+  const runSeen = new Set(seen);
+
+  // Pull successive pages until we have enough fresh candidates or hit the
+  // bounded scan ceiling. Page size follows the remaining target, so advancing
+  // a cursor never silently discards unused candidates from the final page.
+  while (prospects.length < targetFresh && discovered < scanLimit && !exhausted) {
+    // Cursor/offset providers can shrink the final request exactly. Explorium
+    // uses page numbers, so keep page_size stable or page boundaries would
+    // overlap/skip as the number of fresh candidates changes.
+    const requestSize = Math.max(1, Math.min(
+      100,
+      disc.provider === "explorium" ? targetFresh : targetFresh - prospects.length,
+      scanLimit - discovered,
+    ));
+    let page: Prospect[];
+    let exploriumPage: number | null = null;
+    if (disc.provider === "pipe0") {
+      const result = await fetchPipe0CrustdataProspectPage({
+        apiKey: providerKey("pipe0"), filters, limit: requestSize, cursor: cursor ?? undefined,
+      });
+      page = result.prospects;
+      cursor = result.nextCursor;
+      exhausted = result.nextCursor === null;
+    } else if (disc.provider === "clay") {
+      if (!cursor) {
+        progress.note("creating Clay people-search iterator");
+        cursor = await createClaySearch({
+          apiKey: providerKey("clay"), sourceType: "people", filters,
+        });
+      }
+      const result = await runClayPeopleSearchPage({
+        apiKey: providerKey("clay"), searchId: cursor, limit: requestSize,
+      });
+      page = result.prospects;
+      offset += page.length;
+      exhausted = !result.hasMore;
+    } else if (disc.provider === "explorium") {
+      const pageNumber = offset + 1;
+      exploriumPage = pageNumber;
+      page = await fetchExploriumProspects({
+        apiKey: providerKey("explorium"),
+        filters: filters as Record<string, { values?: string[]; value?: boolean }>,
+        size: requestSize,
+        page: pageNumber,
+      });
+      exhausted = page.length < requestSize;
+    } else if (disc.provider === "linkedin" || disc.provider === "heyreach") {
+      const provider = createLinkedInProvider(disc.provider, providerKey("heyreach"));
+      page = await discoverLinkedInProspects(provider, {
+        sourceId: listId, max: requestSize, cursor: String(offset),
+      });
+      offset += page.length;
+      exhausted = page.length < requestSize;
+    } else {
+      throw new Error(`enrich acquire: unknown discovery provider "${disc.provider}" (clay | explorium | pipe0 | linkedin).`);
+    }
+    discovered += page.length;
+    progress.items(discovered, scanLimit);
+    if (page.length === 0) {
+      exhausted = true;
+      break;
+    }
+    let fitted = page;
+    if (icp) {
+      const threshold = fitThreshold(icp);
+      fitted = page
+        .map((p) => ({ ...p, fitScore: scoreProspectAgainstIcp(p, icp).score }))
+        .filter((p) => (p.fitScore ?? 0) >= threshold);
+    }
+    qualified += fitted.length;
+    const partition = partitionFreshProspects(fitted, crmKeys, runSeen);
+    skippedCrm += partition.skippedCrm;
+    skippedSeen += partition.skippedSeen;
+    const remainingTarget = targetFresh - prospects.length;
+    for (const prospect of partition.fresh) {
+      if (prospects.length >= targetFresh) break;
+      prospects.push(prospect);
+      for (const key of prospectIdentityKeys(prospect)) runSeen.add(key);
+    }
+    progress.note(
+      `${discovered} scanned · ${qualified} qualified · ${prospects.length}/${targetFresh} fresh`,
+    );
+    // Explorium is page-number based. Only advance after consuming every fresh
+    // candidate on that page; otherwise the next run safely re-reads the page
+    // and CRM/seen dedupe exposes the remainder instead of losing it.
+    if (exploriumPage !== null && partition.fresh.length <= remainingTarget) offset = exploriumPage;
   }
 
-  // Surface a zero-discovery result LOUDLY rather than emit a silent empty plan.
-  // A provider that returns 0 with no error usually means an over-narrow ICP
-  // filter (most often the industry/seniority vocab) — not "no market exists".
-  const discoveredCount = prospects.length;
-  if (discoveredCount === 0) {
+  if (discovered === 0 && !resume) {
     console.error(
       `enrich acquire: ${disc.provider} discovered 0 prospects for this ICP — the plan will be empty. ` +
         "This is usually an over-narrow filter, not an empty market: check the ICP's industry and seniority " +
@@ -558,43 +743,50 @@ async function acquireFromApi(
         "generated discovery filters. (Distinct from dedup: nothing was returned to filter.)",
     );
   }
-
-  // 2. ICP fit scoring BEFORE paying for emails — only above-threshold prospects
-  //    proceed to (credit-spending) email resolution.
-  if (icp) {
-    const threshold = fitThreshold(icp);
-    prospects = prospects
-      .map((p) => ({ ...p, fitScore: scoreProspectAgainstIcp(p, icp).score }))
-      .filter((p) => (p.fitScore ?? 0) >= threshold);
-    if (discoveredCount > 0 && prospects.length === 0) {
+  if (icp && discovered > 0 && qualified === 0) {
       console.error(
-        `enrich acquire: all ${discoveredCount} discovered prospect(s) scored below the ICP fit threshold ` +
+        `enrich acquire: all ${discovered} discovered prospect(s) scored below the ICP fit threshold ` +
           `(${fitThreshold(icp)}) — none qualified. Loosen the ICP persona or lower scoring.threshold.`,
       );
-    }
   }
 
-  // 2.5 Pre-email dedup — drop prospects already in the CRM (name+domain match
-  //     vs the snapshot) or already processed in a prior run (the seen cache),
-  //     BEFORE paying pipe0 for emails. The email-level dedup (buildAcquirePlan)
-  //     and apply-time resolve-first remain the precise backstop.
-  const { fresh, skippedCrm, skippedSeen } = partitionFreshProspects(prospects, crmContactKeys(snapshot), seen);
-  prospects = fresh;
+  progress.stage(ACQUIRE_STAGES[1], 1, ACQUIRE_STAGES.length);
+  progress.note("checking work-email requirements");
 
-  // 3. Resolve real work emails. Triggered either when email IS the dedupe key
-  //    (Explorium's email is hashed, Crustdata returns none) or when a source
-  //    that keys on something else opts in via `resolveEmailsWith: "pipe0"`
-  //    (e.g. LinkedIn keys on the profile URL but still wants outreach emails).
-  //    pipe0 waterfall, chunked; resolves from name + company domain/name.
-  if (matchKey === "email" || disc.resolveEmailsWith === "pipe0") {
-    // The waterfall needs a company DOMAIN; LinkedIn/HeyReach lists carry only
-    // names. Resolve domains first (pipe0 company:identity) so resolution can
-    // actually land — without it, name-only resolution fails for every lead.
-    if (prospects.some((p) => !p.companyDomain && p.companyName)) {
-      prospects = await pipe0ResolveCompanyDomains({ apiKey: providerKey("pipe0"), prospects });
+  // 3. Resolve contact fields through the ordered, fill-only waterfall. Keep
+  // legacy behavior: email-keyed acquisition and resolveEmailsWith=pipe0 imply
+  // a Pipe0 work-email step when no explicit waterfall is configured.
+  const implicitPipe0 = matchKey === "email" || disc.resolveEmailsWith === "pipe0";
+  const contactWaterfall: ContactWaterfallStep[] = disc.contactWaterfall ?? (
+    implicitPipe0 ? [{ provider: "pipe0", fields: ["work_email"] }] : []
+  );
+  if (contactWaterfall.length > 0) {
+    const adapters: Record<string, ContactProviderAdapter> = {
+      pipe0: {
+        provider: "pipe0",
+        resolve: async (candidates, fields) => {
+          let resolved = candidates;
+          if (fields.includes("work_email") && resolved.some((p) => !p.companyDomain && p.companyName)) {
+            progress.note(`resolving company domains for ${resolved.length} candidate(s)`);
+            resolved = await pipe0ResolveCompanyDomains({ apiKey: providerKey("pipe0"), prospects: resolved });
+          }
+          if (fields.includes("work_email")) {
+            progress.note(`resolving work emails with pipe0 for ${resolved.length} candidate(s)`);
+            resolved = await pipe0ResolveWorkEmails({ apiKey: providerKey("pipe0"), prospects: resolved });
+          }
+          return resolved;
+        },
+      },
+    };
+    const result = await runContactWaterfall({ prospects, steps: contactWaterfall, adapters });
+    prospects.splice(0, prospects.length, ...result.prospects);
+    for (const attempt of result.attempts) {
+      const added = Object.entries(attempt.added).map(([field, count]) => `${count} ${field}`).join(", ") || "0 fields";
+      progress.note(`${attempt.provider}: ${attempt.attempted} attempted · ${added} added`);
     }
-    prospects = await pipe0ResolveWorkEmails({ apiKey: providerKey("pipe0"), prospects });
   }
+  progress.items(prospects.length, prospects.length);
+  progress.note(`${prospects.length} candidate(s) ready for planning`);
 
   const processedKeys = prospects.flatMap(prospectIdentityKeys);
   const records = prospects
@@ -608,7 +800,60 @@ async function acquireFromApi(
       };
     })
     .filter((record) => Boolean(record.keys[matchKey]));
-  return { records, skippedCrm, skippedSeen, processedKeys };
+  const discovery = { queryFingerprint, cursor, offset, exhausted };
+  return {
+    records,
+    skippedCrm,
+    skippedSeen,
+    processedKeys,
+    telemetry: {
+      funnel: {
+        discovered,
+        qualified,
+        skippedCrm,
+        skippedSeen,
+        resolved: records.length,
+        proposed: 0,
+        withheldByMeter: 0,
+      },
+      discovery,
+    },
+    checkpointKey,
+    hostedVersion,
+  };
+}
+
+/** Commit continuation only after the saved plan/run is durable. */
+async function persistAcquireCheckpoint(
+  key: AcquireCheckpointKey,
+  discovery: NonNullable<EnrichRun["acquireTelemetry"]>["discovery"],
+  hostedVersion: number | null,
+): Promise<void> {
+  const store = createFileAcquireCheckpointStore();
+  await store.put(key, {
+    cursor: discovery.cursor,
+    offset: discovery.offset,
+    exhausted: discovery.exhausted,
+  });
+  const hostedWrite = await writeHostedAcquireCheckpoint(
+    acquireCheckpointId(key),
+    discovery,
+    hostedVersion,
+  );
+  if (hostedWrite.status === "conflict" && hostedWrite.current) {
+    const current = hostedWrite.current.checkpoint;
+    await store.put(
+      key,
+      { cursor: current.cursor, offset: current.offset, exhausted: current.exhausted },
+      new Date(hostedWrite.current.updatedAt),
+    );
+    console.error(
+      "Acquisition checkpoint advanced concurrently in the hosted workspace; " +
+        "the newer hosted continuation was kept locally for the next run.",
+    );
+  } else if (hostedWrite.status === "unavailable") {
+    console.error(`Hosted checkpoint sync unavailable; local continuation retained (${hostedWrite.reason}).`);
+  }
 }
 
 /**
@@ -649,6 +894,66 @@ function formatAcquireMeter(headroom: AcquireRemaining, costPerRecord: number): 
     `Spend left: ${money(headroom.spendUsd.day)}/day, ${money(headroom.spendUsd.month)}/month ` +
     `(≈$${costPerRecord.toFixed(2)}/lead).`
   );
+}
+
+function printAcquireOutput(options: {
+  args: readonly string[];
+  result: ReturnType<typeof buildAcquirePlan>;
+  meter: AcquireRemaining;
+  meterLine: string;
+  gaugeLine: string | null;
+  /** The acquisition run/checkpoint was persisted. */
+  saved: boolean;
+  /** A non-empty plan was persisted to the plan store. */
+  planSaved: boolean;
+  hostedPlanUrl: string | null;
+}): void {
+  const { args, result, meter, meterLine, gaugeLine, saved, planSaved, hostedPlanUrl } = options;
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({
+      plan: result.plan,
+      counts: result.counts,
+      estCostUsd: result.estCostUsd,
+      meter,
+      persistence: {
+        runSaved: saved,
+        planSaved,
+        planId: planSaved ? result.plan.id : null,
+        hostedPlanUrl,
+      },
+    }, null, 2));
+    return;
+  }
+
+  if (verbosePlanRequested(args)) {
+    console.log(patchPlanToMarkdown(result.plan));
+    console.log(`\nAcquisition`);
+    console.log(`  Leads      ${result.counts.created} net-new · ${result.counts.unassigned} unassigned`);
+    console.log(`  Est. cost  $${result.estCostUsd.toFixed(2)}`);
+    console.log(`  Budget     ${gaugeLine ?? meterLine}`);
+    if (hostedPlanUrl) console.log(`  Plan       ${hostedPlanUrl}`);
+  } else if (planSaved || !saved) {
+    console.log(compactPlan(result.plan, { saved: planSaved }));
+    console.log(meterLine);
+    if (gaugeLine) console.log(gaugeLine);
+  } else {
+    console.log(meterLine);
+    if (gaugeLine) console.log(gaugeLine);
+    console.log("No net-new leads to create (everything sourced already matched, or was withheld by the meter).");
+  }
+
+  if (planSaved) {
+    console.log(`\nApprove  fullstackgtm plans approve ${result.plan.id} --operations all`);
+    console.log(`Apply    fullstackgtm apply --plan-id ${result.plan.id} --provider <hubspot|salesforce>`);
+    const hostedRuns = hostedRunsUrl();
+    if (hostedRuns) console.log(`Observe  ${hostedRuns}`);
+    console.log("The meter is charged only when a create lands at apply.");
+  }
+}
+
+function hostedRunsUrl(): string | null {
+  const baseUrl = getCredential("broker")?.baseUrl?.replace(/\/+$/, "");
+  return baseUrl ? `${baseUrl}/dashboard/runs` : null;
 }
 
 function resolveEnrichSource(config: EnrichConfig, rest: string[]): string {
@@ -702,7 +1007,7 @@ function apolloApiKey(): string {
 async function openEnrichRun(
   store: EnrichRunStore,
   source: string,
-  mode: "append" | "refresh",
+  mode: "append" | "refresh" | "acquire",
   requestedLabel: string | null,
   today: string,
 ): Promise<EnrichRun> {
@@ -861,6 +1166,7 @@ async function enrichStatus(store: EnrichRunStore, rest: string[], configFile: s
         startedAt: last.startedAt,
         completedAt: last.completedAt,
         counts: last.counts,
+        acquireTelemetry: last.acquireTelemetry,
         planIds: last.planIds,
       },
       interrupted: interrupted.map((run) => ({ runLabel: run.runLabel, cursor: run.cursor })),
@@ -888,6 +1194,20 @@ async function enrichStatus(store: EnrichRunStore, rest: string[], configFile: s
         ` ${last.counts.ambiguous} ambiguous, ${last.counts.opsEmitted} ops` +
         (last.planIds.length ? ` · plans: ${last.planIds.join(", ")}` : ""),
     );
+    if (last.acquireTelemetry) {
+      const f = last.acquireTelemetry.funnel;
+      const d = last.acquireTelemetry.discovery;
+      console.log(
+        `  funnel: ${f.discovered} discovered → ${f.qualified} qualified → ` +
+          `${f.resolved} resolved → ${f.proposed} proposed` +
+          ` · skipped ${f.skippedCrm} CRM + ${f.skippedSeen} seen` +
+          (f.withheldByMeter ? ` · ${f.withheldByMeter} meter-withheld` : ""),
+      );
+      console.log(
+        `  audience: ${d.exhausted ? "exhausted" : "continuing"}` +
+          `${d.cursor ? " · cursor saved" : d.offset ? ` · offset ${d.offset}` : ""}`,
+      );
+    }
     for (const run of entry.interrupted) {
       console.log(`  interrupted: ${run.runLabel} at cursor ${run.cursor ?? "(start)"} — re-run with --save to resume`);
     }

@@ -164,6 +164,7 @@ export async function connectorFor(
 export async function readSnapshot(
   args: string[],
   progress?: ProgressEmitter,
+  options: { persistProgress?: boolean } = {},
 ): Promise<CanonicalGtmSnapshot> {
   const provider = option(args, "--provider");
   if (provider) {
@@ -189,7 +190,7 @@ export async function readSnapshot(
     try {
       return await connector.fetchSnapshot();
     } finally {
-      renderer.done();
+      renderer.done({ persist: options.persistProgress });
     }
   }
   if (args.includes("--demo")) {

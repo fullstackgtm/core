@@ -12,6 +12,18 @@ import { loadIcp, numericOption, option, readSnapshot, resolveLlmBaseUrls, saveR
 import { createStatusLine } from "./ui.ts";
 import { unknownSubcommandError } from "./suggest.ts";
 
+function renderJudgeDecisions(decisions: Awaited<ReturnType<typeof judgeSignals>>): string {
+  if (decisions.length === 0) return "No accounts cleared the score threshold.";
+  const lines = [`ICP decisions (${decisions.length})`, ""];
+  for (const decision of decisions) {
+    const target = decision.contact?.email || decision.contact?.title;
+    lines.push(`${decision.decision.toUpperCase().padEnd(7)} ${String(decision.score).padStart(3)}  ${decision.accountDomain}${target ? ` · ${target}` : ""}`);
+    if (decision.whyNow) lines.push(`            ${decision.whyNow.replace(/\s+/g, " ").trim()}`);
+    if (decision.play) lines.push(`            Next: ${decision.play.replace(/\s+/g, " ").trim()}`);
+  }
+  return lines.join("\n");
+}
+
 
 /**
  * `icp` — develop and inspect the Ideal Customer Profile that targets acquire.
@@ -158,7 +170,7 @@ ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.
     decisions = decisions.filter((d) => d.score >= minScore);
 
     // 5) Ranked decisions to stdout (JSON), guidance to stderr.
-    console.log(JSON.stringify(decisions, null, 2));
+    console.log(rest.includes("--json") || rest.includes("--verbose") ? JSON.stringify(decisions, null, 2) : renderJudgeDecisions(decisions));
     console.error(
       `Judged ${unjudged.length} signal(s) across ${new Set(decisions.map((d) => d.accountDomain)).size} account(s): ` +
         `${decisions.filter((d) => d.decision === "send").length} send, ` +

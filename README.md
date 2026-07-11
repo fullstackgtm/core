@@ -192,6 +192,7 @@ echo "$PIPE0_API_KEY" | fullstackgtm login pipe0            # discovery + work-e
 
 fullstackgtm enrich acquire --provider hubspot              # zero-config: ICP → discover → score → dedup → dry-run diff
 fullstackgtm enrich acquire --provider hubspot --max 25 --save   # cap the batch, persist the needs_approval plan
+fullstackgtm enrich acquire --provider hubspot --max 25 --scan-limit 500 --save # scan through duplicate-heavy pages for 25 fresh leads
 fullstackgtm plans approve <id> --operations all
 fullstackgtm apply --plan-id <id> --provider hubspot        # the only step that creates contacts
 ```
@@ -205,6 +206,53 @@ The **ICP** (`icp.json`) is the single targeting artifact: it generates each pro
 - Two more checkpoints stay precise: the email-level match at plan build, and **resolve-first at apply** (re-checks the live CRM, never double-creates, never charges the meter).
 
 Every run is **metered**: a per-profile budget caps both record count and provider spend (per-day + per-month, whichever binds first), charged only for creates that actually land. `enrich acquire` runs with just an `icp.json` and a `login` — sensible defaults for budget, provider, and create-mapping ship in the box.
+
+Discovery continuation is profile-scoped and independently keyed by the exact
+provider, source, list, and ICP query. Scheduled runs resume the saved Pipe0
+cursor or HeyReach offset instead of rereading page one, even when several
+lists alternate. When the CLI is paired, this non-PII checkpoint is mirrored
+to the hosted organization with compare-and-swap so another authenticated
+worker can resume without moving a newer cursor backwards. `--max` is the desired net-new plan size;
+`--scan-limit` independently bounds raw candidates scanned after ICP filtering
+and dedupe. `enrich status --runs` exposes the full funnel and whether the
+audience is continuing or provider-confirmed exhausted.
+
+When paired, every saved plan is also mirrored into the hosted Patch Plans
+review queue and the CLI prints its exact deep-link. The mirror is immutable
+and organization-scoped: replaying the same plan is idempotent, while the same
+id with different content is rejected. Hosted reviewers can approve or reject;
+the plan is executable from any synchronized surface with a compatible CRM
+connection. A CLI-created plan can be applied in hosted, and a hosted approval
+can be applied from the CLI—the plan's origin does not permanently own it.
+
+This is local-first replication, not remote control. The local plan store works
+offline, and plan commands perform a best-effort hosted check-in. Run
+`fullstackgtm plans sync` to explicitly exchange every plan's latest approval,
+execution claim, status, and receipts. If hosted applies while the CLI is
+offline, the next check-in imports the exact per-operation results and marks
+the local plan applied. If the CLI applies while hosted is unavailable, it
+keeps the result locally and uploads the receipt on a later check-in.
+
+Before either surface writes, it verifies the immutable plan hash, selected
+operation ids, current approval revision, connector capability, and provider
+state. Online replicas use a short-lived execution claim to coordinate; stable
+operation ids, resolve-before-create, compare-and-set guards, and provider
+readback protect offline retries. Receipts record each operation as `applied`,
+`skipped`, or `failed`, plus provider record ids when available, so another
+replica learns what happened rather than inferring it from plan status. A
+conflicting plan body or approval revision is surfaced for review and is never
+merged by expanding authority.
+
+Interactive command output is decision-first by default: compact cards show
+status, selected scope, expected effect, per-record outcomes, hosted links, and
+the next safe command. Use `--verbose` on supported human-facing commands for
+the complete findings/evidence/payload document; use `--json` for the stable
+machine-readable contract. Progress and warnings remain on stderr, while JSON
+and requested report data remain clean on stdout.
+
+Local signing keys and HMAC digests never upload. Operation before/after values
+do upload to the paired organization because they are required for informed
+review and hosted execution.
 
 **Discovery sources** are zero-config presets behind `--source`: `explorium` and `pipe0` run ICP-driven people search, while `linkedin` (Phase 1 — discovery + dry-run) reads a pre-built **HeyReach** lead list:
 

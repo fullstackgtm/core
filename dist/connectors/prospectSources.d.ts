@@ -32,6 +32,18 @@ export type Prospect = {
     linkedin?: string;
     /** real work email once resolved (pipe0); never the hashed value */
     email?: string;
+    /** Validated mobile number when a contact provider explicitly returns one. */
+    mobile?: string;
+    /** Validated business direct dial when distinct from mobile. */
+    directDial?: string;
+    /** Person geography returned by identity-search providers. */
+    location?: {
+        city?: string;
+        state?: string;
+        region?: string;
+        country?: string;
+        countryCode?: string;
+    };
     /** ICP fit score 0..1, set by the acquire scorer */
     fitScore?: number;
     /** provider-native id for traceability */
@@ -46,6 +58,8 @@ export declare function fetchExploriumProspects(opts: {
     apiKey: string;
     filters: ExploriumFilters;
     size?: number;
+    /** One-based result page. */
+    page?: number;
     apiBaseUrl?: string;
     fetchImpl?: FetchImpl;
 }): Promise<Prospect[]>;
@@ -53,9 +67,30 @@ export declare function fetchPipe0CrustdataProspects(opts: {
     apiKey: string;
     filters: Record<string, unknown>;
     limit?: number;
+    /** Opaque cursor returned by a previous page. */
+    cursor?: string;
     apiBaseUrl?: string;
     fetchImpl?: FetchImpl;
 }): Promise<Prospect[]>;
+/** A page from pipe0/Crustdata's cursor-based people search. */
+export type Pipe0CrustdataProspectPage = {
+    prospects: Prospect[];
+    /** Opaque cursor for the next page, or null when the search is exhausted. */
+    nextCursor: string | null;
+};
+/**
+ * Fetch one page and expose its continuation cursor. The array-returning
+ * `fetchPipe0CrustdataProspects` remains available for existing consumers.
+ */
+export declare function fetchPipe0CrustdataProspectPage(opts: {
+    apiKey: string;
+    filters: Record<string, unknown>;
+    limit?: number;
+    /** Opaque cursor returned by a previous page. */
+    cursor?: string;
+    apiBaseUrl?: string;
+    fetchImpl?: FetchImpl;
+}): Promise<Pipe0CrustdataProspectPage>;
 export declare const EXPLORIUM_BUSINESS_COUNT_CAP = 60000;
 export type BusinessCountProbe = {
     /** matching companies (the account universe); == cap when saturated. */

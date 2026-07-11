@@ -216,6 +216,19 @@ export function createFilePlanStore(directory) {
                 });
             });
         },
+        async recordHostedClaim(planId, claimId, hostedClaimId) {
+            return withPlanLock(planId, () => {
+                const stored = mustRead(planId);
+                if (stored.status !== "applying" || stored.applyClaim?.id !== claimId) {
+                    throw new Error(`Refusing to attach hosted claim for plan ${planId}: local apply claim does not match.`);
+                }
+                return write({
+                    ...stored,
+                    applyClaim: { ...stored.applyClaim, hostedClaimId },
+                    applyAttempts: (stored.applyAttempts ?? []).map((attempt) => attempt.id === claimId ? { ...attempt, hostedClaimId } : attempt),
+                });
+            });
+        },
         async abortApplyPreflight(planId, claimId, note) {
             return withPlanLock(planId, () => {
                 const stored = mustRead(planId);
@@ -264,6 +277,66 @@ export function createFilePlanStore(directory) {
                         ? { ...attempt, status: "uncertain", resolvedAt: new Date().toISOString(), note: "Operator acknowledged uncertain provider state; approval cleared before any retry." }
                         : attempt),
                 });
+            });
+        },
+        async reconcileReplica(planId, remote) {
+            return withPlanLock(planId, () => {
+                const stored = mustRead(planId);
+                if (stored.status === "applying" || stored.applyClaim) {
+                    throw new Error(`Plan ${planId} is applying locally; replica reconciliation will retry after it finishes.`);
+                }
+                const known = new Set(stored.plan.operations.map((operation) => operation.id));
+                const approvedOperationIds = Array.from(new Set(remote.approvedOperationIds));
+                if (approvedOperationIds.some((id) => !known.has(id))) {
+                    throw new Error(`Replica state for ${planId} contains an unknown operation.`);
+                }
+                // Terminal receipts are monotonic. A delayed approval or rejection can
+                // never roll an already-applied local replica backwards.
+                if (stored.status === "applied" && remote.status !== "applied") {
+                    return { stored, changed: false };
+                }
+                if (remote.status === "rejected") {
+                    if (stored.status === "rejected")
+                        return { stored, changed: false };
+                    return { stored: write({
+                            ...stored, status: "rejected", approvedOperationIds: [], valueOverrides: {},
+                            approvalDigests: undefined, applyClaim: undefined,
+                        }), changed: true };
+                }
+                if (approvedOperationIds.length === 0) {
+                    throw new Error(`Replica ${remote.status} state for ${planId} has no approved operations.`);
+                }
+                const valueOverrides = remote.valueOverrides ?? {};
+                const approvalDigests = computeApprovalDigests(stored.plan.operations, approvedOperationIds, valueOverrides, loadOrCreateSigningKey());
+                if (remote.status === "approved") {
+                    const unchanged = stored.status === "approved"
+                        && JSON.stringify(stored.approvedOperationIds) === JSON.stringify(approvedOperationIds)
+                        && JSON.stringify(stored.valueOverrides) === JSON.stringify(valueOverrides);
+                    if (unchanged)
+                        return { stored, changed: false };
+                    return { stored: write({
+                            ...stored, status: "approved", approvedOperationIds, valueOverrides, approvalDigests,
+                        }), changed: true };
+                }
+                if (!remote.run || remote.run.planId !== planId) {
+                    throw new Error(`Replica applied state for ${planId} is missing a matching execution receipt.`);
+                }
+                if (remote.run.results.some((result) => !known.has(result.operationId))) {
+                    throw new Error(`Replica execution receipt for ${planId} contains an unknown operation.`);
+                }
+                const runKey = (run) => `${run.startedAt}\0${run.finishedAt}\0${run.provider}`;
+                const alreadyRecorded = stored.runs.some((run) => runKey(run) === runKey(remote.run));
+                if (stored.status === "applied" && alreadyRecorded)
+                    return { stored, changed: false };
+                return { stored: write({
+                        ...stored,
+                        status: "applied",
+                        approvedOperationIds,
+                        valueOverrides,
+                        approvalDigests,
+                        applyClaim: undefined,
+                        runs: alreadyRecorded ? stored.runs : [...stored.runs, remote.run],
+                    }), changed: true };
             });
         },
     };

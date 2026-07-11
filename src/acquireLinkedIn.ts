@@ -49,6 +49,8 @@ export type DiscoverLinkedInOptions = {
   sourceId?: string;
   /** Hard cap on prospects pulled. */
   max?: number;
+  /** Opaque provider continuation cursor. */
+  cursor?: string;
 };
 
 /**
@@ -60,7 +62,7 @@ export async function discoverLinkedInProspects(
   provider: LinkedInProvider,
   options: DiscoverLinkedInOptions = {},
 ): Promise<Prospect[]> {
-  const raw = await provider.fetchProspects({ sourceId: options.sourceId, max: options.max });
+  const raw = await provider.fetchProspects({ sourceId: options.sourceId, max: options.max, cursor: options.cursor });
   return raw.map(linkedInProspectToProspect);
 }
 

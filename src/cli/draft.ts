@@ -9,6 +9,7 @@ import { createFileJudgeStore } from "../judge.ts";
 import { authorOpeners, DEFAULT_DRAFT_PROMPT, DRAFT_CHANNELS, draft, type DraftChannel } from "../draft.ts";
 import type { LlmCallOptions } from "../llm.ts";
 import { numericOption, option, resolveLlmBaseUrls, saveRequested } from "./shared.ts";
+import { compactPlan, verbosePlanRequested } from "./planOutput.ts";
 
 
 /**
@@ -78,7 +79,14 @@ LLM key it emits a clearly-labeled stub rather than fake authored copy.`);
     openers,
   });
 
-  console.log(JSON.stringify({ drafts, rejected }, null, 2));
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({ drafts, rejected }, null, 2));
+  } else if (verbosePlanRequested(args)) {
+    console.log(JSON.stringify({ drafts, rejected }, null, 2));
+    console.log(compactPlan(plan, { saved: save }));
+  } else {
+    console.log(compactPlan(plan, { saved: save }));
+  }
   const stale = drafts.filter((d) => d.staleTrigger);
   console.error(
     `${drafts.length} opener(s) staged as create_task proposals (channel ${channel}, min score ${minScore})` +

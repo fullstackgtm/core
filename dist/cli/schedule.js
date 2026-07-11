@@ -8,6 +8,7 @@ import { computeMissedFirings, createFileScheduleRunStore, createFileScheduleSto
 import { runCli } from "../cli.js";
 import { isOptionValue, numericOption, option } from "./shared.js";
 import { unknownSubcommandError } from "./suggest.js";
+import { colorEnabled, paint, table } from "./ui.js";
 /**
  * The schedule layer: declarative cadences for read/plan-side commands,
  * materialized through a provider (MVP: the user crontab), with an
@@ -113,10 +114,19 @@ trigger: manual. status shows next firing and surfaces missed firings
             console.log('No schedules. Add one with `fullstackgtm schedule add "<command>" --cron "<expr>"`.');
             return;
         }
-        for (const entry of withNext) {
-            console.log(`${entry.id}  ${entry.enabled ? "on " : "off"}  ${entry.cron.padEnd(14)} next ${entry.nextFiring ?? "—"}  ${entry.label}: ${entry.argv.join(" ")}`);
-        }
-        console.log("\nEntries are declarative — `schedule install` materializes enabled ones into the crontab.");
+        const p = paint(colorEnabled(process.stdout));
+        const verbose = rest.includes("--verbose");
+        const rows = [
+            ["STATE", "SCHEDULE", "NEXT", ...(verbose ? ["CRON", "COMMAND"] : [])],
+            ...withNext.map((entry) => [
+                entry.enabled ? "on" : "off",
+                `${entry.label} · ${entry.id}`,
+                entry.nextFiring ?? "—",
+                ...(verbose ? [entry.cron, entry.argv.join(" ")] : []),
+            ]),
+        ];
+        console.log(table(rows, [p.dim, null, null]).join("\n"));
+        console.log("\nDeclarative only · run `fullstackgtm schedule install` after changes.");
         return;
     }
     if (subcommand === "remove") {
@@ -251,20 +261,21 @@ trigger: manual. status shows next firing and surfaces missed firings
             const last = entry.lastRun;
             const streak = entry.streak;
             const missed = entry.missedFirings;
-            console.log(`${entry.id}  ${entry.enabled ? "on " : "off"}  ${entry.cron}  ${entry.label}: ${entry.argv.join(" ")}`);
-            console.log(`  next: ${entry.nextFiring ?? "— (disabled)"}`);
+            const verbose = rest.includes("--verbose");
+            const outcome = !last ? "never run" : last.exitCode === 0 ? (last.noopReason ? `no-op · ${last.noopReason}` : "healthy") : `failed · exit ${last.exitCode}`;
+            console.log(`${entry.enabled ? "●" : "○"} ${entry.label} · ${outcome}`);
+            console.log(`  ${entry.id} · next ${entry.nextFiring ?? "— (disabled)"}`);
+            if (verbose)
+                console.log(`  ${entry.argv.join(" ")} · cron ${entry.cron}`);
             if (last) {
                 const artifacts = [
                     ...last.artifacts.planIds.map((planId) => `plan ${planId}`),
                     ...last.artifacts.runLabels.map((runLabel) => `run ${runLabel}`),
                 ];
-                console.log(`  last: ${last.firedAt} (${last.trigger}) exit ${last.exitCode}` +
-                    (last.noopReason ? ` — no-op: ${last.noopReason}` : "") +
-                    (artifacts.length ? ` — ${artifacts.join(", ")}` : ""));
-                console.log(`  streak: ${streak.length} ${streak.outcome}(s)`);
+                console.log(`  last ${last.firedAt} · ${last.trigger} · ${streak.length} ${streak.outcome}${streak.length === 1 ? "" : "s"}${artifacts.length ? ` · ${artifacts.join(", ")}` : ""}`);
             }
             else {
-                console.log("  last: never fired");
+                console.log("  last never fired");
             }
             if (missed.length > 0) {
                 console.log(`  missed: ${missed.length}${entry.missedFiringsCapped ? "+" : ""} expected firing(s) with no run record ` +

@@ -1,4 +1,5 @@
 export { auditSnapshot, defaultPolicy } from "./audit.js";
+export { acquireCheckpointId, acquireCheckpointsDir, createFileAcquireCheckpointStore, validateAcquireCheckpoint, validateAcquireCheckpointKey, } from "./acquireCheckpoint.js";
 export { matchesTerritory, parseAssignmentPolicy, resolveAssignment, } from "./assign.js";
 export { buildBulkUpdatePlan, isFilterableField, parseWhere } from "./bulkUpdate.js";
 export { buildDedupePlan, dedupeKey } from "./dedupe.js";
@@ -8,8 +9,10 @@ export { accountHierarchyToMarkdown, buildAccountHierarchy, } from "./hierarchy.
 export { buildRelationshipMap, relationshipMapToMarkdown, } from "./relationships.js";
 export { CONFIG_FILE_NAME, loadConfig, mergePolicy, resolveConfiguredRules, rulePackageTrustFromCli, } from "./config.js";
 export { applyPatchPlan } from "./connector.js";
+export { CONTACT_PROVIDER_CAPABILITIES, runContactWaterfall, validateContactWaterfall, } from "./contactProviders.js";
 export { APPLY_STAGES, BACKFILL_STRIPE_STAGES, composeListeners, createProgressEmitter, CRM_SYNC_STAGES, nullProgressEmitter, SNAPSHOT_PULL_STAGES, STRIPE_SNAPSHOT_STAGES, } from "./progress.js";
 export { createHubspotConnector } from "./connectors/hubspot.js";
+export { CLAY_PUBLIC_API_BASE, clayApiKey, createClaySearch, normalizeClayPerson, runClayPeopleSearchPage, validateClayApiKey, } from "./connectors/clay.js";
 export { DEFAULT_LOOPBACK_PORT, DEFAULT_OAUTH_SCOPES, exchangeHubspotCode, refreshHubspotToken, runHubspotLoopbackLogin, validateHubspotToken, } from "./connectors/hubspotAuth.js";
 export { createSalesforceConnector, } from "./connectors/salesforce.js";
 export { pollSalesforceDeviceLogin, refreshSalesforceToken, startSalesforceDeviceLogin, validateSalesforceOrigin, validateSalesforceToken, } from "./connectors/salesforceAuth.js";
@@ -18,6 +21,8 @@ export { buildStripeBackfillPlan, DEFAULT_BACKFILL_MATCH_PROPERTY, } from "./bac
 export { activeProfile, credentialsDir, credentialsPath, DEFAULT_PROFILE, deleteCredential, getCredential, listProfiles, resolveHubspotAccessToken, resolveHubspotConnection, setActiveProfile, storeCredential, } from "./credentials.js";
 export { generateDemoSnapshot } from "./demo.js";
 export { buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, enrichRunId, inferIngestObjectType, ingestKeyValue, latestStamps, loadEnrichConfig, matchSourceRecord, parseCsv, parseEnrichConfig, resolveCrmField, selectStaleWork, sourceValueAt, stagedSourceRecords, staleDaysFor, } from "./enrich.js";
+export { readHostedAcquireCheckpoint, writeHostedAcquireCheckpoint, } from "./hostedAcquireCheckpoint.js";
+export { claimHostedPlanApply, hostedPlanDigest, hostedReviewDocument, readHostedPatchPlan, reconcileHostedPatchPlan, releaseHostedPlanApply, reportHostedPlanLifecycle, uploadHostedPatchPlan } from "./hostedPatchPlan.js";
 export { scaffoldWorkspace, starterEnrichConfig, starterIcp, starterPlaybook, } from "./init.js";
 export { appendCoverage, classifyAccount, classifyCoverage, computeCoverage, coverageCountsFromSnapshot, coveredAccounts, coverageToText, crmCheckableCriteria, deriveAcvFromClosedWon, deriveBuyersPerAccount, estimateTam, loadTamModel, projectEta, readCoverageTimeline, saveTamModel, tamDir, tamReportToMarkdown, } from "./tam.js";
 export { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, } from "./enrichApollo.js";

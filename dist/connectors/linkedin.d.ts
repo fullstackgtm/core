@@ -38,6 +38,8 @@ export type FetchProspectsOptions = {
     sourceId?: string;
     /** Hard cap on prospects returned; also bounds pagination. */
     max?: number;
+    /** Opaque continuation cursor. HeyReach uses the decimal list offset. */
+    cursor?: string;
 };
 export type ConnectionStatus = {
     ok: boolean;

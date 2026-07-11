@@ -13,7 +13,7 @@ import { option } from "./shared.js";
 export function initCommand(args) {
     if (args.includes("--help") || args.includes("-h")) {
         console.log(`Usage:
-  fullstackgtm init [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]
+  fullstackgtm init [--source pipe0|explorium|clay|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]
 
 Scaffolds a workspace so the first acquire/signals/judge/draft commands work:
   icp.json            starter ICP (edit, or rebuild with \`icp interview\`)
@@ -25,8 +25,8 @@ docs/recipes.md for the full play set. Existing files are kept unless --force.`)
         return;
     }
     const source = (option(args, "--source") ?? "pipe0");
-    if (!["pipe0", "explorium", "linkedin"].includes(source)) {
-        throw new Error(`init: --source must be pipe0|explorium|linkedin (got "${source}")`);
+    if (!["pipe0", "explorium", "clay", "linkedin"].includes(source)) {
+        throw new Error(`init: --source must be pipe0|explorium|clay|linkedin (got "${source}")`);
     }
     const provider = (option(args, "--provider") ?? "hubspot");
     if (!["hubspot", "salesforce"].includes(provider)) {

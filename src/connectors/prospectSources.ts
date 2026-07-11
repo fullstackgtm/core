@@ -34,6 +34,12 @@ export type Prospect = {
   linkedin?: string;
   /** real work email once resolved (pipe0); never the hashed value */
   email?: string;
+  /** Validated mobile number when a contact provider explicitly returns one. */
+  mobile?: string;
+  /** Validated business direct dial when distinct from mobile. */
+  directDial?: string;
+  /** Person geography returned by identity-search providers. */
+  location?: { city?: string; state?: string; region?: string; country?: string; countryCode?: string };
   /** ICP fit score 0..1, set by the acquire scorer */
   fitScore?: number;
   /** provider-native id for traceability */
@@ -68,6 +74,8 @@ export async function fetchExploriumProspects(opts: {
   apiKey: string;
   filters: ExploriumFilters;
   size?: number;
+  /** One-based result page. */
+  page?: number;
   apiBaseUrl?: string;
   fetchImpl?: FetchImpl;
 }): Promise<Prospect[]> {
@@ -77,7 +85,7 @@ export async function fetchExploriumProspects(opts: {
   const response = await fetchImpl(`${base}/v1/prospects`, {
     method: "POST",
     headers: { "api_key": opts.apiKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "full", size, page_size: size, page: 1, filters: opts.filters }),
+    body: JSON.stringify({ mode: "full", size, page_size: size, page: opts.page ?? 1, filters: opts.filters }),
   });
   if (!response.ok) {
     throw new ProviderHttpError("Explorium", "prospect search", response.status);
@@ -119,17 +127,44 @@ export async function fetchPipe0CrustdataProspects(opts: {
   apiKey: string;
   filters: Record<string, unknown>;
   limit?: number;
+  /** Opaque cursor returned by a previous page. */
+  cursor?: string;
   apiBaseUrl?: string;
   fetchImpl?: FetchImpl;
 }): Promise<Prospect[]> {
+  return (await fetchPipe0CrustdataProspectPage(opts)).prospects;
+}
+
+/** A page from pipe0/Crustdata's cursor-based people search. */
+export type Pipe0CrustdataProspectPage = {
+  prospects: Prospect[];
+  /** Opaque cursor for the next page, or null when the search is exhausted. */
+  nextCursor: string | null;
+};
+
+/**
+ * Fetch one page and expose its continuation cursor. The array-returning
+ * `fetchPipe0CrustdataProspects` remains available for existing consumers.
+ */
+export async function fetchPipe0CrustdataProspectPage(opts: {
+  apiKey: string;
+  filters: Record<string, unknown>;
+  limit?: number;
+  /** Opaque cursor returned by a previous page. */
+  cursor?: string;
+  apiBaseUrl?: string;
+  fetchImpl?: FetchImpl;
+}): Promise<Pipe0CrustdataProspectPage> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const base = (opts.apiBaseUrl ?? "https://api.pipe0.com").replace(/\/$/, "");
   const limit = Math.min(opts.limit ?? 25, 100);
+  const config: Record<string, unknown> = { limit, filters: opts.filters };
+  if (opts.cursor !== undefined) config.cursor = opts.cursor;
   const response = await fetchImpl(`${base}/v1/searches/run/sync`, {
     method: "POST",
     headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      searches: [{ search_id: "people:profiles:crustdata@1", config: { limit, filters: opts.filters } }],
+      searches: [{ search_id: "people:profiles:crustdata@1", config }],
     }),
   });
   if (!response.ok) {
@@ -137,7 +172,12 @@ export async function fetchPipe0CrustdataProspects(opts: {
   }
   const body = (await response.json()) as {
     results?: Array<Record<string, { value?: unknown }>>;
-    search_statuses?: Array<{ errors?: Array<{ code?: string; message?: string }> }>;
+    next_cursor?: unknown;
+    search_statuses?: Array<{
+      errors?: Array<{ code?: string; message?: string }>;
+      next_cursor?: unknown;
+      cursor?: unknown;
+    }>;
   };
   // Surface upstream provider errors (e.g. CreditBalanceInsufficient) instead of
   // silently returning [] — a throttle/credit failure must not look like "no ICP matches".
@@ -147,7 +187,7 @@ export async function fetchPipe0CrustdataProspects(opts: {
       `pipe0/Crustdata search error: ${upstreamErrors.map((e) => `${e.code ?? "error"}: ${e.message ?? ""}`).join("; ")}`,
     );
   }
-  return (body.results ?? []).map((row) => {
+  const prospects = (body.results ?? []).map((row) => {
     const fullName = strField(row.name);
     const { firstName, lastName } = splitName(fullName);
     return {
@@ -160,6 +200,14 @@ export async function fetchPipe0CrustdataProspects(opts: {
       sourceId: strField(row.profile_url) ?? fullName,
     };
   });
+  // Current pipe0 responses expose `next_cursor` at the top level. Accept the
+  // status-envelope variants too so older deployments remain usable.
+  const status = body.search_statuses?.[0];
+  const rawCursor = body.next_cursor ?? status?.next_cursor ?? status?.cursor;
+  return {
+    prospects,
+    nextCursor: typeof rawCursor === "string" && rawCursor.length > 0 ? rawCursor : null,
+  };
 }
 
 function strField(field: { value?: unknown } | undefined): string | undefined {
@@ -429,7 +477,7 @@ function fieldValue(field: Pipe0Field | undefined): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Pre-email dedup: identity keys shared between prospects and CRM contacts, so
+// Pre-enrichment dedup: identity keys shared between prospects and CRM contacts, so
 // we can drop already-in-CRM / already-seen people BEFORE paying for emails.
 
 function normName(value: string | undefined): string {

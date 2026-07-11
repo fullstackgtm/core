@@ -89,8 +89,8 @@ export declare const BACKFILL_STRIPE_STAGES: readonly ["invoices", "snapshot", "
 /** `backfill runs` — replaying local plan runs + health history to the broker. */
 export declare const RUNS_REPLAY_STAGES: readonly ["runs", "health"];
 export declare const APPLY_STAGES: readonly ["preflight", "operations", "results"];
-/** `enrich acquire` — routing sourced candidate rows into a create plan. */
-export declare const ACQUIRE_STAGES: readonly ["candidates"];
+/** `enrich acquire` — discovery through a governed create plan. */
+export declare const ACQUIRE_STAGES: readonly ["discovery", "resolution", "plan"];
 export declare const MARKET_CAPTURE_STAGES: readonly ["sources", "capture", "classify", "persist"];
 /** No-op emitter for callers that don't care (keeps signatures simple). */
 export declare function nullProgressEmitter(): ProgressEmitter;

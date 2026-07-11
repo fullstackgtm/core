@@ -20,6 +20,7 @@ import { APPLY_STAGES, composeListeners, createProgressEmitter } from "../progre
 import { progressReporter } from "../runReport.js";
 import { confirmRequested, connectorFor, isOptionValue, numericOption, option, readSnapshot, repeatedOption, saveRequested } from "./shared.js";
 import { box, colorEnabled, createProgressRenderer, paint } from "./ui.js";
+import { compactPlan, verbosePlanRequested } from "./planOutput.js";
 /**
  * The resolve gate: exit 0 = safe to create, exit 2 = match found (exists or
  * ambiguous — do NOT blind-create), exit 1 = error. Built for sync jobs and
@@ -101,8 +102,11 @@ async function emitPlan(plan, args) {
     if (args.includes("--json")) {
         console.log(JSON.stringify(plan, null, 2));
     }
-    else {
+    else if (verbosePlanRequested(args)) {
         console.log(patchPlanToMarkdown(plan));
+    }
+    else {
+        console.log(compactPlan(plan, { saved: saveRequested(args) }));
     }
 }
 /**
@@ -170,8 +174,7 @@ export async function reassignCommand(args) {
     for (const plan of plans) {
         if (store)
             await store.save(plan);
-        console.log(`${plan.id}  ${String(plan.operations.length).padStart(3)} operation(s)  ${plan.title}`);
-        console.log(`    ${plan.summary}`);
+        console.log(verbosePlanRequested(args) ? patchPlanToMarkdown(plan) : compactPlan(plan, { saved: Boolean(store) }));
     }
     if (store) {
         console.log(`\nSaved ${plans.length} plan(s). For each: \`fullstackgtm plans show <id>\`, \`fullstackgtm plans approve <id> --operations <ids|all>\`, then \`fullstackgtm apply --plan-id <id> --provider <name>\`.`);

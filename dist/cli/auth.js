@@ -7,6 +7,7 @@ import { activeProfile, credentialsPath, DEFAULT_PROFILE, deleteCredential, getC
 import { activeWorkspaceProfile, readHealthTimeline, summarizeHealth } from "../health.js";
 import { resolveLlmCredential, validateLlmKey } from "../llm.js";
 import { createFilePlanStore } from "../planStore.js";
+import { validateClayApiKey } from "../connectors/clay.js";
 import { isOptionValue, numericOption, option, readPackageInfo, readSecret } from "./shared.js";
 import { box, colorEnabled, paint, scoreColor, sparkline } from "./ui.js";
 /**
@@ -351,6 +352,22 @@ export async function login(args) {
         console.log(`Stored Apollo API key in ${credentialsPath()}. \`fullstackgtm enrich append|refresh\` use it automatically.`);
         return;
     }
+    if (provider === "clay") {
+        rejectArgvSecret(args, "--token", "--key", "--api-key");
+        const key = await readSecret("Clay Public API key");
+        if (!key)
+            throw new Error("No Clay Public API key provided.");
+        if (!args.includes("--no-validate")) {
+            const validation = await validateClayApiKey(key);
+            if (!validation.ok)
+                throw new Error(validation.detail);
+            console.log(validation.detail);
+        }
+        const stamp = new Date().toISOString();
+        storeCredential("clay", { kind: "api_key", accessToken: key, createdAt: stamp, updatedAt: stamp });
+        console.log(`Stored Clay Public API key in ${credentialsPath()}. Clay connector commands resolve it automatically.`);
+        return;
+    }
     if (provider === "pipe0" || provider === "explorium" || provider === "heyreach" || provider === "theirstack") {
         rejectArgvSecret(args, "--token", "--key", "--api-key");
         const key = await readSecret(`${provider} API key`);
@@ -365,7 +382,7 @@ export async function login(args) {
         return;
     }
     if (provider !== "hubspot") {
-        throw new Error("login supports: hubspot, salesforce, stripe, anthropic, openai, apollo, pipe0, explorium, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com");
+        throw new Error("login supports: hubspot, salesforce, stripe, anthropic, openai, apollo, clay, pipe0, explorium, heyreach, theirstack, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com");
     }
     const now = new Date().toISOString();
     rejectArgvSecret(args, "--token");
@@ -450,6 +467,9 @@ export function doctorReport(env = process.env) {
         stripe: env.STRIPE_SECRET_KEY
             ? { source: "env", detail: "STRIPE_SECRET_KEY" }
             : providerStatus("stripe", broker),
+        clay: env.CLAY_API_KEY
+            ? { source: "env", detail: "CLAY_API_KEY" }
+            : providerStatus("clay", null),
     };
     const llm = resolveLlmCredential(env);
     const missingPeers = ["@modelcontextprotocol/sdk", "zod"].filter((name) => {
@@ -461,13 +481,13 @@ export function doctorReport(env = process.env) {
             return true;
         }
     });
-    const connected = Object.entries(providers).filter(([, status]) => status.source !== "none");
-    const nextSteps = connected.length === 0
+    const connectedCrm = ["hubspot", "salesforce"].filter((provider) => providers[provider].source !== "none");
+    const nextSteps = connectedCrm.length === 0
         ? [
             "fullstackgtm audit --demo            # no credentials needed",
             "fullstackgtm login hubspot           # hosted browser OAuth (default; or: login salesforce)",
         ]
-        : [`fullstackgtm audit --provider ${connected[0][0]}`];
+        : [`fullstackgtm audit --provider ${connectedCrm[0]}`];
     return {
         package: packageInfo,
         node: { version: process.versions.node, ok: nodeMajor >= 20, required: ">=20" },
@@ -579,6 +599,31 @@ export async function doctorCommand(args) {
     const healthLine = workspace.auditCount === 0
         ? p.dim("no saved audits yet (fullstackgtm audit --provider <name> --save starts the timeline)")
         : `${scoreColor(workspace.healthScore ?? 0, p)}/100${delta} — ${workspace.auditCount} audit(s) saved, last ${workspace.lastAuditAt}${healthSparkline(workspace.profile, p.enabled)}`;
+    const connectedProviders = Object.entries(report.providers).filter(([, provider]) => provider.source !== "none");
+    const blockers = [
+        ...(!report.node.ok ? [`Node v${report.node.version} is unsupported; install ${report.node.required}.`] : []),
+        ...(connectedProviders.length === 0 ? ["No CRM connected."] : []),
+        ...(workspace.pendingPlans.length > 0 ? [`${workspace.pendingPlans.length} plan${workspace.pendingPlans.length === 1 ? "" : "s"} awaiting approval.`] : []),
+    ];
+    if (!args.includes("--verbose")) {
+        const ready = report.node.ok && connectedProviders.length > 0;
+        const compact = [
+            `${ready ? p.green("Ready") : p.yellow("Setup needed")} · ${report.package.name} ${report.package.version} · profile ${report.profile}`,
+            `CRM       ${connectedProviders.length > 0 ? connectedProviders.map(([name]) => name).join(", ") : "not connected"}`,
+            `Health    ${healthLine}`,
+            `Plans     ${workspace.pendingPlans.length === 0 ? "none awaiting approval" : `${workspace.pendingPlans.length} awaiting approval · ${workspace.pendingPlans[0].id}`}`,
+            ...(blockers.length > 0 ? ["", "Attention", ...blockers.map((blocker) => `  ${blocker}`)] : []),
+            "",
+            "Next",
+            ...nextSteps.map((step) => `  ${step}`),
+            "",
+            "Run `fullstackgtm doctor --verbose` for credential paths and optional tooling checks.",
+        ];
+        console.log(p.enabled ? box(compact, p, "Workspace readiness").join("\n") : compact.join("\n"));
+        if (!report.node.ok)
+            process.exitCode = 1;
+        return;
+    }
     const lines = [
         `Package:    ${p.bold(`${report.package.name} ${report.package.version}`)}`,
         `Node:       v${report.node.version} (${report.node.required} required) ${mark(report.node.ok)}`,

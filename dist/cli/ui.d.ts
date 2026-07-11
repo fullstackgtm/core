@@ -88,14 +88,17 @@ export declare function startElapsedStatus(label: (elapsed: string) => string, s
 };
 export type Checklist = {
     update(id: string, state: "pending" | "running" | "ok" | "warn" | "fail", note?: string): void;
-    /** Stop animating and erase the board (callers print their own summary). */
-    done(): void;
+    /** Stop animating; optionally leave the final board in the terminal history. */
+    done(options?: {
+        persist?: boolean;
+    }): void;
     readonly active: boolean;
 };
 /**
  * A multi-line live board — one line per item, each flipping ○ → ⠹ → ✓ as work
  * progresses (the audit rule registry renders through this). Repaints with
- * cursor-up; erases itself on done() so the verb's real output owns stdout.
+ * cursor-up; done() normally erases it, while done({ persist: true }) leaves a
+ * final static history for multi-phase human workflows.
  */
 export declare function createChecklist(items: Array<{
     id: string;
@@ -107,8 +110,10 @@ export type ProgressRenderer = {
      * listener via `composeListeners` when the run should also heartbeat).
      */
     listener: ProgressListener;
-    /** Stop animating and erase the board (callers print their own summary). */
-    done(): void;
+    /** Stop animating; optionally leave the completed board in terminal history. */
+    done(options?: {
+        persist?: boolean;
+    }): void;
     readonly active: boolean;
 };
 /**

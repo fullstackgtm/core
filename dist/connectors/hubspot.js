@@ -30,6 +30,8 @@ const PULL_STAGE_BY_TYPE = {
 export function createHubspotConnector(options) {
     const baseUrl = (options.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, "");
     const fetchImpl = options.fetchImpl ?? fetch;
+    const maxRetries = options.maxRetries ?? 5;
+    const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     const mappings = options.fieldMappings;
     // create:<Name> dedup within one connector lifetime (one apply run): the
     // search API is eventually consistent, so a just-created company is
@@ -66,28 +68,44 @@ export function createHubspotConnector(options) {
         emitter.items(fetched);
     };
     async function request(path, init = {}) {
-        const token = await options.getAccessToken();
         let response;
-        try {
-            response = await fetchImpl(`${baseUrl}${path}`, {
-                ...init,
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    "Content-Type": "application/json",
-                    ...(init.headers ?? {}),
-                },
-            });
+        for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+            const token = await options.getAccessToken();
+            try {
+                response = await fetchImpl(`${baseUrl}${path}`, {
+                    ...init,
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        "Content-Type": "application/json",
+                        ...(init.headers ?? {}),
+                    },
+                });
+            }
+            catch (error) {
+                const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+                throw new Error(`Cannot reach HubSpot at ${baseUrl}${cause}. Check network access.`);
+            }
+            const retryable = response.status === 429 || response.status >= 500;
+            if (!retryable || attempt === maxRetries)
+                break;
+            await response.text().catch(() => undefined);
+            const retryAfter = response.headers.get("Retry-After");
+            const seconds = retryAfter === null ? NaN : Number(retryAfter);
+            const dateDelay = retryAfter && !Number.isFinite(seconds) ? Date.parse(retryAfter) - Date.now() : NaN;
+            const delayMs = Math.min(30_000, Math.max(0, Number.isFinite(seconds) ? seconds * 1_000 : Number.isFinite(dateDelay) ? dateDelay : 1_000 * 2 ** attempt));
+            const reason = response.status === 429 ? "rate limited" : `temporarily unavailable (${response.status})`;
+            options.progress?.note(`HubSpot ${reason}; retrying in ${Math.ceil(delayMs / 1_000)}s (${attempt + 1}/${maxRetries})`);
+            await sleep(delayMs);
         }
-        catch (error) {
-            const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
-            throw new Error(`Cannot reach HubSpot at ${baseUrl}${cause}. Check network access.`);
-        }
-        if (!response.ok) {
+        if (!response || !response.ok) {
             // Status line only — HubSpot 4xx bodies echo submitted property values
             // (contact emails, company domains) and the request payload, and these
             // errors are persisted into scheduled-run records. Never interpolate it.
-            await response.text().catch(() => undefined);
-            throw new Error(`HubSpot API error ${response.status}. Check the token scopes and request.`);
+            await response?.text().catch(() => undefined);
+            if (response?.status === 429) {
+                throw new Error(`HubSpot rate limit (429) persisted after ${maxRetries} retries. Wait for the portal limit to reset, then retry; no CRM writes were made.`);
+            }
+            throw new Error(`HubSpot API error ${response?.status ?? "unknown"}. Check the token scopes and request.`);
         }
         // DELETE and some association writes return 204 with an empty body.
         const text = await response.text();

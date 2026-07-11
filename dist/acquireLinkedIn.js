@@ -41,7 +41,7 @@ export function linkedInProspectToProspect(lp) {
  * provider is injected so this is fully testable against the fake (no key).
  */
 export async function discoverLinkedInProspects(provider, options = {}) {
-    const raw = await provider.fetchProspects({ sourceId: options.sourceId, max: options.max });
+    const raw = await provider.fetchProspects({ sourceId: options.sourceId, max: options.max, cursor: options.cursor });
     return raw.map(linkedInProspectToProspect);
 }
 /**

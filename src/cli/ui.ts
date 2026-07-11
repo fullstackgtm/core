@@ -286,8 +286,8 @@ export function startElapsedStatus(
 
 export type Checklist = {
   update(id: string, state: "pending" | "running" | "ok" | "warn" | "fail", note?: string): void;
-  /** Stop animating and erase the board (callers print their own summary). */
-  done(): void;
+  /** Stop animating; optionally leave the final board in the terminal history. */
+  done(options?: { persist?: boolean }): void;
   readonly active: boolean;
 };
 
@@ -296,7 +296,8 @@ const NOOP_CHECKLIST: Checklist = { update() {}, done() {}, active: false };
 /**
  * A multi-line live board — one line per item, each flipping ○ → ⠹ → ✓ as work
  * progresses (the audit rule registry renders through this). Repaints with
- * cursor-up; erases itself on done() so the verb's real output owns stdout.
+ * cursor-up; done() normally erases it, while done({ persist: true }) leaves a
+ * final static history for multi-phase human workflows.
  */
 export function createChecklist(
   items: Array<{ id: string; label: string }>,
@@ -323,8 +324,12 @@ export function createChecklist(
       const label = entry.state === "pending" ? p.dim(item.label.padEnd(labelWidth)) : item.label.padEnd(labelWidth);
       return `  ${glyph} ${label}${note}`;
     });
-    const up = painted > 0 ? `\u001b[${painted}A` : "";
-    stream.write(`${up}${lines.map((line) => `\u001b[2K${line}`).join("\n")}\n`);
+    // Keep the cursor on the board's last row while it is live. A trailing
+    // newline on every repaint can scroll the old top row into permanent
+    // history when the board sits at the bottom of the terminal, producing
+    // apparent duplicate/errored frames in terminal captures.
+    const up = painted > 1 ? `\u001b[${painted - 1}A` : "";
+    stream.write(`${up}${lines.map((line) => `\u001b[2K${line}`).join("\n")}`);
     painted = lines.length;
   };
 
@@ -343,16 +348,28 @@ export function createChecklist(
       const entry = states.get(id);
       if (!entry) return;
       entry.state = state;
-      entry.note = note;
+      if (note !== undefined) entry.note = note;
       start();
       render();
     },
-    done() {
+    done(options = {}) {
       if (timer) clearInterval(timer);
       timer = null;
+      if (options.persist) {
+        // The caller's final state update already painted the completed board.
+        // Advance exactly once so subsequent output begins below it.
+        if (painted > 0) stream.write("\n");
+        painted = 0;
+        return;
+      }
       if (painted > 0) {
-        // Erase the board: cursor up over every painted line, clear each.
-        stream.write(`\u001b[${painted}A${"\u001b[2K\n".repeat(painted)}\u001b[${painted}A`);
+        // Erase in place without linefeeds, which could themselves scroll.
+        const up = painted > 1 ? `\u001b[${painted - 1}A` : "";
+        const clear = Array.from({ length: painted }, (_, index) =>
+          `\u001b[2K${index < painted - 1 ? "\u001b[1B" : ""}`,
+        ).join("");
+        const restore = painted > 1 ? `\u001b[${painted - 1}A` : "";
+        stream.write(`${up}${clear}${restore}`);
         painted = 0;
       }
     },
@@ -366,8 +383,8 @@ export type ProgressRenderer = {
    * listener via `composeListeners` when the run should also heartbeat).
    */
   listener: ProgressListener;
-  /** Stop animating and erase the board (callers print their own summary). */
-  done(): void;
+  /** Stop animating; optionally leave the completed board in terminal history. */
+  done(options?: { persist?: boolean }): void;
   readonly active: boolean;
 };
 
@@ -423,8 +440,9 @@ export function createProgressRenderer(
       // larger flow) are ignored by createChecklist's unknown-id no-op.
       if (current) board.update(current, "running", noteFor(event, snapshot));
     },
-    done() {
-      board.done();
+    done(options) {
+      if (current) board.update(current, "ok");
+      board.done(options);
     },
     active: true,
   };

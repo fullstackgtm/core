@@ -24,6 +24,7 @@ export type StoredPlan = {
         id: string;
         claimedAt: string;
         revision: number;
+        hostedClaimId?: string;
     };
     /** Durable journal of apply ownership. An unresolved entry must never be replayed automatically. */
     applyAttempts?: ApplyAttempt[];
@@ -40,6 +41,7 @@ export type ApplyAttempt = {
     resolvedAt?: string;
     /** Deliberately generic: provider errors can contain CRM data or credentials. */
     note?: string;
+    hostedClaimId?: string;
 };
 export interface PlanStore {
     save(plan: PatchPlan): Promise<StoredPlan>;
@@ -51,11 +53,23 @@ export interface PlanStore {
         stored: StoredPlan;
         claimId: string;
     }>;
+    recordHostedClaim(planId: string, claimId: string, hostedClaimId: string): Promise<StoredPlan>;
     recordRun(planId: string, run: PatchPlanRun, claimId: string): Promise<StoredPlan>;
     abortApplyPreflight(planId: string, claimId: string, note: string): Promise<StoredPlan>;
     markApplyUncertain(planId: string, claimId: string): Promise<StoredPlan>;
     recoverApply(planId: string): Promise<StoredPlan>;
+    reconcileReplica(planId: string, remote: ReplicaPlanState): Promise<{
+        stored: StoredPlan;
+        changed: boolean;
+    }>;
 }
+/** A validated lifecycle snapshot received from another plan replica. */
+export type ReplicaPlanState = {
+    status: "approved" | "rejected" | "applied";
+    approvedOperationIds: string[];
+    valueOverrides?: Record<string, unknown>;
+    run?: PatchPlanRun;
+};
 /**
  * Plans as JSON files in a directory (default `$FSGTM_HOME/plans`), one file
  * per plan id. Filesystem-shaped on purpose: greppable, diffable, and any

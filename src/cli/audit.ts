@@ -13,6 +13,7 @@ import { reportCounts, reportCrm, reportFindings } from "../runReport.ts";
 import type { AuditFindingSeverity, CanonicalGtmSnapshot, PatchPlan } from "../types.ts";
 import { connectorFor, numericOption, option, readSnapshot, saveRequested, selectedRules } from "./shared.ts";
 import { colorEnabled, createChecklist, formatCount, paint, scoreColor, sparkline, stylizePlanMarkdown, table, type Paint } from "./ui.ts";
+import { compactPlan, verbosePlanRequested } from "./planOutput.ts";
 
 
 const SEVERITY_RANK: Record<AuditFindingSeverity, number> = {
@@ -258,13 +259,16 @@ export async function audit(args: string[]) {
   }
   if (args.includes("--json")) {
     console.log(JSON.stringify(plan, null, 2));
+  } else if (!verbosePlanRequested(args)) {
+    console.log(compactPlan(plan, { saved: saveRequested(args) }));
+    console.error(`\n${auditNextStep(args, plan)}`);
   } else {
     // Default to the summary view (rule table + counts); the full per-operation
     // dump is opt-in via --full or, for a deliverable, `report`. (dx-punch-list #3)
     // Interactive terminals get the styled rendering; piped output is unchanged.
     console.log(
       stylizePlanMarkdown(
-        patchPlanToMarkdown(plan, { summary: !args.includes("--full") }),
+        patchPlanToMarkdown(plan, { summary: false }),
         paint(colorEnabled(process.stdout)),
       ),
     );

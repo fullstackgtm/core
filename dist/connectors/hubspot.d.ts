@@ -18,6 +18,10 @@ export type HubspotConnectorOptions = {
      * alongside the legacy `onProgress` callback; both are presentation-only.
      */
     progress?: ProgressEmitter;
+    /** Maximum retries for HubSpot 429/5xx responses (default 5). */
+    maxRetries?: number;
+    /** Injectable delay for deterministic retry tests. */
+    sleep?: (milliseconds: number) => Promise<void>;
 };
 /**
  * Reference connector for HubSpot.

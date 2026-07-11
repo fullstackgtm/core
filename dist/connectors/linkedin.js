@@ -85,6 +85,11 @@ export function createHeyReachProvider(options) {
             const max = opts.max ?? Number.POSITIVE_INFINITY;
             const out = [];
             let offset = 0;
+            if (opts.cursor !== undefined) {
+                if (!/^\d+$/.test(opts.cursor))
+                    throw new Error(`Invalid HeyReach cursor: ${opts.cursor}`);
+                offset = Number(opts.cursor);
+            }
             while (out.length < max) {
                 const data = await call("/list/GetLeadsFromList", "POST", { listId, offset, limit: pageSize });
                 const items = toArray(data);

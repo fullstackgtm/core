@@ -20,13 +20,16 @@ Usage:
   fullstackgtm login salesforce --instance-url <url> [--no-validate]  advanced: paste access token
   fullstackgtm login stripe [--no-validate]
   fullstackgtm login anthropic | openai        store an LLM API key for call parse/score
-  fullstackgtm login apollo                    store an Apollo API key for enrich pulls\n  fullstackgtm login pipe0 | explorium | theirstack  store a discovery-provider key (theirstack = technographic TAM)\n  fullstackgtm login heyreach                  store a HeyReach key for enrich acquire --source linkedin\n  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|pipe0|explorium|heyreach|broker>
+  fullstackgtm login apollo | clay             store a data-provider Public API key
+  fullstackgtm login pipe0 | explorium | theirstack  store a discovery-provider key (theirstack = technographic TAM)
+  fullstackgtm login heyreach                  store a HeyReach key for enrich acquire --source linkedin
+  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|clay|pipe0|explorium|heyreach|broker>
 
   Secrets (tokens, client secrets) are NEVER passed as flags — they leak via
   the process list and shell history. Pipe them on stdin or enter them at the
   interactive prompt:
     echo "$HUBSPOT_TOKEN" | fullstackgtm login hubspot --private-token
-  fullstackgtm init [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]
+  fullstackgtm init [--source pipe0|explorium|clay|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]
                                                cold start: scaffold icp.json + enrich.config.json + a
                                                PLAYBOOK wired for this workspace (the CLI ships primitives,
                                                your agent is the orchestrator — see docs/recipes.md)
@@ -76,7 +79,7 @@ Usage:
   fullstackgtm tam estimate [--name <n>] [--icp <path>] (--accounts <n> | --source theirstack|explorium) (--acv <annual-usd> | --acv-from-crm --deal-period monthly|quarterly|annual) [--acv-basis account|buyer] [--buyers-per-account <n>] [--cross-checks <file.json>] [source options] [--json]
   fullstackgtm tam status [--name <n>] <source options> [--save] [--json]
   fullstackgtm tam report [--name <n>] [--out <path>]
-  fullstackgtm tam populate [--name <n>] --cron "<expr>" [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--label <l>]
+  fullstackgtm tam populate [--name <n>] --cron "<expr>" [--source pipe0|explorium|clay|linkedin] [--provider hubspot|salesforce] [--label <l>]
                                                size the reachable market FROM the ICP (a real account count ×
                                                ACV; buyers/account = the contact population target), then fill
                                                it: populate schedules plan-only enrich acquire --save (apply
@@ -180,11 +183,11 @@ Usage:
   fullstackgtm suggest --plan-id <id> | --plan <path>  [source options] [--json] [--out <path>]
                                                derive values for requires_human_* placeholders
                                                from snapshot evidence, with confidence + reasons
-  fullstackgtm plans list [--status <s>] | show <id> | reject <id>
+  fullstackgtm plans list [--status <s>] | show <id> [--verbose] | sync | reject <id>
   fullstackgtm plans approve <id> --operations <ids|all> [--value <opId>=<v>]
   fullstackgtm plans approve <id> --values-from <suggestions.json> [--min-confidence high|low] [--include-creates]
   fullstackgtm plans recover <id> --acknowledge-uncertain-writes
-  fullstackgtm apply --plan-id <id> --provider <name>
+  fullstackgtm apply --plan-id <id> --provider <name> [--verbose|--json]
   fullstackgtm apply --plan-id <id> --channel outbox          (render approved openers; transmits nothing)
   fullstackgtm apply --plan <path> --provider <name> --approve <ids|all> [options]
   fullstackgtm audit-log export [--out <path>] | verify --in <path>   tamper-evident apply-run record
@@ -204,7 +207,11 @@ Profiles (multi-organization use):
 Plan lifecycle:
   audit --save persists the dry-run plan to ~/.fullstackgtm/plans. Approve
   specific operations (optionally with --value <opId>=<v> for placeholders),
-  then apply by id — the store enforces approval and records every run.
+  then apply by id — the store enforces approval and records every run. When
+  paired, local and hosted are replicas of the same immutable plan: either
+  capable surface may approve or apply, and each CLI check-in imports missing
+  approvals and exact operation receipts. Use \`plans sync\` for an explicit
+  check-in; offline changes reconcile later without blocking local work.
 
 Authentication (checked in order):
   1. --token-env <name>        explicit env var for this invocation (hubspot)
@@ -294,7 +301,7 @@ export const HELP: Record<string, HelpEntry> = {
     summary: "scaffold a workspace (icp.json + enrich.config.json + PLAYBOOK)",
     phase: "Setup",
     synopsis: [
-      "fullstackgtm init [--source pipe0|explorium|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]",
+      "fullstackgtm init [--source pipe0|explorium|clay|linkedin] [--provider hubspot|salesforce] [--out <dir>] [--force]",
     ],
     detail:
       "Cold start: writes a starter ICP, an acquire-ready enrich.config.json (with a visible assign seam so leads are never ownerless), and a PLAYBOOK wired with the cold-start + outbound-loop recipes for this workspace. Pure file-writer — no network, keeps existing files unless --force. The CLI ships governed primitives; your coding agent is the orchestrator (see docs/recipes.md).",
@@ -308,7 +315,7 @@ export const HELP: Record<string, HelpEntry> = {
       "fullstackgtm login hubspot | salesforce          hosted browser OAuth (default)",
       "fullstackgtm login --via <hosted url>            pair with a team deployment",
       "fullstackgtm login stripe",
-      "fullstackgtm login anthropic | openai | apollo",
+      "fullstackgtm login anthropic | openai | apollo | clay",
     ],
     detail:
       "HubSpot/Salesforce use hosted browser OAuth by default; BYO app/token paths are advanced. Secrets are NEVER passed as flags — pipe on stdin or enter at the prompt: `echo \"$TOKEN\" | fullstackgtm login hubspot --private-token`.",
@@ -317,7 +324,7 @@ export const HELP: Record<string, HelpEntry> = {
   logout: {
     summary: "remove stored credentials for a provider",
     phase: "Setup",
-    synopsis: ["fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|pipe0|explorium|broker>"],
+    synopsis: ["fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|clay|pipe0|explorium|broker>"],
     seeAlso: ["login", "doctor"],
   },
   doctor: {
@@ -543,27 +550,28 @@ export const HELP: Record<string, HelpEntry> = {
     seeAlso: ["audit", "plans", "apply"],
   },
   plans: {
-    summary: "plan lifecycle: list / show / approve / reject saved plans",
+    summary: "replicated plan lifecycle: list / show / sync / approve / reject",
     phase: "Govern",
     synopsis: [
-      "fullstackgtm plans list [--status <s>] | show <id> | reject <id>",
+      "fullstackgtm plans list [--status <s>] | show <id> [--verbose] | sync | reject <id>",
       "fullstackgtm plans approve <id> --operations <ids|all> [--value <opId>=<v>]",
       "fullstackgtm plans approve <id> --values-from <suggestions.json> [--min-confidence high|low]",
       "fullstackgtm plans recover <id> --acknowledge-uncertain-writes",
     ],
-    detail: "Approval is explicit and per-operation; placeholders need a concrete --value or a suggestion to be approvable.",
+    detail:
+      "Approval is explicit and per-operation; placeholders need a concrete --value or a suggestion to be approvable. When paired, hosted and CLI are eventually consistent replicas of one immutable plan. `plans sync` explicitly exchanges approval revisions, execution state, and exact per-operation receipts; ordinary plan commands also check in best-effort. Either surface may apply when its CRM connector supports the selected operations.",
     seeAlso: ["audit", "suggest", "apply"],
   },
   apply: {
     summary: "write ONLY explicitly approved operations to a provider",
     phase: "Govern / Verify",
     synopsis: [
-      "fullstackgtm apply --plan-id <id> --provider <name>",
+      "fullstackgtm apply --plan-id <id> --provider <name> [--verbose|--json]",
       "fullstackgtm apply --plan-id <id> --channel outbox   (render approved drafted openers to the outbox; transmits nothing)",
       "fullstackgtm apply --plan <path> --provider <name> --approve <ids|all> [--value <opId>=<v>]",
     ],
     detail:
-      "The only verb that mutates a CRM. Writes only operations approved via `plans approve` or `--approve`, with compare-and-set and readback. Never writes requires_human_* placeholders without a --value override.",
+      "The CLI CRM-write verb. Writes only operations approved locally or imported from the shared hosted replica, with an online execution claim when available, stable operation ids, compare-and-set, resolve-before-create, and readback. Default output is a compact outcome card; --verbose prints the full run document and --json preserves structured output. Hosted may execute the same synchronized plan when it has a compatible CRM connection; its exact operation receipts are imported on the next CLI check-in. Never writes requires_human_* placeholders without a --value override.",
     seeAlso: ["plans", "suggest", "audit-log"],
   },
   "audit-log": {
@@ -653,7 +661,7 @@ export const BESPOKE_HELP = ["init", "call", "market", "tam", "enrich", "schedul
 export const GLOBAL_FLAGS = ["--help", "--full"];
 export const GLOBAL_SHORT_FLAGS = ["-h"];
 export const SOURCE_FLAGS = ["--provider", "--token-env", "--input", "--demo", "--sample", "--seed", "--today"];
-export const AUDIT_FLAGS = ["--config", "--allow-plugins", "--no-plugins", "--rules", "--stale-days", "--fail-on", "--save", "--dry-run", "--json", "--out", "--full"];
+export const AUDIT_FLAGS = ["--config", "--allow-plugins", "--no-plugins", "--rules", "--stale-days", "--fail-on", "--save", "--dry-run", "--json", "--out", "--full", "--verbose"];
 
 // Complete per-command flag registry used by runCli's fail-closed flag
 // validation. Keep this next to HELP so focused help, machine capabilities,
@@ -662,7 +670,7 @@ export const COMMAND_FLAGS: Record<string, string[]> = {
   init: ["--source", "--provider", "--out", "--force"],
   login: ["--via", "--hosted", "--private-token", "--token", "--key", "--api-key", "--client-id", "--client-secret", "--scopes", "--port", "--oauth", "--device", "--instance-url", "--login-url", "--no-validate"],
   logout: [],
-  doctor: ["--json"],
+  doctor: ["--verbose", "--json"],
   capabilities: ["--json"],
   "robot-docs": [],
   profiles: ["--json"],
@@ -676,28 +684,28 @@ export const COMMAND_FLAGS: Record<string, string[]> = {
   hierarchy: [...SOURCE_FLAGS, "--json", "--out"],
   relationships: [...SOURCE_FLAGS, "--account-id", "--domain", "--json", "--out"],
   route: [...SOURCE_FLAGS, "--match", "--no-inherit-owner", "--reassign-owned", "--policy", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
-  fix: [...SOURCE_FLAGS, "--config", "--allow-plugins", "--no-plugins", "--rule", "--provider", "--min-confidence", "--include-creates", "--yes", "--confirm", "--dry-run"],
-  "bulk-update": [...SOURCE_FLAGS, "--where", "--set", "--guard", "--require", "--create-task", "--archive", "--force-archive-duplicates", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
-  dedupe: [...SOURCE_FLAGS, "--key", "--keep", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
-  reassign: [...SOURCE_FLAGS, "--from", "--assign-unowned", "--to", "--objects", "--where", "--except-deal-stage", "--include-closed-deals", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
-  backfill: [...SOURCE_FLAGS, "--since", "--pipeline", "--match-property", "--skip-unmatched", "--save", "--dry-run", "--json"],
-  enrich: [...SOURCE_FLAGS, "--config", "--source", "--icp", "--input", "--provider", "--stale-days", "--assign-owner", "--objects", "--max", "--staged-run", "--run-label", "--label", "--runs", "--save", "--dry-run", "--json", "--out"],
-  call: [...SOURCE_FLAGS, "--transcript", "--title", "--source", "--model", "--deterministic", "--heuristics", "--llm", "--json", "--ndjson", "--out", "--call", "--call-type", "--rubric", "--list", "--list-rubrics", "--attendees", "--domain", "--deal", "--save", "--dry-run"],
+  fix: [...SOURCE_FLAGS, "--config", "--allow-plugins", "--no-plugins", "--rule", "--provider", "--min-confidence", "--include-creates", "--yes", "--confirm", "--dry-run", "--verbose"],
+  "bulk-update": [...SOURCE_FLAGS, "--where", "--set", "--guard", "--require", "--create-task", "--archive", "--force-archive-duplicates", "--reason", "--max-operations", "--save", "--dry-run", "--verbose", "--json", "--out"],
+  dedupe: [...SOURCE_FLAGS, "--key", "--keep", "--reason", "--max-operations", "--save", "--dry-run", "--verbose", "--json", "--out"],
+  reassign: [...SOURCE_FLAGS, "--from", "--assign-unowned", "--to", "--objects", "--where", "--except-deal-stage", "--include-closed-deals", "--reason", "--max-operations", "--save", "--dry-run", "--verbose", "--json", "--out"],
+  backfill: [...SOURCE_FLAGS, "--since", "--pipeline", "--match-property", "--skip-unmatched", "--save", "--dry-run", "--verbose", "--json"],
+  enrich: [...SOURCE_FLAGS, "--config", "--source", "--icp", "--input", "--provider", "--list", "--stale-days", "--assign-owner", "--objects", "--max", "--scan-limit", "--staged-run", "--run-label", "--label", "--runs", "--save", "--dry-run", "--verbose", "--json", "--out"],
+  call: [...SOURCE_FLAGS, "--transcript", "--title", "--source", "--model", "--deterministic", "--heuristics", "--llm", "--verbose", "--json", "--ndjson", "--out", "--call", "--call-type", "--rubric", "--list", "--list-rubrics", "--attendees", "--domain", "--deal", "--save", "--dry-run"],
   suggest: [...SOURCE_FLAGS, "--plan-id", "--plan", "--json", "--out"],
-  plans: ["--status", "--operations", "--value", "--values-from", "--min-confidence", "--include-creates", "--acknowledge-uncertain-writes", "--json"],
-  apply: ["--plan", "--plan-id", "--provider", "--channel", "--token-env", "--approve", "--value", "--json", "--config"],
+  plans: ["--status", "--operations", "--value", "--values-from", "--min-confidence", "--include-creates", "--acknowledge-uncertain-writes", "--verbose", "--json"],
+  apply: ["--plan", "--plan-id", "--provider", "--channel", "--token-env", "--approve", "--value", "--verbose", "--json", "--config"],
   "audit-log": ["--in", "--out", "--json"],
   merge: ["--input", "--out", "--json"],
-  market: ["--category", "--config", "--vendor", "--snapshot", "--task-account", "--task-deal", "--capture-run", "--run", "--prior-run", "--diff", "--from", "--calls", "--anchor", "--min-mentions", "--max-claims", "--promote-lift", "--model", "--format", "--auto", "--unverified", "--save", "--dry-run", "--json", "--out"],
-  tam: [...SOURCE_FLAGS, "--source", "--name", "--icp", "--accounts", "--acv", "--acv-basis", "--acv-from-crm", "--deal-period", "--buyers-per-account", "--cross-checks", "--max", "--max-credits", "--usd-per-credit", "--dry-run", "--confirm", "--cron", "--label", "--save", "--json", "--out"],
-  icp: [...SOURCE_FLAGS, "--name", "--signals-from", "--with-history", "--prompt", "--min-score", "--from-judge", "--golden", "--against-outcomes", "--min-accuracy", "--model", "--label", "--save", "--json", "--out"],
-  signals: ["--bucket", "--source", "--connector", "--connector-opt", "--watchlist", "--keywords", "--from", "--label", "--since", "--account", "--contact", "--unjudged", "--touch", "--result", "--save", "--json", "--explain"],
-  draft: ["--from-judge", "--min-score", "--prompt", "--model", "--channel", "--save", "--dry-run", "--json", "--out"],
-  schedule: ["--cron", "--label", "--provider", "--trigger", "--runs", "--json"],
+  market: ["--category", "--config", "--vendor", "--snapshot", "--task-account", "--task-deal", "--capture-run", "--run", "--prior-run", "--diff", "--from", "--calls", "--anchor", "--min-mentions", "--max-claims", "--promote-lift", "--model", "--format", "--auto", "--unverified", "--save", "--dry-run", "--verbose", "--json", "--out"],
+  tam: [...SOURCE_FLAGS, "--source", "--name", "--icp", "--accounts", "--acv", "--acv-basis", "--acv-from-crm", "--deal-period", "--buyers-per-account", "--cross-checks", "--max", "--max-credits", "--usd-per-credit", "--dry-run", "--confirm", "--cron", "--label", "--save", "--verbose", "--json", "--out"],
+  icp: [...SOURCE_FLAGS, "--name", "--signals-from", "--with-history", "--prompt", "--min-score", "--from-judge", "--golden", "--against-outcomes", "--min-accuracy", "--model", "--label", "--save", "--verbose", "--json", "--out"],
+  signals: ["--bucket", "--source", "--connector", "--connector-opt", "--watchlist", "--keywords", "--from", "--label", "--since", "--account", "--contact", "--unjudged", "--touch", "--result", "--save", "--verbose", "--json", "--explain"],
+  draft: ["--from-judge", "--min-score", "--prompt", "--model", "--channel", "--save", "--dry-run", "--verbose", "--json", "--out"],
+  schedule: ["--cron", "--label", "--provider", "--trigger", "--timer", "--runs", "--verbose", "--json"],
 };
 
 export const FLAGS_WITH_VALUES = new Set([
-  "--account", "--account-id", "--accounts", "--acv", "--acv-basis", "--after", "--anchor", "--api-key", "--approve", "--archive", "--assign-owner", "--attendees", "--before", "--bucket", "--buyers-per-account", "--call", "--call-type", "--calls", "--capture-run", "--category", "--channel", "--client", "--client-id", "--client-secret", "--config", "--connector", "--connector-opt", "--contact", "--cron", "--cross-checks", "--deal", "--deal-period", "--diff", "--domain", "--email", "--except-deal-stage", "--format", "--from", "--from-judge", "--golden", "--guard", "--icp", "--in", "--input", "--instance-url", "--keep", "--key", "--keywords", "--label", "--login-url", "--match", "--match-property", "--max", "--max-claims", "--max-credits", "--max-examples", "--max-operations", "--min-accuracy", "--min-confidence", "--min-mentions", "--min-score", "--model", "--name", "--objects", "--operations", "--out", "--pipeline", "--plan", "--plan-id", "--policy", "--port", "--prepared-by", "--prior-run", "--profile", "--promote-lift", "--prompt", "--provider", "--reason", "--require", "--result", "--rubric", "--rule", "--rules", "--run", "--run-label", "--runs", "--scopes", "--seed", "--set", "--signals-from", "--since", "--snapshot", "--source", "--staged-run", "--stale-days", "--status", "--task-account", "--task-deal", "--title", "--to", "--today", "--token", "--token-env", "--touch", "--transcript", "--trigger", "--usd-per-credit", "--value", "--values-from", "--vendor", "--via", "--watchlist", "--where",
+  "--account", "--account-id", "--accounts", "--acv", "--acv-basis", "--after", "--anchor", "--api-key", "--approve", "--archive", "--assign-owner", "--attendees", "--before", "--bucket", "--buyers-per-account", "--call", "--call-type", "--calls", "--capture-run", "--category", "--channel", "--client", "--client-id", "--client-secret", "--config", "--connector", "--connector-opt", "--contact", "--cron", "--cross-checks", "--deal", "--deal-period", "--diff", "--domain", "--email", "--except-deal-stage", "--format", "--from", "--from-judge", "--golden", "--guard", "--icp", "--in", "--input", "--instance-url", "--keep", "--key", "--keywords", "--label", "--list", "--login-url", "--match", "--match-property", "--max", "--max-claims", "--max-credits", "--max-examples", "--max-operations", "--min-accuracy", "--min-confidence", "--min-mentions", "--min-score", "--model", "--name", "--objects", "--operations", "--out", "--pipeline", "--plan", "--plan-id", "--policy", "--port", "--prepared-by", "--prior-run", "--profile", "--promote-lift", "--prompt", "--provider", "--reason", "--require", "--result", "--rubric", "--rule", "--rules", "--run", "--run-label", "--runs", "--scan-limit", "--scopes", "--seed", "--set", "--signals-from", "--since", "--snapshot", "--source", "--staged-run", "--stale-days", "--status", "--task-account", "--task-deal", "--timer", "--title", "--to", "--today", "--token", "--token-env", "--touch", "--transcript", "--trigger", "--usd-per-credit", "--value", "--values-from", "--vendor", "--via", "--watchlist", "--where",
 ]);
 
 // Lifecycle-grouped front door. One line per verb, organized by the

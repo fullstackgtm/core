@@ -94,6 +94,15 @@ replays automatically: reconcile provider state, then `plans recover ...
   translation, prospect fit scoring, and the agent-driven interview spec.
 - `acquireMeter.ts` — per-profile windowed budget (records + spend) for acquire.
 - `acquireSeen.ts` — cross-run "seen" cache so re-runs don't re-pay for dupes.
+- `acquireCheckpoint.ts` — secure profile-scoped, provider/source/list/query-keyed
+  continuation store; each audience advances independently.
+- `hostedAcquireCheckpoint.ts` — optional broker-authenticated checkpoint
+  transport. Organization identity is resolved server-side; numeric CAS
+  revisions prevent stale workers from overwriting newer continuation.
+- `hostedPatchPlan.ts` — best-effort paired-CLI plan mirroring and decision
+  reconciliation. Review documents are immutable/hash-bound; hosted approval
+  becomes executable only after the CLI verifies it and generates local HMAC
+  signatures. Hosted never owns the apply lease for CLI-origin plans.
 - `assign.ts` — `AssignmentPolicy` (fixed / round-robin / territory /
   account-owner): the pure owner-routing rule `buildAcquirePlan` stamps onto new
   leads (never born ownerless) and `reassign --assign-unowned` reuses to backfill.

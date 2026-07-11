@@ -1,6 +1,7 @@
 import type { AcquireBudget } from "./acquireMeter.ts";
 import type { ProgressEmitter } from "./progress.ts";
 import type { AssignmentContext, AssignmentPolicy } from "./assign.ts";
+import { type ContactWaterfallStep } from "./contactProviders.ts";
 import type { CanonicalGtmSnapshot, PatchPlan } from "./types.ts";
 /**
  * The enrich layer: governed append/refresh of third-party data into the CRM.
@@ -83,9 +84,16 @@ export type AcquireCreateMap = {
  * real emails (e.g. explorium discovers, pipe0 resolves the work email).
  */
 export type AcquireDiscoveryConfig = {
-    provider: "explorium" | "pipe0" | "linkedin" | "heyreach";
+    provider: "explorium" | "pipe0" | "clay" | "linkedin" | "heyreach";
+    /** Clay search collection. Phase 1 supports people; companies follows separately. */
+    sourceType?: "people" | "companies";
     filters?: Record<string, unknown>;
     size?: number;
+    /** Maximum raw provider candidates scanned per run while seeking fresh leads. */
+    scanLimit?: number;
+    /** Ordered fill-only contact providers. Later steps receive only unresolved fields. */
+    contactWaterfall?: ContactWaterfallStep[];
+    /** @deprecated Use contactWaterfall. Retained for existing configurations. */
     resolveEmailsWith?: "pipe0";
     /** LinkedIn sources only: the provider-native list id to read (HeyReach lead-list id). */
     listId?: string;
@@ -286,7 +294,46 @@ export declare function selectStaleWork(config: EnrichConfig, runs: EnrichRun[],
     now?: () => Date;
     staleDaysOverride?: number;
 }): EnrichWorkItem[];
-export type EnrichRunMode = EnrichMode | "ingest";
+export type EnrichRunMode = EnrichMode | "ingest" | "acquire";
+/**
+ * Provider continuation state for an acquisition query. The fingerprint binds
+ * a cursor/offset to the ICP + provider filters that produced it, preventing a
+ * changed query from accidentally resuming in the middle of the old audience.
+ */
+export type AcquireDiscoveryCheckpoint = {
+    queryFingerprint: string;
+    /** Opaque provider cursor (Pipe0 and other cursor-based sources). */
+    cursor?: string | null;
+    /** Zero-based provider offset (LinkedIn/HeyReach and other offset sources). */
+    offset?: number | null;
+    /** True only when the provider has positively reported no next page. */
+    exhausted: boolean;
+};
+/**
+ * Truthful acquisition funnel for one run. Each field counts candidates, not
+ * provider requests, making duplicate saturation and resolution loss visible
+ * instead of reporting every run as zero.
+ */
+export type AcquireRunFunnel = {
+    /** Raw candidates returned across all discovery pages scanned this run. */
+    discovered: number;
+    /** Candidates that met the configured ICP threshold. */
+    qualified: number;
+    /** Qualified candidates removed by the CRM pre-email dedupe. */
+    skippedCrm: number;
+    /** Qualified candidates removed by the cross-run seen ledger. */
+    skippedSeen: number;
+    /** Fresh candidates carrying the configured resolve-first key. */
+    resolved: number;
+    /** Governed create operations emitted into the saved/dry-run plan. */
+    proposed: number;
+    /** Otherwise-proposable candidates held back by the acquire meter. */
+    withheldByMeter: number;
+};
+export type AcquireRunTelemetry = {
+    funnel: AcquireRunFunnel;
+    discovery: AcquireDiscoveryCheckpoint;
+};
 export type EnrichRun = {
     id: string;
     runLabel: string;
@@ -298,6 +345,8 @@ export type EnrichRun = {
     /** Resume point for an interrupted pull (last processed pull key). */
     cursor: string | null;
     counts: EnrichCounts;
+    /** Acquisition-only funnel + provider continuation state (absent on legacy runs). */
+    acquireTelemetry?: AcquireRunTelemetry;
     planIds: string[];
     stamps: EnrichStamp[];
     /** Staged source rows (ingest mode only), consumed by append/refresh. */

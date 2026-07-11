@@ -193,6 +193,15 @@ const CRUSTDATA_INDUSTRY: Record<string, string[]> = {
   "financial services": ["Financial Services"],
 };
 
+// Common NAICS groups translated into Crustdata's LinkedIn industry vocabulary.
+// This keeps an ICP authored with provider-neutral NAICS codes from silently
+// dropping its industry constraint on the Pipe0 path.
+const NAICS_CRUSTDATA_INDUSTRY: Record<string, string[]> = {
+  "5112": ["Software Development", "Computer Software"],
+  "5182": ["IT Services and IT Consulting", "Information Technology & Services"],
+  "5415": ["IT Services and IT Consulting", "Information Technology & Services"],
+};
+
 /**
  * pipe0 Crustdata people-search config.filters from the ICP. `current_job_titles`
  * matches real LinkedIn title strings (case-sensitive), so keywords are Title
@@ -219,13 +228,67 @@ export function icpToCrustdataFilters(icp: Icp): Record<string, unknown> {
   if (icp.firmographics.geos?.length) {
     f.locations = icp.firmographics.geos.map((g) => COUNTRY_NAMES[g.toLowerCase()] ?? g);
   }
-  if (icp.firmographics.industries?.length) {
+  if (icp.firmographics.industries?.length || icp.firmographics.naics?.length) {
     const inds = [
-      ...new Set(icp.firmographics.industries.flatMap((i) => CRUSTDATA_INDUSTRY[i.toLowerCase()] ?? [titleCase(i)])),
+      ...new Set([
+        ...(icp.firmographics.industries ?? []).flatMap((i) => CRUSTDATA_INDUSTRY[i.toLowerCase()] ?? [titleCase(i)]),
+        ...(icp.firmographics.naics ?? []).flatMap((code) => NAICS_CRUSTDATA_INDUSTRY[code] ?? []),
+      ]),
     ];
     if (inds.length) f.current_employers_linkedin_industries = inds;
   }
   return f;
+}
+
+const CLAY_INDUSTRY: Record<string, string[]> = {
+  software: ["Software Development"],
+  saas: ["Software Development"],
+  internet: ["Technology, Information and Internet"],
+  fintech: ["Financial Services"],
+  "financial services": ["Financial Services"],
+  "information technology & services": ["IT Services and IT Consulting"],
+  "information technology and services": ["IT Services and IT Consulting"],
+};
+
+const CLAY_EMPLOYEE_BAND: Record<string, string> = {
+  "1-10": "2-10",
+  "11-50": "11-50",
+  "51-200": "51-200",
+  "201-500": "201-500",
+  "501-1000": "501-1,000",
+  "1001-5000": "1,001-5,000",
+  "5001-10000": "5,001-10,000",
+  "10001+": "10,001+",
+};
+
+const CLAY_SENIORITY: Record<string, string> = {
+  cxo: "c-suite",
+  "c-suite": "c-suite",
+  vp: "vp",
+  director: "director",
+  head: "head",
+  manager: "manager",
+  owner: "owner",
+  founder: "founder",
+  senior: "senior",
+};
+
+/** Clay people-search filters using only fields confirmed in the live catalog. */
+export function icpToClayPeopleFilters(icp: Icp): Record<string, unknown> {
+  const filters: Record<string, unknown> = {};
+  if (icp.persona.titleKeywords?.length) filters.job_title_keywords = icp.persona.titleKeywords;
+  const seniorities = [...new Set((icp.persona.jobLevels ?? []).map((level) => CLAY_SENIORITY[level.toLowerCase()]).filter(Boolean))];
+  if (seniorities.length) filters.job_title_seniority_levels_v2 = seniorities;
+  const sizes = [...new Set((icp.firmographics.employeeBands ?? []).map((band) => CLAY_EMPLOYEE_BAND[band.replace(/,/g, "")]).filter(Boolean))];
+  if (sizes.length) filters.company_sizes = sizes;
+  if (icp.firmographics.geos?.length) {
+    filters.location_countries_include = icp.firmographics.geos.map((geo) => COUNTRY_NAMES[geo.toLowerCase()] ?? geo);
+  }
+  const industries = [...new Set((icp.firmographics.industries ?? []).flatMap((industry) =>
+    CLAY_INDUSTRY[industry.toLowerCase()] ?? [titleCase(industry)]
+  ))];
+  if (industries.length) filters.company_industries_include = industries;
+  return filters;
 }
 
 const ACRONYMS = new Set(["cro", "coo", "ceo", "cfo", "vp", "crm", "gtm", "saas"]);

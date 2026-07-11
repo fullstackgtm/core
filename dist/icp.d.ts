@@ -104,6 +104,8 @@ export declare function icpToTheirStackFilters(icp: Icp): {
  * PERSONA precision but NOT industry, so the industry filter is load-bearing.
  */
 export declare function icpToCrustdataFilters(icp: Icp): Record<string, unknown>;
+/** Clay people-search filters using only fields confirmed in the live catalog. */
+export declare function icpToClayPeopleFilters(icp: Icp): Record<string, unknown>;
 export type IcpFit = {
     score: number;
     reasons: string[];

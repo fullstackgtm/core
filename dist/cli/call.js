@@ -161,11 +161,13 @@ score always needs a key (scoring is LLM work).`);
                 console.log(JSON.stringify(parsed, null, 2));
             return;
         }
-        console.log(`Call ${parsed.id}${parsed.title ? ` — ${parsed.title}` : ""} (${parsed.sourceSystem})`);
-        console.log(`${parsed.segments.length} segments · ${parsed.insights.length} insights (${parsed.summary.highImportance} high-importance)\n`);
-        for (const insight of parsed.insights) {
-            console.log(`[${insight.type}] (importance ${insight.importance}) ${insight.text}`);
-        }
+        console.log(`Call ${parsed.id}${parsed.title ? ` — ${parsed.title}` : ""}`);
+        console.log(`${parsed.segments.length} segments · ${parsed.insights.length} insights · ${parsed.summary.highImportance} high priority`);
+        const visible = rest.includes("--verbose") ? parsed.insights : parsed.insights.filter((insight) => insight.importance >= 3);
+        for (const insight of visible)
+            console.log(`\n${insight.type.replaceAll("_", " ")} · priority ${insight.importance}\n  ${insight.text.replace(/\s+/g, " ").trim()}`);
+        if (!rest.includes("--verbose") && visible.length < parsed.insights.length)
+            console.log(`\n${parsed.insights.length - visible.length} lower-priority insight(s) hidden; use --verbose to show all.`);
         return;
     }
     if (subcommand === "link") {
@@ -284,10 +286,30 @@ score always needs a key (scoring is LLM work).`);
             console.log(JSON.stringify(scorecard, null, 2));
             return;
         }
-        console.log(renderScorecard(scorecard, title));
+        console.log(rest.includes("--verbose") ? renderScorecard(scorecard, title) : renderCompactScorecard(scorecard, title));
         return;
     }
     throw new Error(`call supports: parse, classify, link, plan, score (got ${subcommand ?? "nothing"})`);
+}
+function renderCompactScorecard(scorecard, title) {
+    const lines = [
+        `${title ?? "Call"} · ${scorecard.overallScore}/${scorecard.scale}${scorecard.band ? ` · ${scorecard.band.label}` : ""}`,
+        scorecard.rubricName ? `${scorecard.rubricName}${scorecard.callType ? ` (${scorecard.callType})` : ""}` : "",
+        "",
+    ].filter((line, index) => line || index === 2);
+    for (const dimension of scorecard.dimensions) {
+        lines.push(`${dimension.score}/${dimension.maxScore}  ${dimension.name}`);
+        lines.push(`     ${dimension.coachingNote.replace(/\s+/g, " ").trim()}`);
+    }
+    if (scorecard.missedItems.length) {
+        lines.push("", "Focus next");
+        for (const item of scorecard.missedItems)
+            lines.push(`  ${item}`);
+    }
+    if (scorecard.highlights.length)
+        lines.push("", `Strengths: ${scorecard.highlights.join(" · ")}`);
+    lines.push("", "Use --verbose for the full coaching scorecard.");
+    return lines.join("\n");
 }
 function renderScorecard(scorecard, title) {
     const bandText = scorecard.band ? ` — ${scorecard.band.label}` : "";

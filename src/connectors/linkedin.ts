@@ -41,6 +41,8 @@ export type FetchProspectsOptions = {
   sourceId?: string;
   /** Hard cap on prospects returned; also bounds pagination. */
   max?: number;
+  /** Opaque continuation cursor. HeyReach uses the decimal list offset. */
+  cursor?: string;
 };
 
 export type ConnectionStatus = { ok: boolean; detail: string };
@@ -152,6 +154,10 @@ export function createHeyReachProvider(options: HeyReachProviderOptions): Linked
       const max = opts.max ?? Number.POSITIVE_INFINITY;
       const out: LinkedInProspect[] = [];
       let offset = 0;
+      if (opts.cursor !== undefined) {
+        if (!/^\d+$/.test(opts.cursor)) throw new Error(`Invalid HeyReach cursor: ${opts.cursor}`);
+        offset = Number(opts.cursor);
+      }
       while (out.length < max) {
         const data = await call("/list/GetLeadsFromList", "POST", { listId, offset, limit: pageSize });
         const items = toArray(data);

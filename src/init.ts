@@ -19,7 +19,7 @@ import { builtinAcquirePreset, ENRICH_CONFIG_FILE_NAME, type EnrichConfig } from
 import { DEFAULT_FIT_THRESHOLD, type Icp } from "./icp.ts";
 
 export type InitProvider = "hubspot" | "salesforce";
-export type InitSource = "pipe0" | "explorium" | "linkedin";
+export type InitSource = "pipe0" | "explorium" | "clay" | "linkedin";
 
 export type ScaffoldOptions = {
   /** discovery source the acquire preset + playbook are wired for. Default "pipe0". */
@@ -63,7 +63,7 @@ export function starterIcp(): Icp {
 export function starterEnrichConfig(source: InitSource): EnrichConfig {
   const preset = builtinAcquirePreset(source);
   if (!preset?.acquire) {
-    // builtinAcquirePreset covers pipe0/explorium/linkedin, so this is unreachable
+    // builtinAcquirePreset covers pipe0/explorium/clay/linkedin, so this is unreachable
     // for the typed InitSource set — guard anyway rather than emit a broken file.
     throw new Error(`init: no acquire preset for source "${source}"`);
   }

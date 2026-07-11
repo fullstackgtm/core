@@ -11,6 +11,7 @@ import { auditReportToHtml, auditReportToMarkdown } from "../report.js";
 import { reportCounts, reportCrm, reportFindings } from "../runReport.js";
 import { connectorFor, numericOption, option, readSnapshot, saveRequested, selectedRules } from "./shared.js";
 import { colorEnabled, createChecklist, formatCount, paint, scoreColor, sparkline, stylizePlanMarkdown, table } from "./ui.js";
+import { compactPlan, verbosePlanRequested } from "./planOutput.js";
 const SEVERITY_RANK = {
     info: 0,
     warning: 1,
@@ -241,11 +242,15 @@ export async function audit(args) {
     if (args.includes("--json")) {
         console.log(JSON.stringify(plan, null, 2));
     }
+    else if (!verbosePlanRequested(args)) {
+        console.log(compactPlan(plan, { saved: saveRequested(args) }));
+        console.error(`\n${auditNextStep(args, plan)}`);
+    }
     else {
         // Default to the summary view (rule table + counts); the full per-operation
         // dump is opt-in via --full or, for a deliverable, `report`. (dx-punch-list #3)
         // Interactive terminals get the styled rendering; piped output is unchanged.
-        console.log(stylizePlanMarkdown(patchPlanToMarkdown(plan, { summary: !args.includes("--full") }), paint(colorEnabled(process.stdout))));
+        console.log(stylizePlanMarkdown(patchPlanToMarkdown(plan, { summary: false }), paint(colorEnabled(process.stdout))));
         console.error(`\n${auditNextStep(args, plan)}`);
     }
     if (threshold &&
