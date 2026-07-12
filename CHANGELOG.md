@@ -7,6 +7,27 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.54.0] — 2026-07-12
+
+### Added
+
+- Website-derived ICPs classify investment firms as an explicit `investment`
+  motion with editable target stages, target-company funding bands, thesis
+  keywords, and founder personas.
+- Clay investment acquisition searches thesis-shaped companies first, then
+  resolves founders across the matched accounts in one batched people search.
+- The public Clay connector exports normalized company-search pages and the
+  shared account-first investment discovery primitive.
+
+### Changed
+
+- Investment discovery validates that resolved people currently work at the
+  thesis-qualified account, preventing past-employer matches from becoming
+  proposed leads.
+- ICP derivation distinguishes fund size, AUM, and check size from a target
+  company's prior funding, and maps earliest-stage language conservatively.
+- Clay company-size filters use the provider's lower-bound bucket vocabulary.
+
 ## [0.53.1] — 2026-07-11
 
 ### Changed

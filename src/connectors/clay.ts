@@ -17,6 +17,19 @@ export type ClayPeopleSearchPage = {
   hasMore: boolean;
 };
 
+export type ClayCompany = {
+  name?: string;
+  domain?: string;
+  linkedin?: string;
+  description?: string;
+  industry?: string;
+  size?: string;
+  location?: string;
+  fundingAmountRange?: string;
+};
+
+export type ClayCompanySearchPage = { companies: ClayCompany[]; hasMore: boolean };
+
 function clayHeaders(apiKey: string): Record<string, string> {
   return { "clay-api-key": apiKey, Accept: "application/json", "Content-Type": "application/json" };
 }
@@ -65,6 +78,74 @@ export async function runClayPeopleSearchPage(opts: {
   const hasMore = body.has_more ?? body.hasMore;
   if (typeof hasMore !== "boolean") throw new Error("Clay people search returned no has_more flag.");
   return { prospects: body.data.map(normalizeClayPerson), hasMore };
+}
+
+/** Consume the next company page from a Clay search iterator. */
+export async function runClayCompanySearchPage(opts: {
+  apiKey: string; searchId: string; limit?: number; fetchImpl?: typeof fetch; apiBaseUrl?: string;
+}): Promise<ClayCompanySearchPage> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const base = (opts.apiBaseUrl ?? CLAY_PUBLIC_API_BASE).replace(/\/$/, "");
+  const limit = Math.max(1, Math.min(opts.limit ?? 25, 100));
+  const response = await fetchImpl(`${base}/search/filters-mode/${encodeURIComponent(opts.searchId)}/run`, {
+    method: "POST", headers: clayHeaders(opts.apiKey), body: JSON.stringify({ limit }),
+  });
+  if (!response.ok) throw new ProviderHttpError("Clay", "run company search", response.status);
+  const body = await response.json() as { data?: unknown; has_more?: unknown; hasMore?: unknown };
+  if (!Array.isArray(body.data)) throw new Error("Clay company search returned an invalid data array.");
+  const hasMore = body.has_more ?? body.hasMore;
+  if (typeof hasMore !== "boolean") throw new Error("Clay company search returned no has_more flag.");
+  return { companies: body.data.map(normalizeClayCompany), hasMore };
+}
+
+export function normalizeClayCompany(value: unknown): ClayCompany {
+  const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    name: stringValue(row.name), domain: bareDomain(stringValue(row.domain)),
+    linkedin: normalizeLinkedin(stringValue(row.linkedin_url)), description: stringValue(row.description),
+    industry: stringValue(row.industry), size: stringValue(row.size), location: stringValue(row.location),
+    fundingAmountRange: stringValue(row.total_funding_amount_range_usd),
+  };
+}
+
+/** Account-first investment discovery: find thesis-shaped companies, then
+ * resolve founders/operators only inside those accounts. */
+export async function discoverClayInvestmentProspects(opts: {
+  apiKey: string;
+  companyFilters: Record<string, unknown>;
+  titleKeywords: string[];
+  companyLimit: number;
+  prospectLimit: number;
+  fetchImpl?: typeof fetch;
+  apiBaseUrl?: string;
+}): Promise<{ prospects: Prospect[]; companiesScanned: number; companiesMatched: ClayCompany[] }> {
+  const companySearchId = await createClaySearch({
+    apiKey: opts.apiKey, sourceType: "companies", filters: opts.companyFilters,
+    fetchImpl: opts.fetchImpl, apiBaseUrl: opts.apiBaseUrl,
+  });
+  const companyPage = await runClayCompanySearchPage({
+    apiKey: opts.apiKey, searchId: companySearchId, limit: opts.companyLimit,
+    fetchImpl: opts.fetchImpl, apiBaseUrl: opts.apiBaseUrl,
+  });
+  const prospects: Prospect[] = [];
+  const identifiers = companyPage.companies.map((company) => company.domain ?? company.linkedin).filter((value): value is string => Boolean(value));
+  if (identifiers.length > 0) {
+    const peopleSearchId = await createClaySearch({
+      apiKey: opts.apiKey, sourceType: "people",
+      filters: { company_identifier: identifiers, job_title_keywords: opts.titleKeywords },
+      fetchImpl: opts.fetchImpl, apiBaseUrl: opts.apiBaseUrl,
+    });
+    const peoplePage = await runClayPeopleSearchPage({
+      apiKey: opts.apiKey, searchId: peopleSearchId,
+      limit: opts.prospectLimit,
+      fetchImpl: opts.fetchImpl, apiBaseUrl: opts.apiBaseUrl,
+    });
+    // company_identifier may match a past experience. Investment discovery is
+    // explicitly account-first, so retain only people currently at an account.
+    const currentDomains = new Set(companyPage.companies.map((company) => company.domain).filter(Boolean));
+    prospects.push(...peoplePage.prospects.filter((person) => person.companyDomain && currentDomains.has(person.companyDomain)));
+  }
+  return { prospects, companiesScanned: companyPage.companies.length, companiesMatched: companyPage.companies };
 }
 
 export function normalizeClayPerson(value: unknown): Prospect {

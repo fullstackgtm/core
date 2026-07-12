@@ -13,7 +13,7 @@ export { applyPatchPlan } from "./connector.js";
 export { CONTACT_PROVIDER_CAPABILITIES, runContactWaterfall, validateContactWaterfall, } from "./contactProviders.js";
 export { APPLY_STAGES, BACKFILL_STRIPE_STAGES, composeListeners, createProgressEmitter, CRM_SYNC_STAGES, nullProgressEmitter, SNAPSHOT_PULL_STAGES, STRIPE_SNAPSHOT_STAGES, } from "./progress.js";
 export { createHubspotConnector } from "./connectors/hubspot.js";
-export { CLAY_PUBLIC_API_BASE, clayApiKey, createClaySearch, normalizeClayPerson, runClayPeopleSearchPage, validateClayApiKey, } from "./connectors/clay.js";
+export { CLAY_PUBLIC_API_BASE, clayApiKey, createClaySearch, discoverClayInvestmentProspects, normalizeClayCompany, normalizeClayPerson, runClayCompanySearchPage, runClayPeopleSearchPage, validateClayApiKey, } from "./connectors/clay.js";
 export { DEFAULT_LOOPBACK_PORT, DEFAULT_OAUTH_SCOPES, exchangeHubspotCode, refreshHubspotToken, runHubspotLoopbackLogin, validateHubspotToken, } from "./connectors/hubspotAuth.js";
 export { createSalesforceConnector, } from "./connectors/salesforce.js";
 export { pollSalesforceDeviceLogin, refreshSalesforceToken, startSalesforceDeviceLogin, validateSalesforceOrigin, validateSalesforceToken, } from "./connectors/salesforceAuth.js";

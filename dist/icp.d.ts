@@ -14,6 +14,17 @@
  */
 export type Icp = {
     name: string;
+    /** `investment` means the organization is sourcing companies to invest in,
+     * not conventional customers. Discovery becomes company-first, then resolves
+     * founders at the matched accounts. */
+    motion?: "sales" | "investment";
+    investment?: {
+        stages?: Array<"pre-seed" | "seed" | "series-a" | "series-b" | "growth" | "bootstrapped">;
+        /** Clay's native funding bands. */
+        fundingAmounts?: Array<"under_1m" | "1m_5m" | "5m_10m" | "10m_25m" | "25m_50m" | "50m_100m" | "100m_250m" | "over_250m" | "unknown">;
+        /** Terms expected in an investment target's company description. */
+        thesisKeywords?: string[];
+    };
     firmographics: {
         /** human industry labels, e.g. ["software","saas"] — used for keyword/industry filters */
         industries?: string[];
@@ -46,6 +57,10 @@ export type Icp = {
 };
 export declare const DEFAULT_FIT_THRESHOLD = 0.5;
 export declare function parseIcp(raw: string): Icp;
+/** Native Clay company filters for an investment thesis. */
+export declare function icpToClayInvestmentCompanyFilters(icp: Icp): Record<string, unknown>;
+/** People filters used only after an investment target account has matched. */
+export declare function clayInvestmentPeopleFilters(icp: Icp, companyIdentifier: string): Record<string, unknown>;
 /** Explorium /v1/prospects filters from the ICP. */
 export declare function icpToExploriumFilters(icp: Icp): Record<string, {
     values?: string[];

@@ -35,7 +35,38 @@ export function parseIcp(raw) {
     if (!icp.persona || (!icp.persona.titleKeywords?.length && !icp.persona.jobLevels?.length)) {
         throw new Error('icp: "persona" needs at least titleKeywords or jobLevels (without them, scoring cannot rank fit)');
     }
+    if (icp.motion === "investment" && !icp.investment?.thesisKeywords?.length && !icp.firmographics.industries?.length) {
+        throw new Error('icp: investment motion needs investment.thesisKeywords or firmographics.industries');
+    }
     return icp;
+}
+const CLAY_COMPANY_SIZE = {
+    // Clay's company enum is the lower boundary of its displayed bucket:
+    // 2 => 2-10, 10 => 11-50, 50 => 51-200, etc. Bucket `1` is one employee.
+    "1-10": "2", "11-50": "10", "51-200": "50", "201-500": "200",
+    "501-1000": "500", "1001-5000": "1000", "5001-10000": "5000", "10001+": "10000",
+};
+/** Native Clay company filters for an investment thesis. */
+export function icpToClayInvestmentCompanyFilters(icp) {
+    const filters = {};
+    const sizes = [...new Set((icp.firmographics.employeeBands ?? []).map((band) => CLAY_COMPANY_SIZE[band.replace(/,/g, "")]).filter(Boolean))];
+    if (sizes.length)
+        filters.sizes = sizes;
+    if (icp.investment?.fundingAmounts?.length)
+        filters.funding_amounts = icp.investment.fundingAmounts;
+    if (icp.investment?.thesisKeywords?.length)
+        filters.description_keywords = icp.investment.thesisKeywords;
+    const industries = [...new Set((icp.firmographics.industries ?? []).flatMap((industry) => CLAY_INDUSTRY[industry.toLowerCase()] ?? []))];
+    if (industries.length)
+        filters.industries = industries;
+    return filters;
+}
+/** People filters used only after an investment target account has matched. */
+export function clayInvestmentPeopleFilters(icp, companyIdentifier) {
+    return {
+        company_identifier: [companyIdentifier],
+        job_title_keywords: icp.persona.titleKeywords?.length ? icp.persona.titleKeywords : ["Founder", "Co-founder", "CEO", "CTO"],
+    };
 }
 // ---------------------------------------------------------------------------
 // Discovery-filter translation

@@ -9,7 +9,7 @@ import { createFilePlanStore } from "../planStore.ts";
 import { buildAcquirePlan, buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, builtinAcquirePreset, builtinEnrichPreset, enrichRunId, inferIngestObjectType, latestStamps, loadEnrichConfig, parseCsv, resolveCrmField, selectStaleWork, stagedSourceRecords, staleDaysFor, type EnrichConfig, type EnrichCounts, type EnrichObjectType, type EnrichRun, type EnrichRunStore, type EnrichSourceRecord } from "../enrich.ts";
 import { loadMeter, remaining, type AcquireRemaining } from "../acquireMeter.ts";
 import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspectPage, partitionFreshProspects, pipe0ResolveCompanyDomains, pipe0ResolveWorkEmails, prospectIdentityKeys, type Prospect } from "../connectors/prospectSources.ts";
-import { createClaySearch, runClayPeopleSearchPage } from "../connectors/clay.ts";
+import { createClaySearch, discoverClayInvestmentProspects, runClayPeopleSearchPage } from "../connectors/clay.ts";
 import { runContactWaterfall, type ContactProviderAdapter, type ContactWaterfallStep } from "../contactProviders.ts";
 import { loadSeen, recordSeen } from "../acquireSeen.ts";
 import { acquireCheckpointId, createFileAcquireCheckpointStore, type AcquireCheckpointKey } from "../acquireCheckpoint.ts";
@@ -18,7 +18,7 @@ import { uploadHostedPatchPlan } from "../hostedPatchPlan.ts";
 import { progressReporter, reportCounts, reportEvent } from "../runReport.ts";
 import { ACQUIRE_STAGES, composeListeners, createProgressEmitter } from "../progress.ts";
 import { createLinkedInProvider, discoverLinkedInProspects } from "../acquireLinkedIn.ts";
-import { clayPeopleFilterRoutes, fitThreshold, icpToClayPeopleFilters, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp, type Icp } from "../icp.ts";
+import { clayPeopleFilterRoutes, fitThreshold, icpToClayInvestmentCompanyFilters, icpToClayPeopleFilters, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp, type Icp } from "../icp.ts";
 import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, type ApolloPullKey } from "../enrichApollo.ts";
 import type { CanonicalGtmSnapshot, CreateRecordPayload } from "../types.ts";
 import { isSpoolPath, readSpoolPath } from "../spoolFiles.ts";
@@ -674,6 +674,19 @@ async function acquireFromApi(
       cursor = result.nextCursor;
       exhausted = result.nextCursor === null;
     } else if (disc.provider === "clay") {
+      if (icp?.motion === "investment") {
+        const companyFilters = icpToClayInvestmentCompanyFilters(icp);
+        progress.note("searching Clay companies against the investment thesis");
+        const result = await discoverClayInvestmentProspects({
+          apiKey: providerKey("clay"), companyFilters,
+          titleKeywords: icp.persona.titleKeywords ?? ["Founder", "Co-founder", "CEO", "CTO"],
+          companyLimit: Math.min(scanLimit - discovered, 25), prospectLimit: requestSize,
+        });
+        page = result.prospects;
+        progress.note(`${result.companiesScanned} target account(s) scanned · resolving founders`);
+        exhausted = true;
+        cursor = "investment-account-first";
+      } else {
       while (true) {
         if (!cursor) {
           const route = clayRoutes[clayRouteIndex];
@@ -693,6 +706,7 @@ async function acquireFromApi(
         cursor = null;
         offset = 0;
         exhausted = false;
+      }
       }
     } else if (disc.provider === "explorium") {
       const pageNumber = offset + 1;

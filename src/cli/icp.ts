@@ -38,6 +38,10 @@ function updateReviewSegment(icp: Icp, id: string, raw: string): Icp {
   if (["titleKeywords", "jobLevels", "departments"].includes(id)) {
     return { ...icp, persona: { ...icp.persona, [id]: values } };
   }
+  if (["investmentStages", "fundingAmounts", "thesisKeywords"].includes(id)) {
+    const field = id === "investmentStages" ? "stages" : id;
+    return { ...icp, investment: { ...icp.investment, [field]: values } } as Icp;
+  }
   return { ...icp, signals: { ...icp.signals, intentTopics: values } };
 }
 

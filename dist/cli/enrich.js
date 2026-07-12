@@ -8,7 +8,7 @@ import { createFilePlanStore } from "../planStore.js";
 import { buildAcquirePlan, buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, builtinAcquirePreset, builtinEnrichPreset, enrichRunId, inferIngestObjectType, latestStamps, loadEnrichConfig, parseCsv, resolveCrmField, selectStaleWork, stagedSourceRecords, staleDaysFor } from "../enrich.js";
 import { loadMeter, remaining } from "../acquireMeter.js";
 import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspectPage, partitionFreshProspects, pipe0ResolveCompanyDomains, pipe0ResolveWorkEmails, prospectIdentityKeys } from "../connectors/prospectSources.js";
-import { createClaySearch, runClayPeopleSearchPage } from "../connectors/clay.js";
+import { createClaySearch, discoverClayInvestmentProspects, runClayPeopleSearchPage } from "../connectors/clay.js";
 import { runContactWaterfall } from "../contactProviders.js";
 import { loadSeen, recordSeen } from "../acquireSeen.js";
 import { acquireCheckpointId, createFileAcquireCheckpointStore } from "../acquireCheckpoint.js";
@@ -17,7 +17,7 @@ import { uploadHostedPatchPlan } from "../hostedPatchPlan.js";
 import { progressReporter, reportCounts, reportEvent } from "../runReport.js";
 import { ACQUIRE_STAGES, composeListeners, createProgressEmitter } from "../progress.js";
 import { createLinkedInProvider, discoverLinkedInProspects } from "../acquireLinkedIn.js";
-import { clayPeopleFilterRoutes, fitThreshold, icpToClayPeopleFilters, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp } from "../icp.js";
+import { clayPeopleFilterRoutes, fitThreshold, icpToClayInvestmentCompanyFilters, icpToClayPeopleFilters, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp } from "../icp.js";
 import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords } from "../enrichApollo.js";
 import { isSpoolPath, readSpoolPath } from "../spoolFiles.js";
 import { isOptionValue, loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.js";
@@ -581,27 +581,42 @@ async function acquireFromApi(config, source, rest, icp, snapshot, seen, priorRu
             exhausted = result.nextCursor === null;
         }
         else if (disc.provider === "clay") {
-            while (true) {
-                if (!cursor) {
-                    const route = clayRoutes[clayRouteIndex];
-                    if (route)
-                        filters = route.filters;
-                    progress.note(`creating Clay people-search iterator · ${route?.id ?? "configured"}`);
-                    cursor = await createClaySearch({ apiKey: providerKey("clay"), sourceType: "people", filters });
-                }
-                const result = await runClayPeopleSearchPage({ apiKey: providerKey("clay"), searchId: cursor, limit: requestSize });
+            if (icp?.motion === "investment") {
+                const companyFilters = icpToClayInvestmentCompanyFilters(icp);
+                progress.note("searching Clay companies against the investment thesis");
+                const result = await discoverClayInvestmentProspects({
+                    apiKey: providerKey("clay"), companyFilters,
+                    titleKeywords: icp.persona.titleKeywords ?? ["Founder", "Co-founder", "CEO", "CTO"],
+                    companyLimit: Math.min(scanLimit - discovered, 25), prospectLimit: requestSize,
+                });
                 page = result.prospects;
-                offset += page.length;
-                exhausted = !result.hasMore;
-                if (page.length > 0 || !allowClayFallback || clayRouteIndex >= clayRoutes.length - 1)
-                    break;
-                const failed = clayRoutes[clayRouteIndex]?.id ?? "configured";
-                clayRouteIndex += 1;
-                const next = clayRoutes[clayRouteIndex];
-                progress.note(`Clay ${failed} route returned 0 · trying ${next.id}`);
-                cursor = null;
-                offset = 0;
-                exhausted = false;
+                progress.note(`${result.companiesScanned} target account(s) scanned · resolving founders`);
+                exhausted = true;
+                cursor = "investment-account-first";
+            }
+            else {
+                while (true) {
+                    if (!cursor) {
+                        const route = clayRoutes[clayRouteIndex];
+                        if (route)
+                            filters = route.filters;
+                        progress.note(`creating Clay people-search iterator · ${route?.id ?? "configured"}`);
+                        cursor = await createClaySearch({ apiKey: providerKey("clay"), sourceType: "people", filters });
+                    }
+                    const result = await runClayPeopleSearchPage({ apiKey: providerKey("clay"), searchId: cursor, limit: requestSize });
+                    page = result.prospects;
+                    offset += page.length;
+                    exhausted = !result.hasMore;
+                    if (page.length > 0 || !allowClayFallback || clayRouteIndex >= clayRoutes.length - 1)
+                        break;
+                    const failed = clayRoutes[clayRouteIndex]?.id ?? "configured";
+                    clayRouteIndex += 1;
+                    const next = clayRoutes[clayRouteIndex];
+                    progress.note(`Clay ${failed} route returned 0 · trying ${next.id}`);
+                    cursor = null;
+                    offset = 0;
+                    exhausted = false;
+                }
             }
         }
         else if (disc.provider === "explorium") {
