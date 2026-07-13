@@ -24,7 +24,7 @@ export const CONTACT_PROVIDER_CAPABILITIES: Readonly<Record<string, readonly Con
     provider: "pipe0",
     operation: "person:workemail:waterfall@1",
     inputShapes: ["name_domain"],
-    outputFields: ["work_email"],
+    outputFields: ["work_email", "mobile"],
     execution: "batch",
     billing: "per_attempt",
     chargesOn: ["request"],

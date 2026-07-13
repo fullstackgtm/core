@@ -1,5 +1,7 @@
 import { getCredential } from "../credentials.js";
 import { ProviderHttpError } from "../providerError.js";
+import { normalizeClayCompany, normalizeClayPerson, } from "../portable/clay.js";
+export { normalizeClayCompany, normalizeClayPerson } from "../portable/clay.js";
 export const CLAY_PUBLIC_API_BASE = "https://api.clay.com/public/v0";
 function clayHeaders(apiKey) {
     return { "clay-api-key": apiKey, Accept: "application/json", "Content-Type": "application/json" };
@@ -59,15 +61,6 @@ export async function runClayCompanySearchPage(opts) {
         throw new Error("Clay company search returned no has_more flag.");
     return { companies: body.data.map(normalizeClayCompany), hasMore };
 }
-export function normalizeClayCompany(value) {
-    const row = value && typeof value === "object" ? value : {};
-    return {
-        name: stringValue(row.name), domain: bareDomain(stringValue(row.domain)),
-        linkedin: normalizeLinkedin(stringValue(row.linkedin_url)), description: stringValue(row.description),
-        industry: stringValue(row.industry), size: stringValue(row.size), location: stringValue(row.location),
-        fundingAmountRange: stringValue(row.total_funding_amount_range_usd),
-    };
-}
 /** Account-first investment discovery: find thesis-shaped companies, then
  * resolve founders/operators only inside those accounts. */
 export async function discoverClayInvestmentProspects(opts) {
@@ -98,43 +91,6 @@ export async function discoverClayInvestmentProspects(opts) {
         prospects.push(...peoplePage.prospects.filter((person) => person.companyDomain && currentDomains.has(person.companyDomain)));
     }
     return { prospects, companiesScanned: companyPage.companies.length, companiesMatched: companyPage.companies };
-}
-export function normalizeClayPerson(value) {
-    const row = value && typeof value === "object" ? value : {};
-    const location = row.structured_location && typeof row.structured_location === "object"
-        ? row.structured_location
-        : {};
-    const fullName = stringValue(row.name);
-    return {
-        firstName: stringValue(row.first_name),
-        lastName: stringValue(row.last_name),
-        fullName,
-        jobTitle: stringValue(row.latest_experience_title),
-        companyName: stringValue(row.latest_experience_company),
-        companyDomain: bareDomain(stringValue(row.domain)),
-        linkedin: normalizeLinkedin(stringValue(row.url)),
-        headline: undefined,
-        sourceId: normalizeLinkedin(stringValue(row.url)) ?? fullName,
-        location: {
-            city: stringValue(location.city),
-            state: stringValue(location.state),
-            region: stringValue(location.region),
-            country: stringValue(location.country),
-            countryCode: stringValue(location.country_iso),
-        },
-    };
-}
-function stringValue(value) {
-    return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-function bareDomain(value) {
-    return value?.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "").toLowerCase() || undefined;
-}
-function normalizeLinkedin(value) {
-    if (!value)
-        return undefined;
-    const normalized = value.startsWith("http") ? value : `https://${value.replace(/^\/+/, "")}`;
-    return normalized.replace(/\/$/, "");
 }
 /** Validate a Clay Public API key without creating a search or spending enrichment credits. */
 export async function validateClayApiKey(apiKey, fetchImpl = fetch, apiBaseUrl = CLAY_PUBLIC_API_BASE) {

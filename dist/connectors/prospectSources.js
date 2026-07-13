@@ -245,6 +245,38 @@ export async function pipe0ResolveWorkEmails(opts) {
 function personKey(name, company) {
     return `${(name ?? "").trim().toLowerCase()}|${(company ?? "").trim().toLowerCase()}`;
 }
+/** Resolve work email and mobile from a known LinkedIn profile URL. */
+export async function pipe0ResolveProfileContacts(opts) {
+    const fetchImpl = opts.fetchImpl ?? fetch;
+    const base = (opts.apiBaseUrl ?? "https://api.pipe0.com").replace(/\/$/, "");
+    const resolvable = opts.prospects.filter((prospect) => prospect.linkedin);
+    if (!resolvable.length || !opts.fields.length)
+        return opts.prospects;
+    const pipes = [
+        ...(opts.fields.includes("work_email") ? [{ pipe_id: "person:workemail:profileurl:waterfall@1" }] : []),
+        ...(opts.fields.includes("mobile") ? [{ pipe_id: "person:mobile:profileurl:waterfall@1" }] : []),
+    ];
+    const body = await pipe0Post(fetchImpl, base, opts.apiKey, {
+        pipes,
+        input: resolvable.map((prospect) => ({ profile_url: prospect.linkedin })),
+    });
+    const details = new Map();
+    for (const recordId of body?.order ?? []) {
+        const fields = body?.records?.[recordId]?.fields ?? {};
+        const profile = fieldValue(fields.profile_url)?.trim().toLowerCase().replace(/\/+$/, "");
+        if (!profile)
+            continue;
+        details.set(profile, {
+            email: fields.work_email?.status === "completed" ? fieldValue(fields.work_email) : undefined,
+            mobile: fields.mobile?.status === "completed" ? fieldValue(fields.mobile) : undefined,
+        });
+    }
+    return opts.prospects.map((prospect) => {
+        const key = prospect.linkedin?.trim().toLowerCase().replace(/\/+$/, "");
+        const match = key ? details.get(key) : undefined;
+        return match ? { ...prospect, email: prospect.email ?? match.email, mobile: prospect.mobile ?? match.mobile } : prospect;
+    });
+}
 /** Bare registrable host from a URL or domain string ("https://www.x.com/a" → "x.com"). */
 export function hostFromUrl(url) {
     if (!url || !url.trim())

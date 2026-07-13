@@ -1,6 +1,6 @@
 {
   "name": "fullstackgtm",
-  "version": "0.55.2",
+  "version": "0.56.0",
   "description": "Open-source agentic GTM ops framework: canonical GTM data model, pluggable deterministic audits, reviewable dry-run patch plans, approval-gated write-back with conflict detection, and cross-system entity resolution. HubSpot, Salesforce, and Stripe connectors included.",
   "license": "Apache-2.0",
   "author": "Full Stack GTM LLC <ryan@fullstackgtm.com> (https://fullstackgtm.com)",
@@ -15,6 +15,21 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./portable/icp": {
+      "types": "./dist/icp.d.ts",
+      "import": "./dist/icp.js",
+      "default": "./dist/icp.js"
+    },
+    "./portable/icp-derive": {
+      "types": "./dist/portable/icpDeriveContract.d.ts",
+      "import": "./dist/portable/icpDeriveContract.js",
+      "default": "./dist/portable/icpDeriveContract.js"
+    },
+    "./portable/clay": {
+      "types": "./dist/portable/clay.d.ts",
+      "import": "./dist/portable/clay.js",
+      "default": "./dist/portable/clay.js"
     },
     "./package.json": "./package.json"
   },

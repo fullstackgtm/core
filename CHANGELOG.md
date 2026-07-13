@@ -7,6 +7,23 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.56.0] — 2026-07-13
+
+### Added
+
+- Portable ICP derivation, Clay normalization, filter-routing, and fit-scoring
+  package exports let browser and Worker surfaces execute the same contracts as
+  the CLI instead of maintaining behavioral copies.
+- Human-paired CLIs now mirror reviewed ICP derivations and explicitly saved
+  signal runs into tenant-scoped hosted artifact records for later analysis;
+  local files remain authoritative and the mirror is not used as a cache.
+
+### Changed
+
+- Published agent-skill guidance now documents Clay acquisition, targeted
+  company discovery, Exa-backed behavioral evidence, and hosted artifact
+  mirroring.
+
 ## [0.55.2] — 2026-07-13
 
 ### Changed

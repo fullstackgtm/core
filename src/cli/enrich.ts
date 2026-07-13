@@ -8,7 +8,7 @@ import { patchPlanToMarkdown } from "../format.ts";
 import { createFilePlanStore } from "../planStore.ts";
 import { buildAcquirePlan, buildEnrichPlan, createFileEnrichRunStore, DEFAULT_STALE_DAYS, ENRICH_CONFIG_FILE_NAME, builtinAcquirePreset, builtinEnrichPreset, enrichRunId, inferIngestObjectType, latestStamps, loadEnrichConfig, parseCsv, resolveCrmField, selectStaleWork, stagedSourceRecords, staleDaysFor, type EnrichConfig, type EnrichCounts, type EnrichObjectType, type EnrichRun, type EnrichRunStore, type EnrichSourceRecord } from "../enrich.ts";
 import { loadMeter, remaining, type AcquireRemaining } from "../acquireMeter.ts";
-import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspectPage, partitionFreshProspects, pipe0ResolveCompanyDomains, pipe0ResolveWorkEmails, prospectIdentityKeys, type Prospect } from "../connectors/prospectSources.ts";
+import { crmContactKeys, fetchExploriumProspects, fetchPipe0CrustdataProspectPage, partitionFreshProspects, pipe0ResolveCompanyDomains, pipe0ResolveProfileContacts, pipe0ResolveWorkEmails, prospectIdentityKeys, type Prospect } from "../connectors/prospectSources.ts";
 import { createClaySearch, discoverClayInvestmentProspects, runClayPeopleSearchPage } from "../connectors/clay.ts";
 import { runContactWaterfall, type ContactProviderAdapter, type ContactWaterfallStep } from "../contactProviders.ts";
 import { loadSeen, recordSeen } from "../acquireSeen.ts";
@@ -819,6 +819,13 @@ async function acquireFromApi(
           if (fields.includes("work_email")) {
             progress.note(`resolving work emails with pipe0 for ${resolved.length} candidate(s)`);
             resolved = await pipe0ResolveWorkEmails({ apiKey: providerKey("pipe0"), prospects: resolved });
+          }
+          const profileFields = fields
+            .filter((field): field is "work_email" | "mobile" => field === "work_email" || field === "mobile")
+            .filter((field) => resolved.some((prospect) => prospect.linkedin && (field === "mobile" ? !prospect.mobile : !prospect.email)));
+          if (profileFields.length) {
+            progress.note(`resolving LinkedIn contact details with pipe0 for ${resolved.length} candidate(s)`);
+            resolved = await pipe0ResolveProfileContacts({ apiKey: providerKey("pipe0"), prospects: resolved, fields: profileFields });
           }
           return resolved;
         },

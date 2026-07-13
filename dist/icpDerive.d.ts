@@ -1,26 +1,9 @@
 import { type LlmCallOptions } from "./llm.ts";
-import { type Icp } from "./icp.ts";
+import type { Icp } from "./icp.ts";
+import { type WebsiteIcpDerivation } from "./portable/icpDeriveContract.ts";
+export type { WebsiteIcpDerivation, WebsiteIcpEvidence } from "./portable/icpDeriveContract.ts";
 export declare const DEFAULT_ICP_DERIVATION_MODEL = "z-ai/glm-5.2";
 export declare const OPENROUTER_API_BASE = "https://openrouter.ai/api";
-export type WebsiteIcpEvidence = {
-    label: string;
-    excerpt: string;
-    sourceUrl: string;
-};
-export type WebsiteIcpDerivation = {
-    company: {
-        name: string;
-        domain: string;
-        summary: string;
-    };
-    icp: Icp;
-    evidence: WebsiteIcpEvidence[];
-    confidence: number;
-    derivation: {
-        mode: "model";
-        model: string;
-    };
-};
 export type IcpDerivationProgress = {
     stage: "fetch" | "model" | "verify";
     message: string;

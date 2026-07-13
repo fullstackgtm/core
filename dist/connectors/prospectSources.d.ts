@@ -128,6 +128,14 @@ export declare function pipe0ResolveWorkEmails(opts: {
      *  at scale). */
     concurrency?: number;
 }): Promise<Prospect[]>;
+/** Resolve work email and mobile from a known LinkedIn profile URL. */
+export declare function pipe0ResolveProfileContacts(opts: {
+    apiKey: string;
+    prospects: Prospect[];
+    fields: Array<"work_email" | "mobile">;
+    apiBaseUrl?: string;
+    fetchImpl?: FetchImpl;
+}): Promise<Prospect[]>;
 /** Bare registrable host from a URL or domain string ("https://www.x.com/a" → "x.com"). */
 export declare function hostFromUrl(url: string | undefined): string | undefined;
 /**

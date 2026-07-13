@@ -10,6 +10,7 @@ import { isSpoolPath, readSpoolPath } from "../spoolFiles.js";
 import { loadIcp, option, readSnapshot, repeatedOption, saveRequested } from "./shared.js";
 import { createStatusLine } from "./ui.js";
 import { unknownSubcommandError } from "./suggest.js";
+import { writeHostedArtifact } from "../hostedArtifacts.js";
 /**
  * Resolve a signals config: explicit --config, else signals.config.json in cwd,
  * else the zero-config DEFAULT_SIGNALS_CONFIG (preset-first, like enrich).
@@ -169,6 +170,7 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
             await store.appendRun({ id: signalRunId(runLabel), runLabel, startedAt: now.toISOString(), completedAt: new Date().toISOString(),
                 buckets: ["job"], counts: { fetched: discovered.summary.rawResults, new: ranked.length, deduped: deduped.length }, signals: ranked });
             console.error(`Saved signal run "${runLabel}". Next: \`fullstackgtm icp judge --signals-from ${runLabel} --save\`.`);
+            await mirrorSignalRun(runLabel, now, ["job"], { fetched: discovered.summary.rawResults, new: ranked.length, deduped: deduped.length }, ranked);
         }
         else {
             console.error("(not saved — re-run with --save to persist this evidence to the signal ledger)");
@@ -297,6 +299,7 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
                 signals: ranked,
             });
             console.error(`Saved signal run "${runLabel}" (${fresh.length} fresh). Next: \`fullstackgtm icp judge --save\`.`);
+            await mirrorSignalRun(runLabel, now, buckets, { fetched, new: fresh.length, deduped: deduped.length }, ranked);
         }
         else {
             console.error("(not saved — re-run with --save to persist this run to the signal ledger)");
@@ -384,6 +387,16 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
         return;
     }
     throw unknownSubcommandError("signals", sub, ["fetch", "discover", "list", "outcome", "weights"]);
+}
+async function mirrorSignalRun(runLabel, startedAt, buckets, counts, signals) {
+    const mirrored = await writeHostedArtifact({
+        kind: "signal_run", key: `signals:${signalRunId(runLabel)}`, label: runLabel,
+        document: { runLabel, startedAt: startedAt.toISOString(), completedAt: new Date().toISOString(), buckets, counts, signals },
+    });
+    if (mirrored.status === "saved")
+        console.error("Mirrored the signal run to the paired hosted workspace.");
+    else if (mirrored.status === "unavailable")
+        console.error(`Warning: ${mirrored.reason}. The local signal ledger is still authoritative.`);
 }
 function positiveIntegerOption(args, flag, fallback) {
     const raw = option(args, flag);

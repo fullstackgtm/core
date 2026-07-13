@@ -16,6 +16,7 @@ import { getCredential, storeCredential } from "../credentials.ts";
 import { deriveWebsiteIcp, icpReviewSegments, OPENROUTER_API_BASE, type WebsiteIcpDerivation } from "../icpDerive.ts";
 import type { Icp } from "../icp.ts";
 import { unknownSubcommandError } from "./suggest.ts";
+import { writeHostedArtifact } from "../hostedArtifacts.ts";
 
 function renderJudgeDecisions(decisions: Awaited<ReturnType<typeof judgeSignals>>): string {
   if (decisions.length === 0) return "No accounts cleared the score threshold.";
@@ -232,6 +233,12 @@ ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.
       writeFileSync(path, `${JSON.stringify(derived.icp, null, 2)}\n`);
       console.error(`Wrote reviewed ICP to ${path}. Next: fullstackgtm enrich acquire --source clay --icp ${path}`);
     }
+    const mirrored = await writeHostedArtifact({
+      kind: "icp", key: `icp:${derived.company.domain}`, label: derived.icp.name,
+      domain: derived.company.domain, document: derived,
+    });
+    if (mirrored.status === "saved") console.error("Mirrored the reviewed ICP to the paired hosted workspace.");
+    else if (mirrored.status === "unavailable") console.error(`Warning: ${mirrored.reason}. The local ICP is still authoritative.`);
     if (rest.includes("--json")) console.log(JSON.stringify(derived, null, 2));
     else if (!reviewedInteractively) console.log(renderDerivedIcp(derived));
     return;
