@@ -1,6 +1,6 @@
 // Extracted verbatim from src/cli.ts (mechanical split, no behavior change).
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 import { resolve } from "node:path";
@@ -9,14 +9,16 @@ import { fitThreshold, icpFromAnswers, icpToCrustdataFilters, icpToExploriumFilt
 import { createFileSignalStore, DEFAULT_SIGNALS_CONFIG, type SignalsConfig } from "../signals.ts";
 import { createFileJudgeStore, DEFAULT_JUDGE_PROMPT, judgeRunId, judgeSignals } from "../judge.ts";
 import { DEFAULT_GOLDEN_NOW_ISO, DEFAULT_GOLDEN_SET, DEFAULT_MIN_ACCURACY, defaultJudgeFn, gradeAgainstOutcomes, gradeJudge, parseGoldenSet } from "../judgeEval.ts";
-import { loadIcp, numericOption, option, readSecret, readSnapshot, resolveLlmBaseUrls, saveRequested } from "./shared.ts";
+import { loadIcp, numericOption, option, readPackageInfo, readSecret, readSnapshot, resolveLlmBaseUrls, saveRequested } from "./shared.ts";
 import { createStatusLine } from "./ui.ts";
 import { box, colorEnabled, paint, truncateToWidth } from "./ui.ts";
 import { getCredential, storeCredential } from "../credentials.ts";
 import { deriveWebsiteIcp, icpReviewSegments, OPENROUTER_API_BASE, type WebsiteIcpDerivation } from "../icpDerive.ts";
 import type { Icp } from "../icp.ts";
 import { unknownSubcommandError } from "./suggest.ts";
-import { writeHostedArtifact } from "../hostedArtifacts.ts";
+import { readHostedArtifact, writeHostedArtifact } from "../hostedArtifacts.ts";
+import { artifactKeyForDomain, extractHostedIcp, getIcpSyncStatus, markIcpSynced, pushIcp, readIcpSyncState } from "../icpSync.ts";
+import { writeSecureFileAtomic } from "../secureFile.ts";
 
 function renderJudgeDecisions(decisions: Awaited<ReturnType<typeof judgeSignals>>): string {
   if (decisions.length === 0) return "No accounts cleared the score threshold.";
@@ -178,6 +180,14 @@ export async function icpCommand(args: string[]) {
   fullstackgtm icp interview                      emit the interview spec (an agent drives it with AskUserQuestion)
   fullstackgtm icp derive --domain <site> [--model <id>] [--out icp.json] [--json]
                                                 derive an evidence-backed ICP from a public website (OpenRouter/OpenAI/Anthropic)
+  fullstackgtm icp status --domain <site> [--icp icp.json] [--json]
+                                                compare local and hosted revisions without changing either
+  fullstackgtm icp pull --domain <site> [--out icp.json] [--force] [--json]
+                                                explicitly download hosted canonical ICP; refuses to replace an existing file without --force
+  fullstackgtm icp push --domain <site> [--icp icp.json] [--change-summary <text>] [--json]
+                                                publish the local ICP with revision conflict protection
+  fullstackgtm icp sync --domain <site> [--icp icp.json] [--json]
+                                                reconcile safe one-sided changes; hosted changes become a sibling review file
   fullstackgtm icp set <answers.json> [--name <n>] [--out <path>]   write icp.json from interview answers
   fullstackgtm icp show [--icp <path>]            render the ICP + the discovery filters it produces
   fullstackgtm icp judge [--signals-from latest|<label>] [--with-history] [--prompt <path>] [--min-score 0] [--save]   rank unjudged signals into send/nurture/skip decisions (timing x fit x memory)
@@ -235,13 +245,78 @@ ops. Develop one by interview, then \`enrich acquire\` picks up ./icp.json.
     }
     const mirrored = await writeHostedArtifact({
       kind: "icp", key: `icp:${derived.company.domain}`, label: derived.icp.name,
-      domain: derived.company.domain, document: derived,
+      domain: derived.company.domain, document: derived, sourceVersion: readPackageInfo().version,
     });
-    if (mirrored.status === "saved") console.error("Mirrored the reviewed ICP to the paired hosted workspace.");
+    if (mirrored.status === "saved") {
+      if (out) markIcpSynced(resolve(process.cwd(), out), derived.company.domain, mirrored, derived.icp);
+      console.error(`Mirrored the reviewed ICP to the paired hosted workspace at revision ${mirrored.revision}.`);
+    }
+    else if (mirrored.status === "conflict") console.error(`Warning: ${mirrored.reason}. Run \`fullstackgtm icp sync --domain ${derived.company.domain}${out ? ` --icp ${out}` : ""}\` to reconcile.`);
     else if (mirrored.status === "unavailable") console.error(`Warning: ${mirrored.reason}. The local ICP is still authoritative.`);
     if (rest.includes("--json")) console.log(JSON.stringify(derived, null, 2));
     else if (!reviewedInteractively) console.log(renderDerivedIcp(derived));
     return;
+  }
+  if (["status", "pull", "push", "sync"].includes(sub)) {
+    const domain = option(rest, "--domain");
+    if (!domain) throw new Error(`icp ${sub}: --domain <company.com> is required.`);
+    const asJson = rest.includes("--json");
+    const icpPath = resolve(process.cwd(), option(rest, "--icp") ?? option(rest, "--out") ?? "icp.json");
+
+    if (sub === "status") {
+      if (!existsSync(icpPath)) throw new Error(`icp status: local ICP not found at ${icpPath}.`);
+      const checked = await getIcpSyncStatus(icpPath, domain);
+      if (asJson) console.log(JSON.stringify({ path: icpPath, domain, ...checked.status }, null, 2));
+      else console.log(`ICP ${checked.status.state.replaceAll("_", " ")} · local ${checked.status.localIcpSha256.slice(0, 12)}${checked.status.hostedRevision ? ` · hosted r${checked.status.hostedRevision}` : ""}${checked.status.trackedRevision ? ` · last synced r${checked.status.trackedRevision}` : ""}`);
+      return;
+    }
+
+    if (sub === "pull") {
+      const out = resolve(process.cwd(), option(rest, "--out") ?? "icp.json");
+      const hosted = await readHostedArtifact("icp", artifactKeyForDomain(domain));
+      if (hosted.status !== "found") throw new Error(hosted.status === "missing" ? `No hosted ICP exists for ${domain}.` : hosted.status === "unpaired" ? "This CLI is not paired with a hosted workspace." : hosted.reason);
+      const icp = extractHostedIcp(hosted.state);
+      if (existsSync(out) && !rest.includes("--force")) throw new Error(`Refusing to replace ${out}. Re-run with --force after reviewing hosted revision ${hosted.state.revision}.`);
+      writeSecureFileAtomic(out, `${JSON.stringify(icp, null, 2)}\n`);
+      markIcpSynced(out, domain, hosted.state, icp);
+      if (asJson) console.log(JSON.stringify({ status: "pulled", path: out, revision: hosted.state.revision, documentSha256: hosted.state.documentSha256 }, null, 2));
+      else console.log(`Pulled hosted ICP revision ${hosted.state.revision} to ${out}.`);
+      return;
+    }
+
+    if (!existsSync(icpPath)) throw new Error(`icp ${sub}: local ICP not found at ${icpPath}.`);
+    if (sub === "push") {
+      const pushed = await pushIcp(icpPath, domain, option(rest, "--change-summary") ?? undefined);
+      if (pushed.status === "conflict") throw new Error(`ICP conflict: hosted revision ${pushed.checked.status.hostedRevision ?? "?"} changed since local revision ${pushed.checked.status.trackedRevision ?? "untracked"}. Run \`icp sync\` to write a review copy.`);
+      if (pushed.result.status !== "saved") throw new Error(pushed.result.status === "unpaired" ? "This CLI is not paired with a hosted workspace." : pushed.result.status === "conflict" ? pushed.result.reason : pushed.result.reason);
+      if (asJson) console.log(JSON.stringify({ status: "pushed", revision: pushed.result.revision, documentSha256: pushed.result.documentSha256, unchanged: pushed.result.unchanged }, null, 2));
+      else console.log(`${pushed.result.unchanged ? "Already at" : "Published"} hosted ICP revision ${pushed.result.revision}.`);
+      return;
+    }
+
+    const checked = await getIcpSyncStatus(icpPath, domain);
+    if (checked.status.state === "local_changed" || checked.status.state === "missing_hosted") {
+      const pushed = await pushIcp(icpPath, domain, "Synchronized local ICP");
+      if (pushed.result?.status !== "saved") throw new Error("ICP sync could not publish the local change.");
+      if (asJson) console.log(JSON.stringify({ status: "pushed", revision: pushed.result.revision }, null, 2));
+      else console.log(`Published local ICP as hosted revision ${pushed.result.revision}.`);
+      return;
+    }
+    if ((checked.status.state === "hosted_changed" || checked.status.state === "conflict" || checked.status.state === "untracked") && checked.hosted) {
+      const reviewPath = `${icpPath}.hosted-r${checked.hosted.revision}.json`;
+      writeSecureFileAtomic(reviewPath, `${JSON.stringify(extractHostedIcp(checked.hosted), null, 2)}\n`);
+      const result = { status: checked.status.state, reviewPath, hostedRevision: checked.hosted.revision, trackedRevision: readIcpSyncState(icpPath)?.revision };
+      if (asJson) console.log(JSON.stringify(result, null, 2));
+      else console.log(`Hosted changes need review. Wrote revision ${checked.hosted.revision} to ${reviewPath}; your local ICP was not replaced.`);
+      return;
+    }
+    if (checked.status.state === "in_sync") {
+      if (!readIcpSyncState(icpPath) && checked.hosted) markIcpSynced(icpPath, domain, checked.hosted, checked.local);
+      if (asJson) console.log(JSON.stringify({ status: "in_sync", revision: checked.status.hostedRevision }, null, 2));
+      else console.log(`ICP is in sync${checked.status.hostedRevision ? ` at revision ${checked.status.hostedRevision}` : ""}.`);
+      return;
+    }
+    throw new Error(checked.status.reason ?? `ICP sync unavailable (${checked.status.state}).`);
   }
   if (sub === "set") {
     const file = rest.find((a) => !a.startsWith("--"));

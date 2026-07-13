@@ -71,6 +71,9 @@ export type Icp = {
     scoring?: {
         /** minimum fit (0..1) for a prospect to become a create_record op. Default 0.5. */
         threshold?: number;
+        /** Require a literal persona.titleKeywords phrase in title/headline. This
+         * disables the broader function fallback for high-precision sourcing. */
+        requireTitleKeyword?: boolean;
     };
 };
 export declare const DEFAULT_FIT_THRESHOLD = 0.5;

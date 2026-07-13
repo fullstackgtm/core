@@ -7,6 +7,28 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.57.0] — 2026-07-13
+
+### Added
+
+- Paired CLIs can inspect and safely reconcile hosted ICPs with `icp status`,
+  `icp pull`, `icp push`, and `icp sync`. A private adjacent sidecar records
+  the last synchronized revision and content hash without changing `icp.json`.
+- Hosted ICP edits publish immutable numbered revisions with author, timestamp,
+  origin, content hash, change summary, comparison, and restore-as-new-revision
+  history.
+- Signal evidence and ICP-scored lead previews record the exact ICP revision
+  and hash used to produce them.
+
+### Changed
+
+- Hosted changes never silently replace a local ICP. Concurrent local and
+  hosted edits are reported as conflicts, and `icp sync` writes the hosted
+  revision to a separate review file.
+- Older CLIs may continue updating CLI-origin artifacts, but blind writes can
+  no longer overwrite an artifact whose latest revision was published in the
+  hosted editor.
+
 ## [0.56.1] — 2026-07-13
 
 ### Fixed

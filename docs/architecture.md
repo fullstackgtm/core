@@ -103,6 +103,11 @@ replays automatically: reconcile provider state, then `plans recover ...
   reconciliation. Review documents are immutable/hash-bound; hosted approval
   becomes executable only after the CLI verifies it and generates local HMAC
   signatures. Hosted never owns the apply lease for CLI-origin plans.
+- `hostedArtifacts.ts` + `icpSync.ts` — version-aware artifact transport and
+  conservative bidirectional ICP reconciliation. Published revisions use
+  compare-and-swap; a private sidecar binds a local ICP hash to its last hosted
+  revision. Divergent arrays are never auto-merged and hosted changes never
+  silently replace the execution-local ICP file.
 - `assign.ts` — `AssignmentPolicy` (fixed / round-robin / territory /
   account-owner): the pure owner-routing rule `buildAcquirePlan` stamps onto new
   leads (never born ownerless) and `reassign --assign-unowned` reuses to backfill.

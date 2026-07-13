@@ -28,6 +28,8 @@ import { unknownSubcommandError } from "./suggest.ts";
 import { box, colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, scoreColor, truncateToWidth, type Paint } from "./ui.ts";
 import { compactPlan, verbosePlanRequested } from "./planOutput.ts";
 import type { AcquireBudget } from "../acquireMeter.ts";
+import { writeHostedArtifact } from "../hostedArtifacts.ts";
+import { readIcpSyncState } from "../icpSync.ts";
 
 
 /**
@@ -302,6 +304,16 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
 
     const meterLine = formatAcquireMeter(headroom, costPerRecord);
     const gaugeLine = acquireGaugeLine(headroom, config.acquire.budget ?? {}, paint(colorEnabled(process.stdout)));
+    const icpPath = resolve(process.cwd(), option(rest, "--icp") ?? "icp.json");
+    const trackedIcp = existsSync(icpPath) ? readIcpSyncState(icpPath) : null;
+    const leadMirror = await writeHostedArtifact({
+      kind: "lead_run", key: `leads:${result.plan.id}`, label: result.plan.title ?? result.plan.id,
+      domain: trackedIcp?.domain,
+      document: { runLabel: result.plan.id, createdAt: new Date().toISOString(), source, counts: result.counts,
+        plan: result.plan, icpRef: trackedIcp ? { artifactId: trackedIcp.artifactId, domain: trackedIcp.domain, revision: trackedIcp.revision, localIcpSha256: trackedIcp.localIcpSha256 } : undefined },
+    });
+    if (leadMirror.status === "saved") console.error(`Recorded lead preview against${trackedIcp ? ` ICP revision ${trackedIcp.revision}` : " the local untracked ICP"}.`);
+    else if (leadMirror.status === "unavailable") console.error(`Warning: ${leadMirror.reason}. The local lead preview is unchanged.`);
     if (!save) {
       printAcquireOutput({
         args: rest,

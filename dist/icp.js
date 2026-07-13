@@ -381,15 +381,18 @@ export function scoreProspectAgainstIcp(prospect, icp) {
     const keywords = (icp.persona.titleKeywords ?? []).map((k) => k.toLowerCase());
     const levels = (icp.persona.jobLevels ?? []).map((l) => l.toLowerCase());
     const depts = (icp.persona.departments ?? []).map((d) => d.toLowerCase());
+    const exactTitleKeyword = keywords.find((keyword) => title.includes(keyword));
+    if (icp.scoring?.requireTitleKeyword && keywords.length && !exactTitleKeyword) {
+        return { score: 0, reasons: ["title does not contain a required ICP keyword"] };
+    }
     let score = 0;
     let weightSum = 0;
     if (keywords.length) {
         weightSum += 0.6;
-        const exact = keywords.find((k) => title.includes(k));
-        const functional = exact ? undefined : roleKeywords(icp).find((keyword) => title.includes(keyword));
-        if (exact) {
+        const functional = exactTitleKeyword ? undefined : roleKeywords(icp).find((keyword) => title.includes(keyword));
+        if (exactTitleKeyword) {
             score += 0.6;
-            reasons.push(`title matches ICP keyword "${exact}"`);
+            reasons.push(`title matches ICP keyword "${exactTitleKeyword}"`);
         }
         else if (functional) {
             score += 0.45;

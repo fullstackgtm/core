@@ -12,6 +12,7 @@ import { loadIcp, option, readSnapshot, repeatedOption, saveRequested } from "./
 import { createStatusLine } from "./ui.ts";
 import { unknownSubcommandError } from "./suggest.ts";
 import { writeHostedArtifact } from "../hostedArtifacts.ts";
+import { readIcpSyncState } from "../icpSync.ts";
 
 
 /**
@@ -178,7 +179,7 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
       await store.appendRun({ id: signalRunId(runLabel), runLabel, startedAt: now.toISOString(), completedAt: new Date().toISOString(),
         buckets: ["job"], counts: { fetched: discovered.summary.rawResults, new: ranked.length, deduped: deduped.length }, signals: ranked });
       console.error(`Saved signal run "${runLabel}". Next: \`fullstackgtm icp judge --signals-from ${runLabel} --save\`.`);
-      await mirrorSignalRun(runLabel, now, ["job"], { fetched: discovered.summary.rawResults, new: ranked.length, deduped: deduped.length }, ranked);
+      await mirrorSignalRun(runLabel, now, ["job"], { fetched: discovered.summary.rawResults, new: ranked.length, deduped: deduped.length }, ranked, rest);
     } else {
       console.error("(not saved — re-run with --save to persist this evidence to the signal ledger)");
     }
@@ -317,7 +318,7 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
         signals: ranked,
       });
       console.error(`Saved signal run "${runLabel}" (${fresh.length} fresh). Next: \`fullstackgtm icp judge --save\`.`);
-      await mirrorSignalRun(runLabel, now, buckets, { fetched, new: fresh.length, deduped: deduped.length }, ranked);
+      await mirrorSignalRun(runLabel, now, buckets, { fetched, new: fresh.length, deduped: deduped.length }, ranked, rest);
     } else {
       console.error("(not saved — re-run with --save to persist this run to the signal ledger)");
     }
@@ -412,10 +413,14 @@ async function mirrorSignalRun(
   buckets: SignalBucket[],
   counts: { fetched: number; new: number; deduped: number },
   signals: Signal[],
+  args: string[],
 ) {
+  const icpPath = resolve(process.cwd(), option(args, "--icp") ?? "icp.json");
+  const tracked = existsSync(icpPath) ? readIcpSyncState(icpPath) : null;
   const mirrored = await writeHostedArtifact({
     kind: "signal_run", key: `signals:${signalRunId(runLabel)}`, label: runLabel,
-    document: { runLabel, startedAt: startedAt.toISOString(), completedAt: new Date().toISOString(), buckets, counts, signals },
+    document: { runLabel, startedAt: startedAt.toISOString(), completedAt: new Date().toISOString(), buckets, counts, signals,
+      icpRef: tracked ? { artifactId: tracked.artifactId, domain: tracked.domain, revision: tracked.revision, localIcpSha256: tracked.localIcpSha256 } : undefined },
   });
   if (mirrored.status === "saved") console.error("Mirrored the signal run to the paired hosted workspace.");
   else if (mirrored.status === "unavailable") console.error(`Warning: ${mirrored.reason}. The local signal ledger is still authoritative.`);

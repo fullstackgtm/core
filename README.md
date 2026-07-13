@@ -199,6 +199,23 @@ fullstackgtm apply --plan-id <id> --provider hubspot        # the only step that
 
 The **ICP** (`icp.json`) is the single targeting artifact: it generates each provider's discovery filters (Explorium, pipe0/Crustdata) *and* fit-scores every discovered prospect — only above-threshold leads are proposed. Develop one by interview; the CLI can't run `AskUserQuestion` itself, so `icp interview` emits the spec and an agent (Claude Code / Codex) drives it.
 
+When the CLI is paired, the hosted workspace and local ICP can be edited
+without last-write-wins data loss:
+
+```bash
+fullstackgtm icp status --domain acme.com --icp ./icp.json
+fullstackgtm icp push --domain acme.com --icp ./icp.json --change-summary "Narrowed buyer titles"
+fullstackgtm icp sync --domain acme.com --icp ./icp.json
+fullstackgtm icp pull --domain acme.com --out ./icp.json --force
+```
+
+Published hosted edits are immutable numbered revisions. The CLI stores only
+sync metadata in `./.fullstackgtm/icp.json.sync.json`; the portable `icp.json`
+schema is unchanged. `sync` never silently replaces the local file: if hosted
+changed, it writes `icp.json.hosted-rN.json` for review. If both sides changed,
+it reports a conflict rather than unioning ordered targeting arrays. Signal and
+lead-preview records retain the exact ICP revision used for later analysis.
+
 **You don't pay to re-discover dupes.** Before the (credit-spending) email step, acquire drops prospects already in your CRM and any seen in a prior run:
 
 - **Pre-email CRM dedup** matches the live snapshot. The LinkedIn URL (`hs_linkedin_url`, read into the snapshot by default — safe everywhere, HubSpot ignores unknown properties) is the strong key; name+domain is the fallback. Created contacts get their LinkedIn URL written back, so coverage — and dedup precision — grows over time. If your CRM has no LinkedIn URLs, acquire says so and recommends populating it.

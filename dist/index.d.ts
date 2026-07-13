@@ -1,5 +1,6 @@
 export { auditSnapshot, defaultPolicy } from "./audit.ts";
 export { DEFAULT_ICP_DERIVATION_MODEL, OPENROUTER_API_BASE, deriveWebsiteIcp, normalizeCompanyWebsite, websiteText, icpReviewSegments, type WebsiteIcpDerivation, type WebsiteIcpEvidence, type IcpReviewSegment, type IcpDerivationProgress, } from "./icpDerive.ts";
+export { artifactKeyForDomain, classifyIcpSync, extractHostedIcp, getIcpSyncStatus, icpSha256, markIcpSynced, pushIcp, readIcpSyncState, sidecarPathFor, type IcpSyncState, type IcpSyncStatus, } from "./icpSync.ts";
 export { acquireCheckpointId, acquireCheckpointsDir, createFileAcquireCheckpointStore, validateAcquireCheckpoint, validateAcquireCheckpointKey, type AcquireCheckpoint, type AcquireCheckpointKey, type AcquireCheckpointStore, type AcquireContinuation, } from "./acquireCheckpoint.ts";
 export { matchesTerritory, parseAssignmentPolicy, resolveAssignment, type AssignmentContext, type AssignmentPolicy, type AssignmentResult, type AssignmentStrategy, type TerritoryRule, } from "./assign.ts";
 export { buildBulkUpdatePlan, isFilterableField, parseWhere, type BulkUpdateOptions } from "./bulkUpdate.ts";

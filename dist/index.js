@@ -1,5 +1,6 @@
 export { auditSnapshot, defaultPolicy } from "./audit.js";
 export { DEFAULT_ICP_DERIVATION_MODEL, OPENROUTER_API_BASE, deriveWebsiteIcp, normalizeCompanyWebsite, websiteText, icpReviewSegments, } from "./icpDerive.js";
+export { artifactKeyForDomain, classifyIcpSync, extractHostedIcp, getIcpSyncStatus, icpSha256, markIcpSynced, pushIcp, readIcpSyncState, sidecarPathFor, } from "./icpSync.js";
 export { acquireCheckpointId, acquireCheckpointsDir, createFileAcquireCheckpointStore, validateAcquireCheckpoint, validateAcquireCheckpointKey, } from "./acquireCheckpoint.js";
 export { matchesTerritory, parseAssignmentPolicy, resolveAssignment, } from "./assign.js";
 export { buildBulkUpdatePlan, isFilterableField, parseWhere } from "./bulkUpdate.js";

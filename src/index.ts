@@ -11,6 +11,19 @@ export {
   type IcpReviewSegment,
   type IcpDerivationProgress,
 } from "./icpDerive.ts";
+export {
+  artifactKeyForDomain,
+  classifyIcpSync,
+  extractHostedIcp,
+  getIcpSyncStatus,
+  icpSha256,
+  markIcpSynced,
+  pushIcp,
+  readIcpSyncState,
+  sidecarPathFor,
+  type IcpSyncState,
+  type IcpSyncStatus,
+} from "./icpSync.ts";
 
 export {
   acquireCheckpointId,
