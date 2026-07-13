@@ -135,14 +135,14 @@ export function formatCount(value) {
  * ANSI codes inside `lines` would inflate the measured width.
  */
 export function box(lines, p, title) {
-    const inner = Math.max(...lines.map((line) => line.length), title ? title.length + 2 : 0);
+    const inner = Math.max(...lines.map((line) => stripAnsi(line).length), title ? stripAnsi(title).length + 2 : 0);
     const top = title
-        ? `╭─ ${title} ${"─".repeat(Math.max(0, inner - title.length - 1))}╮`
+        ? `╭─ ${title} ${"─".repeat(Math.max(0, inner - stripAnsi(title).length - 1))}╮`
         : `╭${"─".repeat(inner + 2)}╮`;
     const bottom = `╰${"─".repeat(inner + 2)}╯`;
     return [
         p.dim(top),
-        ...lines.map((line) => `${p.dim("│")} ${line.padEnd(inner)} ${p.dim("│")}`),
+        ...lines.map((line) => `${p.dim("│")} ${line}${" ".repeat(Math.max(0, inner - stripAnsi(line).length))} ${p.dim("│")}`),
         p.dim(bottom),
     ];
 }

@@ -399,7 +399,7 @@ export async function login(args: string[]) {
     console.log(`Stored Clay Public API key in ${credentialsPath()}. Clay connector commands resolve it automatically.`);
     return;
   }
-  if (provider === "pipe0" || provider === "explorium" || provider === "heyreach" || provider === "theirstack") {
+  if (provider === "pipe0" || provider === "explorium" || provider === "heyreach" || provider === "theirstack" || provider === "exa") {
     rejectArgvSecret(args, "--token", "--key", "--api-key");
     const key = await readSecret(`${provider} API key`);
     if (!key) throw new Error(`No ${provider} key provided.`);
@@ -408,13 +408,14 @@ export async function login(args: string[]) {
     const stamp = new Date().toISOString();
     storeCredential(provider, { kind: "api_key", accessToken: key, createdAt: stamp, updatedAt: stamp });
     const usedBy =
-      provider === "theirstack" ? "`fullstackgtm tam estimate --source theirstack`" : "`fullstackgtm enrich acquire`";
+      provider === "theirstack" ? "`fullstackgtm tam estimate --source theirstack`" :
+      provider === "exa" ? "`fullstackgtm signals discover`" : "`fullstackgtm enrich acquire`";
     console.log(`Stored ${provider} API key in ${credentialsPath()}. ${usedBy} uses it automatically (validated on first pull).`);
     return;
   }
   if (provider !== "hubspot") {
     throw new Error(
-      "login supports: hubspot, salesforce, stripe, anthropic, openai, openrouter, apollo, clay, pipe0, explorium, heyreach, theirstack, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com",
+      "login supports: hubspot, salesforce, stripe, anthropic, openai, openrouter, apollo, clay, pipe0, explorium, heyreach, theirstack, exa, or --via <hosted url>. Usage: fullstackgtm login <provider> | fullstackgtm login --via https://gtm.example.com",
     );
   }
   const now = new Date().toISOString();

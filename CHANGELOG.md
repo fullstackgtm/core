@@ -7,6 +7,27 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.55.0] — 2026-07-13
+
+### Added
+
+- `signals discover` turns editable ICP behavioral-trigger hypotheses into
+  evidence-gated public ATS searches through Exa, resolves employers to
+  official domains, and emits verbatim-quoted signals for `icp judge`.
+- ICP derivation now proposes structured trigger hypotheses with positive
+  evidence, active projects, buyer functions, negative evidence, and preferred
+  public source classes; existing `intentTopics` ICPs remain compatible.
+- Exa joins the credential ladder through `EXA_API_KEY`,
+  `FSGTM_EXA_API_KEY`, or `fullstackgtm login exa`.
+
+### Changed
+
+- Signal discovery exposes explicit account, result, search, and reported-cost
+  limits, structured JSON output, and remains read-only unless `--save` is used
+  to persist the local signal ledger.
+- `signals discover` is schedulable alongside `signals fetch`; unattended runs
+  still cannot emit or apply CRM patch plans.
+
 ## [0.54.0] — 2026-07-12
 
 ### Added

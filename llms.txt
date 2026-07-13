@@ -190,7 +190,10 @@ file/serpapi-news/hubspot-forms with secrets through the credential ladder; and
 push platforms via the webhook spool — `--connector file` reads the conventional
 landing zone `<home>/signals/spool/*.jsonl`, see docs/signal-spool-format.md),
 keyed by **account domain**, ranked by learned `weights`; it writes NOTHING to
-the CRM. `icp interview|set|show`
+the CRM. `signals discover` starts from editable ICP behavioral hypotheses,
+searches canonical public ATS evidence through Exa with explicit request and
+reported-cost limits, resolves official employer domains, and writes NOTHING
+unless `--save` persists the local signal ledger. `icp interview|set|show`
 builds `icp.json`; `icp judge` ranks fresh signals into send/nurture/skip — pass
 a snapshot (`--provider`/`--input`/`--demo`) and each decision resolves its CRM
 target: `accountId`, the best `contact {id,email,title}`, and `contacts[]` (all
@@ -216,7 +219,7 @@ surfaced at every hop, so the loop is contact-coherent end to end — see the
 `fullstackgtm schedule` is the horizontal scheduler — no feature namespace
 owns cron logic. `add "<command>" --cron "<expr>"` validates the command
 against the read/plan-side allowlist (audit, snapshot, enrich append|refresh,
-enrich acquire --save, market capture|refresh, signals fetch, icp judge|eval,
+enrich acquire --save, market capture|refresh, signals fetch|discover, icp judge|eval,
 draft, suggest, report, doctor) and the 5-field cron
 expression, but touches no system timer; `install` materializes enabled
 entries into the platform timer (`--timer` defaults launchd on macOS,

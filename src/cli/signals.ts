@@ -3,11 +3,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { getCredential, resolveHubspotConnection } from "../credentials.ts";
+import { discoverSignalsWithExa } from "../signalDiscovery.ts";
 import { buildSignalsFromAts, computeWeights, createFileSignalStore, DEFAULT_SIGNALS_CONFIG, dedupeSignals, loadSignalsConfig, makeOutcome, normalizeAccountDomain, SIGNAL_BUCKETS, signalRunId, signalsSpoolDir, stagedRowToSignal, type Signal, type SignalBucket, type SignalOutcomeResult, type SignalsConfig } from "../signals.ts";
 import { fetchAtsJobs, type AtsBoardSource, type AtsJob } from "../connectors/atsBoards.ts";
 import { getSignalSource, listSignalSources, type SignalSourceContext } from "../connectors/signalSources.ts";
 import { isSpoolPath, readSpoolPath } from "../spoolFiles.ts";
-import { option, readSnapshot, repeatedOption, saveRequested } from "./shared.ts";
+import { loadIcp, option, readSnapshot, repeatedOption, saveRequested } from "./shared.ts";
 import { createStatusLine } from "./ui.ts";
 import { unknownSubcommandError } from "./suggest.ts";
 
@@ -113,12 +114,15 @@ export async function signalsCommand(args: string[]) {
   if (!sub || args.includes("--help") || args.includes("-h")) {
     console.log(`Usage:
   fullstackgtm signals fetch [--bucket job,funding,...] [--source greenhouse,lever,ashby] [--connector file,serpapi-news,hubspot-forms] [--connector-opt k=v ...] [--watchlist <path|crm:segment>] [--keywords "growth,revops"] [--from <file.json|spool.jsonl|spool-dir>] [--config <path>] [--save]
+  fullstackgtm signals discover [--icp <path>] [--source exa] [--since 30d] [--max-accounts 10] [--max-results 50] [--max-searches 12] [--max-usd 0.25] [--save]
   fullstackgtm signals list [--since 7d] [--bucket b] [--account d] [--unjudged]
   fullstackgtm signals outcome --account <domain> [--touch <id>] --result replied|meeting|bounced|no_reply
   fullstackgtm signals weights [--explain]
 
-Detect fresh buying triggers and rank them. \`fetch\` is read-only re: CRM — it
-NEVER emits a patch plan; --save persists only the local signal ledger (used by
+Detect fresh buying triggers and rank them. \`discover\` searches canonical
+public ATS pages for evidence matching the ICP's behavioral trigger hypotheses,
+then resolves employer domains through Exa. \`fetch\` and \`discover\` are read-only re: CRM — they
+NEVER emit a patch plan; --save persists only the local signal ledger (used by
 \`icp judge\`). ATS adapters are no-auth. Source connectors (--connector) pull
 from connected platforms: file (local JSON/JSONL spool, no auth), serpapi-news
 (API key via env/login), hubspot-forms (reuses the HubSpot login). Secrets come
@@ -128,6 +132,54 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
 \`--connector file\` with no path reads the conventional webhook landing zone
 (${signalsSpoolDir()}) — every *.jsonl in it. Point a webhook receiver there
 (one row per event); see docs/signal-spool-format.md.`);
+    return;
+  }
+
+  if (sub === "discover") {
+    const source = option(rest, "--source") ?? "exa";
+    if (source !== "exa") throw new Error(`signals discover: unsupported --source "${source}" (currently: exa).`);
+    const icp = loadIcp(rest);
+    if (!icp) throw new Error("signals discover: no ICP found. Pass --icp <path> or create ./icp.json.");
+    const apiKey = await resolveSignalSourceKey("exa");
+    if (!apiKey) throw new Error("signals discover: missing Exa API key. Set EXA_API_KEY or run `fullstackgtm login exa`.");
+    const now = new Date();
+    const sinceArg = option(rest, "--since") ?? "30d";
+    const since = new Date(now.getTime() - parseSinceWindowMs(sinceArg));
+    const maxAccounts = positiveIntegerOption(rest, "--max-accounts", 10);
+    const maxResults = positiveIntegerOption(rest, "--max-results", 50);
+    const maxSearches = positiveIntegerOption(rest, "--max-searches", 12);
+    const maxUsd = positiveNumberOption(rest, "--max-usd", 0.25);
+    const config = resolveSignalsConfig(rest);
+    const status = createStatusLine();
+    status.set(`Searching public evidence with Exa… up to ${maxSearches} searches / $${maxUsd.toFixed(2)}`);
+    let discovered;
+    try {
+      discovered = await discoverSignalsWithExa({ icp, apiKey, since, maxAccounts, maxResults, maxSearches, maxUsd, now,
+        config });
+    } finally {
+      status.done();
+    }
+    const store = createFileSignalStore();
+    const priorSignals = await store.allSignals();
+    const { fresh, deduped } = dedupeSignals(discovered.signals, priorSignals, config.dedupWindowDays, now);
+    const ranked = [...fresh].sort((a, b) => b.weight - a.weight || a.accountDomain.localeCompare(b.accountDomain));
+    const output = { ...discovered.summary, freshSignals: ranked.length, dedupedSignals: deduped.length,
+      warnings: discovered.summary.warnings, signals: ranked };
+    console.log(rest.includes("--json") || rest.includes("--verbose") ? JSON.stringify(output, null, 2) : renderSignals(ranked));
+    console.error(
+      `Exa: ${discovered.summary.searchesUsed}/${maxSearches} searches, $${discovered.summary.costUsd.toFixed(4)} reported cost; ` +
+      `${discovered.summary.matchedEvidence} evidence match(es), ${discovered.summary.resolvedAccounts} account(s), ` +
+      `${ranked.length} fresh. NO plan emitted — discovery is read-only re: CRM.`,
+    );
+    for (const warning of discovered.summary.warnings) console.error(`Warning: ${warning}`);
+    if (saveRequested(rest)) {
+      const runLabel = option(rest, "--label") ?? `discover-${now.toISOString().slice(0, 10)}`;
+      await store.appendRun({ id: signalRunId(runLabel), runLabel, startedAt: now.toISOString(), completedAt: new Date().toISOString(),
+        buckets: ["job"], counts: { fetched: discovered.summary.rawResults, new: ranked.length, deduped: deduped.length }, signals: ranked });
+      console.error(`Saved signal run "${runLabel}". Next: \`fullstackgtm icp judge --signals-from ${runLabel} --save\`.`);
+    } else {
+      console.error("(not saved — re-run with --save to persist this evidence to the signal ledger)");
+    }
     return;
   }
 
@@ -348,7 +400,23 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
     return;
   }
 
-  throw unknownSubcommandError("signals", sub, ["fetch", "list", "outcome", "weights"]);
+  throw unknownSubcommandError("signals", sub, ["fetch", "discover", "list", "outcome", "weights"]);
+}
+
+function positiveIntegerOption(args: string[], flag: string, fallback: number): number {
+  const raw = option(args, flag);
+  if (raw == null) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) throw new Error(`${flag}: expected a positive integer (got "${raw}").`);
+  return value;
+}
+
+function positiveNumberOption(args: string[], flag: string, fallback: number): number {
+  const raw = option(args, flag);
+  if (raw == null) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${flag}: expected a number greater than zero (got "${raw}").`);
+  return value;
 }
 
 /** Parse a "7d"/"30d"/"12h" recency window into milliseconds. */

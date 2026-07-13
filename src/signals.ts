@@ -57,6 +57,10 @@ export type Signal = {
    * id under the same title) from one continuously-open req. job-bucket only.
    */
   roleKey?: string;
+  /** Optional provenance carried by evidence-first discovery. */
+  hypothesisId?: string;
+  companyName?: string;
+  publishedAt?: string;
 };
 
 export type SignalOutcomeResult = "replied" | "meeting" | "bounced" | "no_reply";

@@ -539,6 +539,17 @@ export {
   type SignalStore,
 } from "./signals.ts";
 export {
+  DEFAULT_DISCOVERY_ATS_DOMAINS,
+  discoverSignalsWithExa,
+  exaQueryForHypothesis,
+  parseJobIdentity,
+  triggerHypothesesForIcp,
+  type DiscoverSignalsOptions,
+  type EvidenceCandidate,
+  type SignalDiscoveryResult,
+  type SignalDiscoverySummary,
+} from "./signalDiscovery.ts";
+export {
   fetchAtsJobs,
   snippetFor,
   type AtsBoardSource,

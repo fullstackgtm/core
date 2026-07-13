@@ -25,7 +25,7 @@ import { isSpoolPath, readSpoolPath } from "../spoolFiles.ts";
 import { isOptionValue, loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.ts";
 import { providerKey } from "./tam.ts";
 import { unknownSubcommandError } from "./suggest.ts";
-import { box, colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, truncateToWidth, type Paint } from "./ui.ts";
+import { box, colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, scoreColor, truncateToWidth, type Paint } from "./ui.ts";
 import { compactPlan, verbosePlanRequested } from "./planOutput.ts";
 import type { AcquireBudget } from "../acquireMeter.ts";
 
@@ -946,12 +946,14 @@ function renderAcquireLeadCards(result: ReturnType<typeof buildAcquirePlan>): st
     let fit: number | undefined;
     const item = operation.evidenceIds?.[0] ? evidence.get(operation.evidenceIds[0]) : undefined;
     try { fit = Number((JSON.parse(item?.text ?? "{}") as { fitScore?: unknown }).fitScore); } catch { /* malformed evidence remains display-only */ }
+    const fitPercent = Number.isFinite(fit) ? Math.round((fit ?? 0) * 100) : undefined;
     const lines = [
-      truncateToWidth(name, 84),
-      truncateToWidth(`${title} · ${company}`, 84),
-      truncateToWidth([payload.associateCompanyDomain, props.hs_linkedin_url].filter(Boolean).join(" · "), 84),
+      p.bold(truncateToWidth(name, 84)),
+      p.cyan(truncateToWidth(`${title} · ${company}`, 84)),
+      p.blue(truncateToWidth([payload.associateCompanyDomain, props.hs_linkedin_url].filter(Boolean).join(" · "), 84)),
     ];
-    return box(lines, p, `Lead ${index + 1}/${result.plan.operations.length}${Number.isFinite(fit) ? ` · ${Math.round((fit ?? 0) * 100)}% fit` : ""}`).join("\n");
+    const fitLabel = fitPercent === undefined ? "" : ` · ${scoreColor(fitPercent, p)}% fit`;
+    return box(lines, p, `Lead ${index + 1}/${result.plan.operations.length}${fitLabel}`).join("\n");
   }).join("\n");
 }
 

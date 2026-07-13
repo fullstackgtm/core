@@ -21,9 +21,9 @@ Usage:
   fullstackgtm login stripe [--no-validate]
   fullstackgtm login anthropic | openai        store an LLM API key for call parse/score
   fullstackgtm login apollo | clay             store a data-provider Public API key
-  fullstackgtm login pipe0 | explorium | theirstack  store a discovery-provider key (theirstack = technographic TAM)
+  fullstackgtm login pipe0 | explorium | theirstack | exa  store a discovery-provider key
   fullstackgtm login heyreach                  store a HeyReach key for enrich acquire --source linkedin
-  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|clay|pipe0|explorium|heyreach|broker>
+  fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|clay|pipe0|explorium|theirstack|exa|heyreach|broker>
 
   Secrets (tokens, client secrets) are NEVER passed as flags — they leak via
   the process list and shell history. Pipe them on stdin or enter them at the
@@ -105,10 +105,12 @@ Usage:
                                                in the same plan (freemail domains never used;
                                                --skip-unmatched = report-only). HubSpot-only for now.
   fullstackgtm signals fetch [--bucket job,…] [--source greenhouse,lever,ashby] [--watchlist <path|crm:seg>] [--keywords …] [--from <file.json|spool.jsonl|spool-dir>] [--save]
+  fullstackgtm signals discover [--icp <path>] [--source exa] [--since 30d] [--max-accounts 10] [--max-results 50] [--max-searches 12] [--max-usd 0.25] [--save]
   fullstackgtm signals list [--since 7d] [--bucket b] [--account d] [--unjudged]
   fullstackgtm signals outcome --account <d> [--touch <id>] --result replied|meeting|bounced|no_reply
   fullstackgtm signals weights [--explain]
-                                               detect fresh buying triggers (ATS hiring scrapes + staged
+                                               detect fresh buying triggers (ICP-driven evidence discovery,
+                                               ATS hiring scans, and staged
                                                funding/company/social ingest), rank them, persist a local
                                                signal ledger. READ-ONLY re: CRM — fetch NEVER emits a plan;
                                                --save persists only the signal ledger. outcome feeds the
@@ -324,7 +326,7 @@ export const HELP: Record<string, HelpEntry> = {
   logout: {
     summary: "remove stored credentials for a provider",
     phase: "Setup",
-    synopsis: ["fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|clay|pipe0|explorium|broker>"],
+    synopsis: ["fullstackgtm logout <hubspot|salesforce|stripe|anthropic|openai|apollo|clay|pipe0|explorium|theirstack|exa|broker>"],
     seeAlso: ["login", "doctor"],
   },
   doctor: {
@@ -622,12 +624,13 @@ export const HELP: Record<string, HelpEntry> = {
     phase: "Detect",
     synopsis: [
       "fullstackgtm signals fetch [--bucket job,…] [--source greenhouse,lever,ashby] [--connector file,serpapi-news,hubspot-forms] [--connector-opt k=v] [--watchlist <path|crm:seg>] [--keywords …] [--from <file.json|spool.jsonl|spool-dir>] [--save]",
+      "fullstackgtm signals discover [--icp <path>] [--source exa] [--since 30d] [--max-accounts 10] [--max-results 50] [--max-searches 12] [--max-usd 0.25] [--save]",
       "fullstackgtm signals list [--since 7d] [--bucket b] [--account d] [--unjudged]",
       "fullstackgtm signals outcome --account <d> [--touch <id>] --result replied|meeting|bounced|no_reply",
       "fullstackgtm signals weights [--explain]",
     ],
     detail:
-      "Read-only re: CRM — `fetch` NEVER emits a patch plan; `--save` persists only the local signal ledger. ATS adapters are no-auth; source connectors (`--connector`) pull from connected platforms with secrets via the credential ladder, never argv. `outcome` feeds the learned per-bucket `weights`.",
+      "Read-only re: CRM — `fetch` and `discover` NEVER emit a patch plan; `--save` persists only the local signal ledger. `discover` matches ICP behavioral hypotheses against canonical public ATS evidence through Exa, with explicit request and reported-cost budgets. Secrets resolve through env/login, never argv. `outcome` feeds the learned per-bucket `weights`.",
     seeAlso: ["icp", "draft"],
   },
   icp: {
@@ -699,13 +702,13 @@ export const COMMAND_FLAGS: Record<string, string[]> = {
   market: ["--category", "--config", "--vendor", "--snapshot", "--task-account", "--task-deal", "--capture-run", "--run", "--prior-run", "--diff", "--from", "--calls", "--anchor", "--min-mentions", "--max-claims", "--promote-lift", "--model", "--format", "--auto", "--unverified", "--save", "--dry-run", "--verbose", "--json", "--out"],
   tam: [...SOURCE_FLAGS, "--source", "--name", "--icp", "--accounts", "--acv", "--acv-basis", "--acv-from-crm", "--deal-period", "--buyers-per-account", "--cross-checks", "--max", "--max-credits", "--usd-per-credit", "--dry-run", "--confirm", "--cron", "--label", "--save", "--verbose", "--json", "--out"],
   icp: [...SOURCE_FLAGS, "--name", "--icp", "--domain", "--no-interactive", "--signals-from", "--with-history", "--prompt", "--min-score", "--from-judge", "--golden", "--against-outcomes", "--min-accuracy", "--model", "--label", "--save", "--verbose", "--json", "--out"],
-  signals: ["--bucket", "--source", "--connector", "--connector-opt", "--watchlist", "--keywords", "--from", "--label", "--since", "--account", "--contact", "--unjudged", "--touch", "--result", "--save", "--verbose", "--json", "--explain"],
+  signals: ["--bucket", "--source", "--connector", "--connector-opt", "--watchlist", "--keywords", "--from", "--label", "--since", "--icp", "--max-accounts", "--max-results", "--max-searches", "--max-usd", "--account", "--contact", "--unjudged", "--touch", "--result", "--save", "--verbose", "--json", "--explain"],
   draft: ["--from-judge", "--min-score", "--prompt", "--model", "--channel", "--save", "--dry-run", "--verbose", "--json", "--out"],
   schedule: ["--cron", "--label", "--provider", "--trigger", "--timer", "--runs", "--verbose", "--json"],
 };
 
 export const FLAGS_WITH_VALUES = new Set([
-  "--account", "--account-id", "--accounts", "--acv", "--acv-basis", "--after", "--anchor", "--api-key", "--approve", "--archive", "--assign-owner", "--attendees", "--before", "--bucket", "--buyers-per-account", "--call", "--call-type", "--calls", "--capture-run", "--category", "--channel", "--client", "--client-id", "--client-secret", "--config", "--connector", "--connector-opt", "--contact", "--cron", "--cross-checks", "--deal", "--deal-period", "--diff", "--domain", "--email", "--except-deal-stage", "--format", "--from", "--from-judge", "--golden", "--guard", "--icp", "--in", "--input", "--instance-url", "--keep", "--key", "--keywords", "--label", "--list", "--login-url", "--match", "--match-property", "--max", "--max-claims", "--max-credits", "--max-examples", "--max-operations", "--min-accuracy", "--min-confidence", "--min-mentions", "--min-score", "--model", "--name", "--objects", "--operations", "--out", "--pipeline", "--plan", "--plan-id", "--policy", "--port", "--prepared-by", "--prior-run", "--profile", "--promote-lift", "--prompt", "--provider", "--reason", "--require", "--result", "--rubric", "--rule", "--rules", "--run", "--run-label", "--runs", "--scan-limit", "--scopes", "--seed", "--set", "--signals-from", "--since", "--snapshot", "--source", "--staged-run", "--stale-days", "--status", "--task-account", "--task-deal", "--timer", "--title", "--to", "--today", "--token", "--token-env", "--touch", "--transcript", "--trigger", "--usd-per-credit", "--value", "--values-from", "--vendor", "--via", "--watchlist", "--where",
+  "--account", "--account-id", "--accounts", "--acv", "--acv-basis", "--after", "--anchor", "--api-key", "--approve", "--archive", "--assign-owner", "--attendees", "--before", "--bucket", "--buyers-per-account", "--call", "--call-type", "--calls", "--capture-run", "--category", "--channel", "--client", "--client-id", "--client-secret", "--config", "--connector", "--connector-opt", "--contact", "--cron", "--cross-checks", "--deal", "--deal-period", "--diff", "--domain", "--email", "--except-deal-stage", "--format", "--from", "--from-judge", "--golden", "--guard", "--icp", "--in", "--input", "--instance-url", "--keep", "--key", "--keywords", "--label", "--list", "--login-url", "--match", "--match-property", "--max", "--max-accounts", "--max-claims", "--max-credits", "--max-examples", "--max-operations", "--max-results", "--max-searches", "--max-usd", "--min-accuracy", "--min-confidence", "--min-mentions", "--min-score", "--model", "--name", "--objects", "--operations", "--out", "--pipeline", "--plan", "--plan-id", "--policy", "--port", "--prepared-by", "--prior-run", "--profile", "--promote-lift", "--prompt", "--provider", "--reason", "--require", "--result", "--rubric", "--rule", "--rules", "--run", "--run-label", "--runs", "--scan-limit", "--scopes", "--seed", "--set", "--signals-from", "--since", "--snapshot", "--source", "--staged-run", "--stale-days", "--status", "--task-account", "--task-deal", "--timer", "--title", "--to", "--today", "--token", "--token-env", "--touch", "--transcript", "--trigger", "--usd-per-credit", "--value", "--values-from", "--vendor", "--via", "--watchlist", "--where",
 ]);
 
 // Lifecycle-grouped front door. One line per verb, organized by the

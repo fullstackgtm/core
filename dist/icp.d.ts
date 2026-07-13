@@ -12,6 +12,22 @@
  *
  * Zero runtime deps; pure functions (translation + scoring take plain data).
  */
+export type TriggerHypothesis = {
+    /** Stable, human-editable key used to trace discovered evidence back to the ICP. */
+    id: string;
+    /** Observable business condition, e.g. "sales compensation process is breaking". */
+    label: string;
+    /** Phrases or concepts that count as supporting public evidence. */
+    positiveEvidence: string[];
+    /** Concrete projects/roles that often expose the condition. */
+    activeProjects?: string[];
+    /** Functions likely to own or feel the problem. */
+    buyerFunctions?: string[];
+    /** Terms that make a result a likely false positive. */
+    negativeEvidence?: string[];
+    /** Preferred public source classes. Discovery currently implements `job`. */
+    preferredSources?: Array<"job" | "news" | "company" | "social" | "review" | "legal">;
+};
 export type Icp = {
     name: string;
     /** `investment` means the organization is sourcing companies to invest in,
@@ -49,6 +65,8 @@ export type Icp = {
     };
     signals?: {
         intentTopics?: string[];
+        /** Testable behavioral hypotheses for evidence-first account discovery. */
+        triggerHypotheses?: TriggerHypothesis[];
     };
     scoring?: {
         /** minimum fit (0..1) for a prospect to become a create_record op. Default 0.5. */

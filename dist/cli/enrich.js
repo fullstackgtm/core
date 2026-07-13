@@ -23,7 +23,7 @@ import { isSpoolPath, readSpoolPath } from "../spoolFiles.js";
 import { isOptionValue, loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.js";
 import { providerKey } from "./tam.js";
 import { unknownSubcommandError } from "./suggest.js";
-import { box, colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, truncateToWidth } from "./ui.js";
+import { box, colorEnabled, createProgressRenderer, createStatusLine, formatBar, formatDuration, paint, scoreColor, truncateToWidth } from "./ui.js";
 import { compactPlan, verbosePlanRequested } from "./planOutput.js";
 /**
  * The enrich layer: governed append/refresh of third-party data (Apollo pull,
@@ -830,12 +830,14 @@ function renderAcquireLeadCards(result) {
             fit = Number(JSON.parse(item?.text ?? "{}").fitScore);
         }
         catch { /* malformed evidence remains display-only */ }
+        const fitPercent = Number.isFinite(fit) ? Math.round((fit ?? 0) * 100) : undefined;
         const lines = [
-            truncateToWidth(name, 84),
-            truncateToWidth(`${title} · ${company}`, 84),
-            truncateToWidth([payload.associateCompanyDomain, props.hs_linkedin_url].filter(Boolean).join(" · "), 84),
+            p.bold(truncateToWidth(name, 84)),
+            p.cyan(truncateToWidth(`${title} · ${company}`, 84)),
+            p.blue(truncateToWidth([payload.associateCompanyDomain, props.hs_linkedin_url].filter(Boolean).join(" · "), 84)),
         ];
-        return box(lines, p, `Lead ${index + 1}/${result.plan.operations.length}${Number.isFinite(fit) ? ` · ${Math.round((fit ?? 0) * 100)}% fit` : ""}`).join("\n");
+        const fitLabel = fitPercent === undefined ? "" : ` · ${scoreColor(fitPercent, p)}% fit`;
+        return box(lines, p, `Lead ${index + 1}/${result.plan.operations.length}${fitLabel}`).join("\n");
     }).join("\n");
 }
 function printAcquireOutput(options) {

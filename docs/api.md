@@ -126,7 +126,7 @@ Four flags name "where data comes from / goes to"; they are not interchangeable:
 | Flag | Meaning | Values |
 |---|---|---|
 | `--provider` | The CRM the data lives in — the system a snapshot is read from and an approved plan is applied to. | `hubspot`, `salesforce` (plus `stripe`, read-only) |
-| `--source` | The external data source feeding a verb: an enrichment/discovery vendor on `enrich`/`tam` (`--source apollo`, `acquire --source pipe0`), a staged-ingest label on `enrich ingest`, or — on `signals fetch` — which no-auth ATS board adapters to scan. | `apollo`, `clay`, `pipe0`, `explorium`, `theirstack`, `linkedin` (HeyReach); `greenhouse` / `lever` / `ashby` on `signals fetch` |
+| `--source` | The external data source feeding a verb: an enrichment/discovery vendor on `enrich`/`tam` (`--source apollo`, `acquire --source pipe0`), a staged-ingest label on `enrich ingest`, on `signals fetch` which no-auth ATS board adapters to scan, or `exa` on `signals discover`. | `apollo`, `clay`, `pipe0`, `explorium`, `theirstack`, `linkedin` (HeyReach), `exa`; `greenhouse` / `lever` / `ashby` on `signals fetch` |
 | `--connector` | A signal-intake source connector on `signals fetch`: pulls candidate signals from a connected platform or the local webhook spool into the signal ledger. | `file`, `serpapi-news`, `hubspot-forms` |
 | `--channel` | Where a plan's output is delivered. On `apply`, the delivery terminus — a plan applies to `--provider <crm>` *or* `--channel outbox` (render approved openers to a local outbox file; transmits nothing), never both. On `draft`, which outreach channel the opener is drafted for (shapes the emitted op). | `apply`: `outbox` · `draft`: `email`, `linkedin`, `task` |
 
@@ -136,7 +136,7 @@ Additive; every legacy flag keeps working:
 
 - `--dry-run` — accepted on the plan-spine verbs (`audit`, `suggest`,
   `bulk-update`, `dedupe`, `reassign`, `fix`, `call plan`,
-  `enrich append`/`refresh`/`acquire`, `signals fetch`, `icp judge`, `draft`,
+  `enrich append`/`refresh`/`acquire`, `signals fetch`/`discover`, `icp judge`, `draft`,
   `tam status`, `market overlay`). These verbs are already preview-by-default
   (plans are dry-run; nothing writes to a CRM outside approve → apply), so the
   flag asserts that default rather than changing it: it additionally suppresses

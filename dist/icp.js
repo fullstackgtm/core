@@ -338,6 +338,34 @@ function titleCase(value) {
         .map((w) => (ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
         .join(" ");
 }
+function inferredLevel(title) {
+    if (/\b(chief|ceo|cfo|coo|cto|cio|cmo|cro)\b/.test(title))
+        return "cxo";
+    if (/\b(vp|vice president)\b/.test(title))
+        return "vp";
+    if (/\b(head|general manager|gm)\b/.test(title))
+        return "head";
+    if (/\bdirector\b/.test(title))
+        return "director";
+    if (/\bmanager\b/.test(title))
+        return "manager";
+    if (/\b(founder|owner|partner)\b/.test(title))
+        return "owner";
+    return "";
+}
+function inferredDepartment(title) {
+    const aliases = [
+        ["operations", /\b(operations|ops|revops|gtm)\b/],
+        ["sales", /\b(sales|revenue|commercial)\b/],
+        ["marketing", /\b(marketing|growth|demand generation|brand)\b/],
+        ["creative", /\b(creative|content|design)\b/],
+        ["media", /\b(media|advertising)\b/],
+        ["engineering", /\b(engineering|developer|technical)\b/],
+        ["product", /\bproduct\b/],
+        ["finance", /\b(finance|financial)\b/],
+    ];
+    return aliases.find(([, pattern]) => pattern.test(title))?.[0] ?? "";
+}
 /**
  * Score a prospect's PERSONA fit 0..1. Title-keyword match is the strongest
  * signal (it's what defines the buyer); job level and department add to it.
@@ -357,26 +385,31 @@ export function scoreProspectAgainstIcp(prospect, icp) {
     let weightSum = 0;
     if (keywords.length) {
         weightSum += 0.6;
-        const hit = keywords.find((k) => title.includes(k)) ?? roleKeywords(icp).find((keyword) => title.includes(keyword));
-        if (hit) {
+        const exact = keywords.find((k) => title.includes(k));
+        const functional = exact ? undefined : roleKeywords(icp).find((keyword) => title.includes(keyword));
+        if (exact) {
             score += 0.6;
-            reasons.push(`title matches ICP keyword "${hit}"`);
+            reasons.push(`title matches ICP keyword "${exact}"`);
+        }
+        else if (functional) {
+            score += 0.45;
+            reasons.push(`title matches ICP function "${functional}"`);
         }
     }
     if (levels.length) {
         weightSum += 0.25;
-        const level = (prospect.jobLevel ?? "").toLowerCase();
+        const level = (prospect.jobLevel ?? inferredLevel(title)).toLowerCase();
         if (level && levels.some((l) => level.includes(l))) {
             score += 0.25;
-            reasons.push(`seniority "${prospect.jobLevel}" in ICP levels`);
+            reasons.push(`seniority "${level}" in ICP levels${prospect.jobLevel ? "" : " (inferred from title)"}`);
         }
     }
     if (depts.length) {
         weightSum += 0.15;
-        const dept = (prospect.jobDepartment ?? "").toLowerCase();
+        const dept = (prospect.jobDepartment ?? inferredDepartment(title)).toLowerCase();
         if (dept && depts.some((d) => dept.includes(d))) {
             score += 0.15;
-            reasons.push(`department "${prospect.jobDepartment}" in ICP`);
+            reasons.push(`department "${dept}" in ICP${prospect.jobDepartment ? "" : " (inferred from title)"}`);
         }
     }
     const normalized = weightSum > 0 ? score / weightSum : 0;
