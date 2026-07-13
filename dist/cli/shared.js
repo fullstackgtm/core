@@ -288,6 +288,35 @@ export function loadIcp(args) {
  *     e.g. `echo "$TOKEN" | fullstackgtm login hubspot`
  *   - interactive: prompted on the TTY with the input muted
  */
+export function createSecretMaskRenderer(options) {
+    let muted = false;
+    let renderQueued = false;
+    let settled = false;
+    return {
+        mute() { muted = true; },
+        settle() { settled = true; },
+        write(value) {
+            if (!muted) {
+                options.write(value);
+                return;
+            }
+            if (settled || renderQueued)
+                return;
+            renderQueued = true;
+            queueMicrotask(() => {
+                renderQueued = false;
+                // readline clears `line` during close. Submission settles this renderer
+                // first so an Enter-triggered repaint cannot redraw an empty prompt
+                // after the final mask/newline ("0 characters received").
+                if (settled)
+                    return;
+                const length = options.lineLength();
+                const mask = `${"•".repeat(Math.min(length, 12))}${length > 12 ? "…" : ""}`;
+                options.write(`\r\u001b[2K${options.label}: ${mask} (${length} character${length === 1 ? "" : "s"} received)`);
+            });
+        },
+    };
+}
 export async function readSecret(label) {
     if (!process.stdin.isTTY) {
         const chunks = [];
@@ -311,30 +340,20 @@ export async function readSecret(label) {
             output: process.stderr,
             terminal: true,
         });
-        let muted = false;
         const mutable = rl;
-        let renderQueued = false;
-        mutable._writeToOutput = (value) => {
-            if (!muted) {
-                process.stderr.write(value);
-                return;
-            }
-            if (renderQueued)
-                return;
-            renderQueued = true;
-            queueMicrotask(() => {
-                renderQueued = false;
-                const length = mutable.line?.length ?? 0;
-                const mask = `${"•".repeat(Math.min(length, 12))}${length > 12 ? "…" : ""}`;
-                process.stderr.write(`\r\u001b[2K${label}: ${mask} (${length} character${length === 1 ? "" : "s"} received)`);
-            });
-        };
+        const renderer = createSecretMaskRenderer({
+            label,
+            lineLength: () => mutable.line?.length ?? 0,
+            write: (value) => process.stderr.write(value),
+        });
+        mutable._writeToOutput = (value) => renderer.write(value);
         rl.question(`${label}: `, (answer) => {
+            renderer.settle();
             rl.close();
             process.stderr.write("\n");
             resolveSecret(answer.trim());
         });
-        muted = true;
+        renderer.mute();
     });
 }
 export function isOptionValue(args, arg) {

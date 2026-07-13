@@ -65,6 +65,15 @@ export declare function loadIcp(args: string[]): Icp | undefined;
  *     e.g. `echo "$TOKEN" | fullstackgtm login hubspot`
  *   - interactive: prompted on the TTY with the input muted
  */
+export declare function createSecretMaskRenderer(options: {
+    label: string;
+    lineLength: () => number;
+    write: (value: string) => void;
+}): {
+    mute(): void;
+    settle(): void;
+    write(value: string): void;
+};
 export declare function readSecret(label: string): Promise<string>;
 export declare function isOptionValue(args: string[], arg: string): boolean;
 export declare function readPackageInfo(): {

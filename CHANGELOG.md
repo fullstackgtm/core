@@ -7,6 +7,14 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.55.1] — 2026-07-13
+
+### Fixed
+
+- Interactive masked login prompts no longer repaint an empty
+  `0 characters received` line after Enter is pressed. Submission now settles
+  the renderer before `readline` clears its internal input buffer.
+
 ## [0.55.0] — 2026-07-13
 
 ### Added
