@@ -26,7 +26,7 @@ export function normalizeClayPerson(value) {
         companyName: stringValue(row.latest_experience_company),
         companyDomain: bareDomain(stringValue(row.domain)),
         linkedin: normalizeLinkedin(stringValue(row.url)),
-        email: stringValue(row.email),
+        email: stringValue(row.work_email) ?? stringValue(row.email) ?? stringValue(row.personal_email),
         sourceId: normalizeLinkedin(stringValue(row.url)) ?? fullName,
         location: {
             city: stringValue(location.city),

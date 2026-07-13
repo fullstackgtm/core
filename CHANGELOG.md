@@ -7,6 +7,14 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.56.1] — 2026-07-13
+
+### Fixed
+
+- Portable Clay normalization retains provider `work_email` and fallback
+  `personal_email` fields, preserving the homepage demo's pre-existing contact
+  disclosure behavior while still returning only the canonical prospect shape.
+
 ## [0.56.0] — 2026-07-13
 
 ### Added
