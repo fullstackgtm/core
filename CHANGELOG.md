@@ -7,6 +7,19 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.55.2] — 2026-07-13
+
+### Changed
+
+- The OSS repository now publishes a representative contributor test suite
+  covering CLI contracts, planning, configuration, HTTP safety, and security,
+  while hosted, live-integration, and adversarial release tests remain private.
+
+### Fixed
+
+- OSS mirror generation and `npm test` now fail when zero public tests are
+  discovered, preventing false-green contributor and release checks.
+
 ## [0.55.1] — 2026-07-13
 
 ### Fixed

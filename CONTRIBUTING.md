@@ -64,6 +64,12 @@ Linux, macOS, and Windows; source-level tests remain on Node 22.6+.
 > (a `pretest` guard) rather than silently passing with zero tests. On the
 > published mirror, `tests/` is present and `npm test` works there.
 
+The public mirror includes a representative suite covering supported CLI,
+planning, configuration, HTTP, and security behavior. Additional hosted-product,
+live-integration, and adversarial release tests remain in the private monorepo;
+both suites gate releases. The public test selection is reviewed explicitly in
+`oss/public-tests.txt`, and `npm test` fails if the mirror contains zero tests.
+
 **Node:** the published runtime supports Node ≥ 20 (`engines`), but the test
 runner needs Node **≥ 22.6** for `--experimental-strip-types`. Develop on 22.6+.
 

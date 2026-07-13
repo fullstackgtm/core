@@ -44,7 +44,7 @@ enrich append  [--source apollo] [--objects companies,contacts] [--save] [--conf
 enrich refresh [--source apollo] [--stale-days <n>] [--save] [--config <path>]
                [source options] [--run-label <label>] [--json]
 enrich ingest  <file.csv|payload.json|spool.jsonl|spool-dir> --source clay [--run-label <label>] [--objects companies|contacts] [--config <path>]
-enrich acquire [--source <id>] [--max <new-leads>] [--scan-limit <candidates>] [--list <id>] [--assign-owner <id>] [--save] [--config <path>] [--json]
+enrich acquire [--source <id>] [--max <new-leads>] [--scan-limit <candidates>] [--company-domain <domain>] [--list <id>] [--assign-owner <id>] [--save] [--config <path>] [--json]
 enrich status  [--runs] [--source <id>] [--config <path>] [--json]
 
 acquire creates NET-NEW leads from a staged prospect list (ingest first):
@@ -515,8 +515,14 @@ async function acquireFromApi(config, source, rest, icp, snapshot, seen, priorRu
             : disc.provider === "clay"
                 ? (icp ? icpToClayPeopleFilters(icp) : (disc.filters ?? {}))
                 : {};
+    const targetCompanyDomain = option(rest, "--company-domain")?.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+    if (targetCompanyDomain) {
+        if (disc.provider !== "clay")
+            throw new Error("enrich acquire: --company-domain currently requires --source clay");
+        filters = { ...filters, company_identifier: [targetCompanyDomain] };
+    }
     const queryFingerprint = createHash("sha256")
-        .update(JSON.stringify({ source, provider: disc.provider, listId, filters, icp: icp ?? null }))
+        .update(JSON.stringify({ source, provider: disc.provider, listId, filters, icp: icp ?? null, targetCompanyDomain: targetCompanyDomain ?? null }))
         .digest("hex");
     const checkpointKey = {
         provider: disc.provider,
@@ -599,7 +605,7 @@ async function acquireFromApi(config, source, rest, icp, snapshot, seen, priorRu
                     if (!cursor) {
                         const route = clayRoutes[clayRouteIndex];
                         if (route)
-                            filters = route.filters;
+                            filters = { ...route.filters, ...(targetCompanyDomain ? { company_identifier: [targetCompanyDomain] } : {}) };
                         progress.note(`creating Clay people-search iterator · ${route?.id ?? "configured"}`);
                         cursor = await createClaySearch({ apiKey: providerKey("clay"), sourceType: "people", filters });
                     }
@@ -643,6 +649,8 @@ async function acquireFromApi(config, source, rest, icp, snapshot, seen, priorRu
         }
         discovered += page.length;
         progress.items(discovered, scanLimit);
+        if (targetCompanyDomain)
+            page = page.filter((prospect) => normalizedCompanyDomain(prospect.companyDomain) === targetCompanyDomain);
         if (page.length === 0) {
             exhausted = true;
             break;
@@ -884,6 +892,9 @@ function printAcquireOutput(options) {
             console.log(`Observe  ${hostedRuns}`);
         console.log("The meter is charged only when a create lands at apply.");
     }
+}
+function normalizedCompanyDomain(value) {
+    return (value ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
 }
 function hostedRunsUrl() {
     const baseUrl = getCredential("broker")?.baseUrl?.replace(/\/+$/, "");
