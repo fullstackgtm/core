@@ -277,6 +277,17 @@ export {
   type ApolloPullResult,
 } from "./enrichApollo.ts";
 export {
+  createZoomInfoClient,
+  pullZoomInfoRecords,
+  type ZoomInfoClient,
+  type ZoomInfoClientOptions,
+  type ZoomInfoCommandResult,
+  type ZoomInfoCommandRunner,
+  type ZoomInfoPullKey,
+  type ZoomInfoPullOptions,
+  type ZoomInfoPullResult,
+} from "./enrichZoomInfo.ts";
+export {
   diffFindings,
   diffSnapshots,
   diffToMarkdown,

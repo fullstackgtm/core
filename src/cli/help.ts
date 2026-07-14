@@ -90,7 +90,7 @@ Usage:
   fullstackgtm enrich refresh [--source apollo] [--stale-days <n>] [--save] [--config <path>] [source options]
   fullstackgtm enrich ingest <file.csv|payload.json|spool.jsonl|spool-dir> --source clay [--run-label <label>]
   fullstackgtm enrich status [--runs] [--source <id>] [--json]
-                                               governed enrichment: pull (Apollo) or stage (Clay) third-party
+                                               governed enrichment: pull (Apollo/ZoomInfo) or stage (Clay) third-party
                                                data, match it to CRM records deterministically, and emit a
                                                fill-blanks-only patch plan through the normal dry-run →
                                                approve → apply gate. refresh re-checks stale stamped fields
@@ -524,7 +524,7 @@ export const HELP: Record<string, HelpEntry> = {
     seeAlso: ["enrich", "plans", "apply", "resolve"],
   },
   enrich: {
-    summary: "governed third-party enrichment (Apollo/Clay), fill-blanks-only",
+    summary: "governed third-party enrichment (Apollo/ZoomInfo/Clay), fill-blanks-only",
     phase: "Remediate",
     synopsis: ["fullstackgtm enrich append|refresh|ingest|status …  (run `enrich --help` for full options)"],
     detail:

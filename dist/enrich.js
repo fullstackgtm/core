@@ -13,7 +13,7 @@ const MATCH_KEYS = {
     contact: ["email", "name", "linkedin"],
 };
 /** API source ids the MVP can pull from. */
-export const SUPPORTED_API_SOURCES = ["apollo", "explorium", "pipe0", "clay", "linkedin"];
+export const SUPPORTED_API_SOURCES = ["apollo", "zoominfo", "explorium", "pipe0", "clay", "linkedin"];
 /**
  * Canonical fields enrich may target, plus the HubSpot property spellings the
  * config may use for them (so `"crm": "numberofemployees"` and

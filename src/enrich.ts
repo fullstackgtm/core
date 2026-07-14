@@ -20,7 +20,7 @@ import type {
  *
  * Every enrichment vendor ships fire-and-forget writeback — data lands without
  * a diff, without approval, over whatever a human typed. This layer inverts
- * that: a source (Apollo pull, Clay ingest) feeds a deterministic matcher,
+ * that: a source (Apollo/ZoomInfo pull, Clay ingest) feeds a deterministic matcher,
  * the matcher feeds a fill-blanks-only patch plan, and the plan goes through
  * the existing dry-run → approval → apply contract. Every proposed value is
  * traceable to the source payload that produced it (`GtmEvidence` on the
@@ -154,7 +154,7 @@ const MATCH_KEYS: Record<EnrichObjectType, string[]> = {
 };
 
 /** API source ids the MVP can pull from. */
-export const SUPPORTED_API_SOURCES = ["apollo", "explorium", "pipe0", "clay", "linkedin"];
+export const SUPPORTED_API_SOURCES = ["apollo", "zoominfo", "explorium", "pipe0", "clay", "linkedin"];
 
 /**
  * Canonical fields enrich may target, plus the HubSpot property spellings the

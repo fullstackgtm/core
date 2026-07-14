@@ -28,6 +28,7 @@ export { claimHostedPlanApply, hostedPlanDigest, hostedReviewDocument, readHoste
 export { scaffoldWorkspace, starterEnrichConfig, starterIcp, starterPlaybook, } from "./init.js";
 export { appendCoverage, classifyAccount, classifyCoverage, computeCoverage, coverageCountsFromSnapshot, coveredAccounts, coverageToText, crmCheckableCriteria, deriveAcvFromClosedWon, deriveBuyersPerAccount, estimateTam, loadTamModel, projectEta, readCoverageTimeline, saveTamModel, tamDir, tamReportToMarkdown, } from "./tam.js";
 export { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, } from "./enrichApollo.js";
+export { createZoomInfoClient, pullZoomInfoRecords, } from "./enrichZoomInfo.js";
 export { diffFindings, diffSnapshots, diffToMarkdown, } from "./diff.js";
 export { mergeSnapshots, } from "./merge.js";
 export { createFilePlanStore } from "./planStore.js";

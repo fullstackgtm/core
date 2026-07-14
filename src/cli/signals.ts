@@ -179,7 +179,18 @@ from the credential ladder, never argv; --connector-opt carries non-secret knobs
       await store.appendRun({ id: signalRunId(runLabel), runLabel, startedAt: now.toISOString(), completedAt: new Date().toISOString(),
         buckets: ["job"], counts: { fetched: discovered.summary.rawResults, new: ranked.length, deduped: deduped.length }, signals: ranked });
       console.error(`Saved signal run "${runLabel}". Next: \`fullstackgtm icp judge --signals-from ${runLabel} --save\`.`);
-      await mirrorSignalRun(runLabel, now, ["job"], { fetched: discovered.summary.rawResults, new: ranked.length, deduped: deduped.length }, ranked, rest);
+      await mirrorSignalRun(runLabel, now, ["job"], { fetched: discovered.summary.rawResults, new: ranked.length, deduped: deduped.length }, ranked, rest, {
+        provider: discovered.summary.provider,
+        searchesUsed: discovered.summary.searchesUsed,
+        searchLimit: maxSearches,
+        rawResults: discovered.summary.rawResults,
+        matchedEvidence: discovered.summary.matchedEvidence,
+        resolvedAccounts: discovered.summary.resolvedAccounts,
+        unresolvedAccounts: discovered.summary.unresolvedAccounts,
+        costUsd: discovered.summary.costUsd,
+        costLimitUsd: maxUsd,
+        warnings: discovered.summary.warnings,
+      });
     } else {
       console.error("(not saved — re-run with --save to persist this evidence to the signal ledger)");
     }
@@ -414,12 +425,13 @@ async function mirrorSignalRun(
   counts: { fetched: number; new: number; deduped: number },
   signals: Signal[],
   args: string[],
+  discovery?: Record<string, unknown>,
 ) {
   const icpPath = resolve(process.cwd(), option(args, "--icp") ?? "icp.json");
   const tracked = existsSync(icpPath) ? readIcpSyncState(icpPath) : null;
   const mirrored = await writeHostedArtifact({
     kind: "signal_run", key: `signals:${signalRunId(runLabel)}`, label: runLabel,
-    document: { runLabel, startedAt: startedAt.toISOString(), completedAt: new Date().toISOString(), buckets, counts, signals,
+    document: { runLabel, startedAt: startedAt.toISOString(), completedAt: new Date().toISOString(), buckets, counts, signals, ...discovery,
       icpRef: tracked ? { artifactId: tracked.artifactId, domain: tracked.domain, revision: tracked.revision, localIcpSha256: tracked.localIcpSha256 } : undefined },
   });
   if (mirrored.status === "saved") console.error("Mirrored the signal run to the paired hosted workspace.");

@@ -149,8 +149,9 @@ approve → apply.
 
 ## Key invariants (enrich)
 
-`fullstackgtm enrich` is governed enrichment: `append` pulls (Apollo, BYO key
-via `login apollo`/APOLLO_API_KEY) or reads data staged by `ingest` (Clay CSV
+`fullstackgtm enrich` is governed enrichment: `append` pulls from Apollo (BYO key
+via `login apollo`/APOLLO_API_KEY) or ZoomInfo (official `gtm` CLI; `gtm auth login`),
+or reads data staged by `ingest` (Clay CSV
 exports / webhook payload JSON), matches source records to CRM records via
 ordered keys in `enrich.config.json` (unique hit wins; ambiguity skips or
 becomes `requires_human_record_selection` placeholders — never a coin flip),

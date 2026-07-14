@@ -89,8 +89,10 @@ jobs:
         run: |
           node dist/bin.js --help
           node dist/mcp-bin.js --help
-          node dist/bin.js audit --demo --json > /dev/null
-          node dist/bin.js rules --json > /dev/null
+          # Keep this shell-portable: `/dev/null` is parsed as `D:\dev\null`
+          # by PowerShell on Windows. The smoke output is small enough to log.
+          node dist/bin.js audit --demo --json
+          node dist/bin.js rules --json
 
   packed-install:
     name: Packed install (Node ${{ matrix.node }})

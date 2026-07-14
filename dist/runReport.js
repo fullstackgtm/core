@@ -85,6 +85,10 @@ let inflightHeartbeat = null;
  * commands simply never stream.
  */
 export function beginRunReport(args, startedAt) {
+    counts = undefined;
+    findings = undefined;
+    crm = undefined;
+    events.length = 0;
     lastHeartbeatAt = 0;
     heartbeatBroker = undefined;
     inflightHeartbeat = null;
@@ -185,6 +189,13 @@ export async function flushRunReport(args, status, startedAt, error) {
     // replay of local history never duplicates.
     const identity = runIdentity(args, startedAt);
     if (!identity)
+        return;
+    // A successful command with no result, finding, event, or live progress is
+    // terminal telemetry rather than something a person can explore. Keep it
+    // out of Runs. Errors always report; heartbeating commands still send their
+    // terminal status so an in-progress row cannot be stranded.
+    const hasUsefulOutput = Boolean((counts && Object.keys(counts).length > 0) || findings?.length || events.length);
+    if (status === "success" && !hasUsefulOutput && lastHeartbeatAt === 0)
         return;
     const broker = getCredential("broker");
     if (!broker?.baseUrl || !broker.accessToken)

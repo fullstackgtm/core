@@ -19,7 +19,8 @@ import { progressReporter, reportCounts, reportEvent } from "../runReport.ts";
 import { ACQUIRE_STAGES, composeListeners, createProgressEmitter } from "../progress.ts";
 import { createLinkedInProvider, discoverLinkedInProspects } from "../acquireLinkedIn.ts";
 import { clayPeopleFilterRoutes, fitThreshold, icpToClayInvestmentCompanyFilters, icpToClayPeopleFilters, icpToCrustdataFilters, icpToExploriumFilters, scoreProspectAgainstIcp, type Icp } from "../icp.ts";
-import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, type ApolloPullKey } from "../enrichApollo.ts";
+import { apolloPullKeysForAppend, apolloPullKeysForRefresh, createApolloClient, pullApolloRecords, type ApolloPullKey, type ApolloPullOptions } from "../enrichApollo.ts";
+import { createZoomInfoClient, pullZoomInfoRecords } from "../enrichZoomInfo.ts";
 import type { CanonicalGtmSnapshot, CreateRecordPayload } from "../types.ts";
 import { isSpoolPath, readSpoolPath } from "../spoolFiles.ts";
 import { isOptionValue, loadIcp, numericOption, option, readSnapshot, saveRequested } from "./shared.ts";
@@ -33,8 +34,8 @@ import { readIcpSyncState } from "../icpSync.ts";
 
 
 /**
- * The enrich layer: governed append/refresh of third-party data (Apollo pull,
- * Clay ingest) into the CRM through the normal dry-run → approval → apply
+ * The enrich layer: governed append/refresh of third-party data (Apollo or
+ * ZoomInfo pull, Clay ingest) into the CRM through the normal dry-run → approval → apply
  * contract. State lives in the profile-scoped run store (checkpoint,
  * staleness ledger, observability in one); scheduling belongs to the
  * horizontal scheduler — enrich owns no cron logic.
@@ -77,8 +78,9 @@ and leaves them unassigned. Backfill existing ownerless records with
 \`reassign --assign-unowned --to <ownerId>\`.
 
 append pulls from an api source (Apollo — BYO key via \`login apollo\` or
-APOLLO_API_KEY) or reads data staged by \`enrich ingest\` (Clay CSV exports,
-webhook payload JSON), matches source records to CRM records via the ordered
+APOLLO_API_KEY; ZoomInfo — official \`gtm\` CLI via \`gtm auth login\`) or reads
+data staged by \`enrich ingest\` (Clay CSV exports, webhook payload JSON),
+matches source records to CRM records via the ordered
 match keys in enrich.config.json (unique hit wins; zero hits falls through to
 the next key; multiple hits skip or flow into the suggest chain, per
 onAmbiguous), and emits a fill-blanks-only patch plan. Without --save it
@@ -261,6 +263,7 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
     // piped) and, via the composed reporter, heartbeat to a paired hosted app.
     // The meter reading (creates vs headroom + budget burn) rides the same
     // emitter, feeding the dashboard's gauge without printing anything new.
+    const acquireRunLabel = option(rest, "--run-label") ?? `acquire-${source}-${today}`;
     let result: ReturnType<typeof buildAcquirePlan>;
     try {
       acquireProgress.stage(ACQUIRE_STAGES[2], 2, ACQUIRE_STAGES.length);
@@ -277,7 +280,7 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
         source,
         snapshot,
         records,
-        runLabel: option(rest, "--run-label") ?? `acquire-${source}-${today}`,
+        runLabel: acquireRunLabel,
         maxRecords: cap,
         progress: acquireProgress,
       });
@@ -295,7 +298,7 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
     // Observability: headline metrics for the web run timeline (paired users).
     reportCounts({
       sourced: result.counts.fetched,
-      created: result.counts.created,
+      proposed: result.counts.created,
       withheldByMeter: result.counts.withheldByMeter,
       skippedInCrm: apiSkippedCrm,
       skippedSeen: apiSkippedSeen,
@@ -307,9 +310,9 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
     const icpPath = resolve(process.cwd(), option(rest, "--icp") ?? "icp.json");
     const trackedIcp = existsSync(icpPath) ? readIcpSyncState(icpPath) : null;
     const leadMirror = await writeHostedArtifact({
-      kind: "lead_run", key: `leads:${result.plan.id}`, label: result.plan.title ?? result.plan.id,
+      kind: "lead_run", key: `leads:${result.plan.id}`, label: acquireRunLabel,
       domain: trackedIcp?.domain,
-      document: { runLabel: result.plan.id, createdAt: new Date().toISOString(), source, counts: result.counts,
+      document: { runLabel: acquireRunLabel, createdAt: new Date().toISOString(), source, targetDomain: option(rest, "--company-domain"), counts: result.counts,
         plan: result.plan, icpRef: trackedIcp ? { artifactId: trackedIcp.artifactId, domain: trackedIcp.domain, revision: trackedIcp.revision, localIcpSha256: trackedIcp.localIcpSha256 } : undefined },
     });
     if (leadMirror.status === "saved") console.error(`Recorded lead preview against${trackedIcp ? ` ICP revision ${trackedIcp.revision}` : " the local untracked ICP"}.`);
@@ -436,10 +439,19 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
       );
       return;
     }
-    const client = createApolloClient({
-      getApiKey: () => apolloApiKey(),
-      apiBaseUrl: process.env.APOLLO_API_BASE_URL,
-    });
+    if (source !== "apollo" && source !== "zoominfo") {
+      throw new Error(
+        `enrich ${mode}: api source "${source}" supports acquire discovery, not snapshot enrichment. ` +
+          "Use apollo or zoominfo for append/refresh, or stage records with `enrich ingest`.",
+      );
+    }
+    const apolloClient = source === "apollo"
+      ? createApolloClient({
+          getApiKey: () => apolloApiKey(),
+          apiBaseUrl: process.env.APOLLO_API_BASE_URL,
+        })
+      : null;
+    const zoomInfoClient = source === "zoominfo" ? createZoomInfoClient() : null;
     if (save) {
       run = await openEnrichRun(store, source, mode, option(rest, "--run-label"), today);
       if (run.cursor) {
@@ -455,7 +467,7 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
     let pullProcessed = 0;
     let result: Awaited<ReturnType<typeof pullApolloRecords>>;
     try {
-      result = await pullApolloRecords(client, pullKeys, {
+      const pullOptions: ApolloPullOptions = {
         resumeAfter: run?.cursor ?? null,
         onProgress: async (progress) => {
           if (pullBar.active) {
@@ -473,7 +485,10 @@ are phase 2. Recurring execution is the scheduler's job; enrich has no cron.`);
           if (progress.miss) run.missedKeys = [...(run.missedKeys ?? []), progress.miss.value];
           await store.update(run);
         },
-      });
+      };
+      result = source === "zoominfo"
+        ? await pullZoomInfoRecords(zoomInfoClient!, pullKeys, pullOptions)
+        : await pullApolloRecords(apolloClient!, pullKeys, pullOptions);
     } finally {
       pullBar.done();
     }

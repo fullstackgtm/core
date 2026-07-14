@@ -7,6 +7,27 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.58.0] — 2026-07-14
+
+### Added
+
+- ZoomInfo is available as a governed `enrich append|refresh` source through
+  ZoomInfo's official `gtm` CLI. ZoomInfo retains OAuth, entitlements, and
+  credit accounting; FullstackGTM turns returned records into fill-blanks-only,
+  approval-gated CRM patch plans with provenance and apply receipts.
+
+### Changed
+
+- The package README and npm description now lead with FullstackGTM's focused
+  role as the CRM control plane and safety toolbox for agents. Adjacent GTM
+  workflows are linked from an appendix instead of obscuring the core loop.
+
+### Fixed
+
+- The public CI runtime smoke test no longer redirects output to `/dev/null`,
+  which PowerShell interpreted as `D:\\dev\\null` on Windows and caused the npm
+  README's CI badge to report failure despite successful Linux/macOS jobs.
+
 ## [0.57.0] — 2026-07-13
 
 ### Added
