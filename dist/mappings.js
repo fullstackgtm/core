@@ -2,6 +2,7 @@ export const HUBSPOT_DEFAULT_FIELD_MAPPINGS = {
     accounts: {
         name: "name",
         domain: "domain",
+        parentAccountId: "hs_parent_company_id",
         industry: "industry",
         employeeCount: "numberofemployees",
         annualRevenue: "annualrevenue",
@@ -42,6 +43,7 @@ export const SALESFORCE_DEFAULT_FIELD_MAPPINGS = {
         id: "Id",
         name: "Name",
         domain: "Website",
+        parentAccountId: "ParentId",
         industry: "Industry",
         employeeCount: "NumberOfEmployees",
         annualRevenue: "AnnualRevenue",

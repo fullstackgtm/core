@@ -1,4 +1,5 @@
 import { normalizeDomain } from "./merge.ts";
+import { accountsShareKnownFamily } from "./accountFamily.ts";
 import type {
   AuditFinding,
   CanonicalActivity,
@@ -496,16 +497,20 @@ export const duplicateAccountDomainRule: GtmAuditRule = {
     const operations = [];
     for (const [domain, accounts] of duplicateGroups(snapshot.accounts, (account) => normalizeDomain(account.domain))) {
       const anchor = accounts[0];
+      const related = accountsShareKnownFamily(accounts);
       findings.push({
         id: auditFindingId("duplicate-account-domain", anchor.id),
         objectType: "account",
         objectId: anchor.id,
         ruleId: "duplicate-account-domain",
-        title: "Accounts share the same domain",
-        severity: "warning",
-        summary: `${accounts.length} accounts share ${domain}: ${accounts.map((account) => account.name).join(", ")}.${provenanceSummary(accounts)}`,
-        recommendation: "Review the group and merge duplicates so activity and deals roll up once.",
+        title: related ? "Related accounts share the same domain" : "Accounts share the same domain",
+        severity: related ? "info" : "warning",
+        summary: `${accounts.length} ${related ? "related " : ""}accounts share ${domain}: ${accounts.map((account) => account.name).join(", ")}.${provenanceSummary(accounts)}`,
+        recommendation: related
+          ? "Preserve these corporate-family records as distinct accounts; review their hierarchy instead of merging them."
+          : "Review whether the group represents duplicate records or intentional business units before approving a merge.",
       });
+      if (related) continue;
       operations.push({
         id: patchOperationId("duplicate-account-domain", anchor.id),
         objectType: "account" as const,

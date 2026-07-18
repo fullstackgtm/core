@@ -7,7 +7,8 @@ export { buildBulkUpdatePlan, isFilterableField, parseWhere, type BulkUpdateOpti
 export { buildDedupePlan, dedupeKey, type DedupeOptions } from "./dedupe.ts";
 export { buildReassignPlans, type ReassignObjectType, type ReassignOptions } from "./reassign.ts";
 export { buildLeadRoutePlan, type LeadRouteCounts, type LeadRouteOptions, type LeadRouteResult, } from "./route.ts";
-export { accountHierarchyToMarkdown, buildAccountHierarchy, type AccountHierarchyConflict, type AccountHierarchyNode, type AccountHierarchyReport, } from "./hierarchy.ts";
+export { accountHierarchyToMarkdown, buildAccountHierarchy, buildParentLinkPlan, type AccountHierarchyConflict, type AccountHierarchyNode, type AccountHierarchyReport, type ParentLinkPlanOptions, } from "./hierarchy.ts";
+export { accountParentId, accountsShareKnownFamily } from "./accountFamily.ts";
 export { buildRelationshipMap, relationshipMapToMarkdown, type RelationshipMap, type StakeholderNode, type StakeholderRole, type StakeholderSentiment, } from "./relationships.ts";
 export { CONFIG_FILE_NAME, loadConfig, mergePolicy, resolveConfiguredRules, rulePackageTrustFromCli, type FullstackgtmConfig, type LoadedConfig, type RulePackageTrust, } from "./config.ts";
 export { applyPatchPlan, type ApplyPatchPlanOptions } from "./connector.ts";

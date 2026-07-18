@@ -1,25 +1,6 @@
 import { normalizeDomain } from "./merge.js";
-function rawString(account, keys) {
-    if (!account.raw || typeof account.raw !== "object")
-        return undefined;
-    const raw = account.raw;
-    for (const key of keys) {
-        const value = raw[key];
-        if (typeof value === "string" && value.trim())
-            return value.trim();
-        if (value && typeof value === "object") {
-            const nested = value;
-            for (const nestedKey of ["id", "value", "name"]) {
-                if (typeof nested[nestedKey] === "string" && String(nested[nestedKey]).trim())
-                    return String(nested[nestedKey]).trim();
-            }
-        }
-    }
-    return undefined;
-}
-function parentHint(account) {
-    return rawString(account, ["parentAccountId", "parent_account_id", "ParentId", "parentCompanyId", "hs_parent_company_id"]);
-}
+import { stableHash } from "./rules.js";
+import { accountParentId, accountsShareKnownFamily } from "./accountFamily.js";
 function cloneNode(account) {
     return { accountId: String(account.id), name: account.name, ...(account.domain ? { domain: account.domain } : {}), children: [] };
 }
@@ -84,14 +65,23 @@ export function buildAccountHierarchy(snapshot) {
     const conflicts = [];
     for (const [domain, accounts] of domains) {
         const ids = [...new Set(accounts.map((account) => String(account.id)))];
-        if (ids.length > 1)
-            conflicts.push({ type: "duplicate_domain", accountIds: ids.sort(), key: domain, detail: `${ids.length} accounts share domain ${domain}; hierarchy inference will not choose between them.` });
+        if (ids.length > 1) {
+            const related = accountsShareKnownFamily(accounts);
+            conflicts.push({
+                type: related ? "related_shared_domain" : "duplicate_domain",
+                accountIds: ids.sort(),
+                key: domain,
+                detail: related
+                    ? `${ids.length} related accounts share domain ${domain}; preserving them as distinct family members.`
+                    : `${ids.length} accounts share domain ${domain}; review whether they are duplicates or intentional business units.`,
+            });
+        }
     }
     const nodes = new Map(accounts.map((account) => [String(account.id), cloneNode(account)]));
     const parentByChild = new Map();
     for (const account of accounts) {
         const id = String(account.id);
-        const hint = parentHint(account);
+        const hint = accountParentId(account);
         if (hint && byId.has(hint) && hint !== id) {
             parentByChild.set(id, { parentId: hint, reason: "provider-parent" });
             continue;
@@ -133,7 +123,7 @@ export function buildAccountHierarchy(snapshot) {
         }
         else {
             roots.push(node);
-            if (!account.domain && !parentHint(account))
+            if (!account.domain && !accountParentId(account))
                 orphanAccounts.push(id);
         }
     }
@@ -144,6 +134,61 @@ export function buildAccountHierarchy(snapshot) {
     };
     sortTree(roots);
     return { generatedAt: snapshot.generatedAt, roots, orphanAccounts: orphanAccounts.sort(), conflicts, counts: { accounts: accounts.length, roots: roots.length, linkedChildren: linkedChildren.size, conflicts: conflicts.length } };
+}
+/** Build one governed parent-link proposal. Existing different parents are
+ * intentionally refused: re-parenting needs a separate operation that can
+ * preserve provider-specific association labels. */
+export function buildParentLinkPlan(snapshot, options) {
+    const childId = String(options.childAccountId);
+    const parentId = String(options.parentAccountId);
+    if (childId === parentId)
+        throw new Error("An account cannot be its own parent.");
+    const byId = new Map(snapshot.accounts.map((account) => [String(account.id), account]));
+    const child = byId.get(childId);
+    const parent = byId.get(parentId);
+    if (!child)
+        throw new Error(`Unknown child account ${childId}.`);
+    if (!parent)
+        throw new Error(`Unknown parent account ${parentId}.`);
+    const currentParent = accountParentId(child);
+    if (currentParent && currentParent !== parentId) {
+        throw new Error(`Account ${childId} already has parent ${currentParent}; refusing to re-parent it implicitly.`);
+    }
+    let cursor = parentId;
+    const visited = new Set();
+    while (cursor && !visited.has(cursor)) {
+        if (cursor === childId)
+            throw new Error(`Linking ${childId} under ${parentId} would create a hierarchy cycle.`);
+        visited.add(cursor);
+        const account = byId.get(cursor);
+        cursor = account ? accountParentId(account) : undefined;
+    }
+    const operations = currentParent === parentId ? [] : [{
+            id: `op_${stableHash(`parent-link:${childId}:${parentId}`)}`,
+            objectType: "account",
+            objectId: childId,
+            operation: "link_record",
+            field: "parentAccountId",
+            beforeValue: null,
+            afterValue: parentId,
+            reason: options.reason ?? `Link ${child.name} (${childId}) as a child of ${parent.name} (${parentId}).`,
+            riskLevel: "medium",
+            approvalRequired: true,
+            sourceRuleOrPolicy: "hierarchy.parent_link",
+            rollback: `Remove the parent relationship from ${childId}; no records are merged or deleted.`,
+        }];
+    return {
+        id: `patch_plan_${stableHash(`parent-link:${snapshot.provider}:${snapshot.generatedAt}:${childId}:${parentId}`)}`,
+        title: `Parent account: ${child.name} → ${parent.name}`,
+        createdAt: snapshot.generatedAt,
+        status: operations.length ? "needs_approval" : "draft",
+        dryRun: true,
+        summary: operations.length
+            ? `1 proposed parent link; no accounts will be merged or deleted.`
+            : `${child.name} is already a child of ${parent.name}; nothing to change.`,
+        findings: [],
+        operations,
+    };
 }
 export function accountHierarchyToMarkdown(report) {
     const lines = ["# Account hierarchy", "", `${report.counts.accounts} account(s), ${report.counts.roots} root(s), ${report.counts.linkedChildren} inferred child link(s), ${report.counts.conflicts} conflict(s).`, ""];

@@ -272,6 +272,7 @@ export function createSalesforceConnector(
         identities: [{ provider: "salesforce", externalId: id }],
         name: stringOrFallback(readMapped(account, "accounts", "name", "Name"), "Unknown Account"),
         domain: stringOrUndefined(readMapped(account, "accounts", "domain", "Website")),
+        parentAccountId: stringOrUndefined(readMapped(account, "accounts", "parentAccountId", "ParentId")),
         industry: stringOrUndefined(readMapped(account, "accounts", "industry", "Industry")),
         employeeCount: numberOrUndefined(
           readMapped(account, "accounts", "employeeCount", "NumberOfEmployees"),

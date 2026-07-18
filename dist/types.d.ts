@@ -157,6 +157,9 @@ export type CanonicalAccount = {
     provenance?: RecordProvenance;
     name: string;
     domain?: string;
+    /** Provider-native corporate parent. Identity and hierarchy stay separate:
+     * sharing a parent never makes two accounts duplicates. */
+    parentAccountId?: string;
     industry?: string;
     ownerId?: string;
     employeeCount?: number;

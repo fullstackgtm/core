@@ -10,7 +10,7 @@ import { verifyApprovalDigests } from "../integrity.js";
 import { resolveRecord } from "../resolve.js";
 import { parseAssignmentPolicy } from "../assign.js";
 import { buildLeadRoutePlan } from "../route.js";
-import { accountHierarchyToMarkdown, buildAccountHierarchy } from "../hierarchy.js";
+import { accountHierarchyToMarkdown, buildAccountHierarchy, buildParentLinkPlan } from "../hierarchy.js";
 import { buildRelationshipMap, relationshipMapToMarkdown } from "../relationships.js";
 import { buildBulkUpdatePlan } from "../bulkUpdate.js";
 import { buildDedupePlan } from "../dedupe.js";
@@ -403,8 +403,19 @@ export async function routeCommand(args) {
 }
 export async function hierarchyCommand(args) {
     const [subcommand, ...rest] = args;
+    if (subcommand === "link") {
+        const childAccountId = option(rest, "--child-account-id");
+        const parentAccountId = option(rest, "--parent-account-id");
+        if (!childAccountId || !parentAccountId) {
+            throw new Error("Usage: fullstackgtm hierarchy link --child-account-id <id> --parent-account-id <id> [source options] [--save|--json|--out <path>]");
+        }
+        const snapshot = await readSnapshot(rest);
+        const plan = buildParentLinkPlan(snapshot, { childAccountId, parentAccountId, reason: option(rest, "--reason") ?? undefined });
+        await emitPlan(plan, rest);
+        return;
+    }
     if (subcommand !== "report")
-        throw new Error("Usage: fullstackgtm hierarchy report [source options] [--json|--out <path>]");
+        throw new Error("Usage: fullstackgtm hierarchy <report|link> ...");
     const snapshot = await readSnapshot(rest);
     const report = buildAccountHierarchy(snapshot);
     const out = option(rest, "--out");

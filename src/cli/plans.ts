@@ -34,7 +34,7 @@ function parseValueOverrides(args: string[]) {
   return valueOverrides;
 }
 
-function recordHeadline(operation: PatchOperation): { title: string; subtitle?: string; company?: string } {
+function recordHeadline(operation: PatchOperation, plan?: PatchPlan): { title: string; subtitle?: string; company?: string } {
   const after = operation.afterValue && typeof operation.afterValue === "object" && !Array.isArray(operation.afterValue)
     ? operation.afterValue as Record<string, unknown> : {};
   const properties = after.properties && typeof after.properties === "object" && !Array.isArray(after.properties)
@@ -43,9 +43,14 @@ function recordHeadline(operation: PatchOperation): { title: string; subtitle?: 
   const last = typeof properties.lastname === "string" ? properties.lastname : "";
   const company = typeof properties.company === "string" ? properties.company
     : typeof after.associateCompanyName === "string" ? after.associateCompanyName : undefined;
-  const title = [first, last].filter(Boolean).join(" ") || company || operation.objectId || operation.id;
+  const explicitTitle = [first, last].filter(Boolean).join(" ") || company;
+  const findingIds = new Set(operation.findingIds ?? []);
+  const finding = plan?.findings.find((item) => findingIds.has(item.id))
+    ?? plan?.findings.find((item) => item.objectType === operation.objectType && item.objectId === operation.objectId);
+  const title = explicitTitle || finding?.summary || operation.objectId || operation.id;
   const role = typeof properties.jobtitle === "string" ? properties.jobtitle : undefined;
-  return { title, ...(role ? { subtitle: role } : {}), ...(company ? { company } : {}) };
+  const identifier = !explicitTitle && finding && operation.objectId ? `${operation.objectType} · ${operation.objectId}` : undefined;
+  return { title, ...(role || identifier ? { subtitle: role ?? identifier } : {}), ...(company ? { company } : {}) };
 }
 
 function planEffect(stored: StoredPlan): string {
@@ -83,7 +88,7 @@ function printPlanCards(stored: StoredPlan, hostedUrl?: string) {
   for (const operation of stored.plan.operations) {
     const selected = approved.has(operation.id);
     const resultStatus = latestResults.get(operation.id);
-    const headline = recordHeadline(operation);
+    const headline = recordHeadline(operation, stored.plan);
     const action = operation.operation === "create_record"
       ? `Create ${operation.objectType}${headline.company ? ` and resolve/link ${headline.company}` : ""}`
       : `${operation.operation.replaceAll("_", " ")} ${operation.objectType}`;
@@ -128,7 +133,7 @@ function printApplyCards(run: PatchPlanRun, plan: PatchPlan, approvedOperationId
     const operation = operations.get(result.operationId);
     if (!operation) continue;
     const selected = approved.has(result.operationId);
-    const headline = recordHeadline(operation);
+    const headline = recordHeadline(operation, plan);
     const state = !selected ? "○ EXCLUDED" : result.status === "applied" ? "✓ APPLIED" : `! ${result.status.toUpperCase()}`;
     const lines = [
       headline.title,

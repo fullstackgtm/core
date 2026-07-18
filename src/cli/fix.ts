@@ -11,7 +11,7 @@ import { verifyApprovalDigests } from "../integrity.ts";
 import { resolveRecord, type ResolveCandidate } from "../resolve.ts";
 import { parseAssignmentPolicy } from "../assign.ts";
 import { buildLeadRoutePlan } from "../route.ts";
-import { accountHierarchyToMarkdown, buildAccountHierarchy } from "../hierarchy.ts";
+import { accountHierarchyToMarkdown, buildAccountHierarchy, buildParentLinkPlan } from "../hierarchy.ts";
 import { buildRelationshipMap, relationshipMapToMarkdown } from "../relationships.ts";
 import { buildBulkUpdatePlan } from "../bulkUpdate.ts";
 import { buildDedupePlan, type DedupeOptions } from "../dedupe.ts";
@@ -439,7 +439,18 @@ export async function routeCommand(args: string[]) {
 
 export async function hierarchyCommand(args: string[]) {
   const [subcommand, ...rest] = args;
-  if (subcommand !== "report") throw new Error("Usage: fullstackgtm hierarchy report [source options] [--json|--out <path>]");
+  if (subcommand === "link") {
+    const childAccountId = option(rest, "--child-account-id");
+    const parentAccountId = option(rest, "--parent-account-id");
+    if (!childAccountId || !parentAccountId) {
+      throw new Error("Usage: fullstackgtm hierarchy link --child-account-id <id> --parent-account-id <id> [source options] [--save|--json|--out <path>]");
+    }
+    const snapshot = await readSnapshot(rest);
+    const plan = buildParentLinkPlan(snapshot, { childAccountId, parentAccountId, reason: option(rest, "--reason") ?? undefined });
+    await emitPlan(plan, rest);
+    return;
+  }
+  if (subcommand !== "report") throw new Error("Usage: fullstackgtm hierarchy <report|link> ...");
   const snapshot = await readSnapshot(rest);
   const report = buildAccountHierarchy(snapshot);
   const out = option(rest, "--out");

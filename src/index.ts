@@ -58,10 +58,13 @@ export {
 export {
   accountHierarchyToMarkdown,
   buildAccountHierarchy,
+  buildParentLinkPlan,
   type AccountHierarchyConflict,
   type AccountHierarchyNode,
   type AccountHierarchyReport,
+  type ParentLinkPlanOptions,
 } from "./hierarchy.ts";
+export { accountParentId, accountsShareKnownFamily } from "./accountFamily.ts";
 export {
   buildRelationshipMap,
   relationshipMapToMarkdown,

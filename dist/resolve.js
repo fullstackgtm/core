@@ -1,4 +1,5 @@
 import { normalizeDomain } from "./merge.js";
+import { accountsShareKnownFamily } from "./accountFamily.js";
 export function resolveRecord(snapshot, candidate) {
     if (candidate.objectType === "account")
         return resolveAccount(snapshot, candidate);
@@ -17,7 +18,16 @@ function resolveAccount(snapshot, c) {
             return { ...base, verdict: "exists", matches, reason: `An account with domain ${domain} already exists: "${matches[0].name}" (${matches[0].id}). Link to it instead of creating.` };
         }
         if (matches.length > 1) {
-            return { ...base, verdict: "ambiguous", matches, reason: `${matches.length} accounts already share domain ${domain} — that's a duplicate group; merge it before adding more. Do not create.` };
+            const matchedAccounts = snapshot.accounts.filter((a) => normalizeDomain(a.domain) === domain);
+            const related = accountsShareKnownFamily(matchedAccounts);
+            return {
+                ...base,
+                verdict: "ambiguous",
+                matches,
+                reason: related
+                    ? `${matches.length} related accounts share domain ${domain}. Choose the correct family member or supply a subsidiary-specific domain; do not create or merge based on domain alone.`
+                    : `${matches.length} accounts already share domain ${domain} — review whether they are duplicates or intentional business units before creating or merging anything.`,
+            };
         }
     }
     if (c.name) {

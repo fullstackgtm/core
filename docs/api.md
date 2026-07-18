@@ -180,7 +180,9 @@ one emits a standard dry-run `PatchPlan` for the normal approve → apply chain:
   `from:<sourceField>` values derive per record from the snapshot.
 - `buildDedupePlan(snapshot, options: DedupeOptions)` with `dedupeKey` —
   duplicate groups by normalized identity key, one `merge_records` per group,
-  deterministic survivor selection (`richest` / `oldest`).
+  deterministic survivor selection (`richest` / `oldest`). Account groups
+  with a recorded parent/child or sibling relationship are preserved and
+  surfaced as open questions instead of merge operations.
 - `buildReassignPlans(snapshot, options: ReassignOptions)` — one plan per
   `ReassignObjectType`, account-lifted scoping, stage exclusions. With
   `assignUnowned` (CLI `--assign-unowned`) it targets ownerless records
@@ -197,8 +199,11 @@ one emits a standard dry-run `PatchPlan` for the normal approve → apply chain:
 Read-only prevention reports:
 
 - `buildAccountHierarchy(snapshot)` / `accountHierarchyToMarkdown(report)` —
-  provider parent hints plus subdomain inference, with duplicate-domain,
-  ambiguous-parent, and parent-cycle conflicts surfaced rather than written.
+  canonical provider parent ids plus subdomain inference, with shared-domain
+  family groups, ambiguous parents, and parent cycles surfaced rather than guessed.
+- `buildParentLinkPlan(snapshot, { childAccountId, parentAccountId })` — one
+  approval-gated `link_record` plan. It refuses self-links, cycles, unknown
+  accounts, and implicit re-parenting. CLI: `hierarchy link`.
 - `buildRelationshipMap(snapshot, { accountId | domain })` /
   `relationshipMapToMarkdown(map)` — account stakeholders, inferred roles,
   activity sentiment evidence, open deals, and missing-role gaps.

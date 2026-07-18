@@ -53,6 +53,8 @@ Usage:
                                                lead-to-account matching + owner routing as a governed plan
   fullstackgtm hierarchy report [source options] [--json|--out <path>]
                                                account hierarchy view from native parents + subdomains
+  fullstackgtm hierarchy link --child-account-id <id> --parent-account-id <id> [source options] [--save|--json]
+                                               approval-gated parent link; never merges either account
   fullstackgtm relationships account (--account-id <id>|--domain <d>) [source options] [--json|--out <path>]
                                                relationship map from contacts, deals, and activity evidence
   fullstackgtm market init --category <name>   start a market map: vendors + claim taxonomy as reviewable config
@@ -405,10 +407,13 @@ export const HELP = {
         seeAlso: ["dedupe", "audit"],
     },
     hierarchy: {
-        summary: "account hierarchy report (native parents + subdomain inference)",
+        summary: "report account families or propose a governed parent link",
         phase: "Prevent",
-        synopsis: ["fullstackgtm hierarchy report [source options] [--json|--out <path>]"],
-        detail: "Builds a report-only account tree from provider-native parent ids (when present in raw payloads) and deterministic subdomain inference. It surfaces duplicate-domain and ambiguous-parent conflicts instead of guessing writes.",
+        synopsis: [
+            "fullstackgtm hierarchy report [source options] [--json|--out <path>]",
+            "fullstackgtm hierarchy link --child-account-id <id> --parent-account-id <id> [source options] [--save|--json|--out <path>]",
+        ],
+        detail: "Reports account trees from provider-native parent ids and deterministic subdomain inference. Shared domains inside a known family are preserved rather than proposed for merge. The link subcommand emits an approval-gated parent relationship and refuses implicit re-parenting or cycles.",
         seeAlso: ["route", "relationships"],
     },
     relationships: {
@@ -622,7 +627,7 @@ export const COMMAND_FLAGS = {
     diff: ["--before", "--after", "--config", "--allow-plugins", "--no-plugins", "--stale-days", "--today", "--json", "--fail-on-new-findings"],
     rules: ["--config", "--allow-plugins", "--no-plugins", "--json"],
     resolve: [...SOURCE_FLAGS, "--name", "--domain", "--email", "--account-id", "--json"],
-    hierarchy: [...SOURCE_FLAGS, "--json", "--out"],
+    hierarchy: [...SOURCE_FLAGS, "--child-account-id", "--parent-account-id", "--reason", "--save", "--dry-run", "--verbose", "--json", "--out"],
     relationships: [...SOURCE_FLAGS, "--account-id", "--domain", "--json", "--out"],
     route: [...SOURCE_FLAGS, "--match", "--no-inherit-owner", "--reassign-owned", "--policy", "--reason", "--max-operations", "--save", "--dry-run", "--json", "--out"],
     fix: [...SOURCE_FLAGS, "--config", "--allow-plugins", "--no-plugins", "--rule", "--provider", "--min-confidence", "--include-creates", "--yes", "--confirm", "--dry-run", "--verbose"],

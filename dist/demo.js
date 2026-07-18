@@ -6,24 +6,41 @@ const LAST_NAMES = [
     "Calloway", "Reyes", "Iyer", "Novak", "Bennett", "Okafor",
     "Lindqvist", "Moreau", "Tanaka", "Whitfield", "Drummond", "Vargas",
 ];
-const COMPANY_HEADS = [
-    "Halcyon", "Northwind", "Cobalt", "Ridgeline", "Lumen", "Vantage",
-    "Harbor", "Atlas", "Crestline", "Meridian", "Bluff", "Juniper",
-    "Granite", "Summit", "Beacon",
+const DEMO_COMPANIES = [
+    ["Apple", "apple.com"], ["Apple, Inc.", "apple.com"],
+    ["Nike", "nike.com"], ["Nike, Inc.", "nike.com"],
+    ["Starbucks", "starbucks.com"], ["Starbucks Corporation", "starbucks.com"],
+    ["Microsoft", "microsoft.com"], ["Adobe", "adobe.com"],
+    ["Salesforce", "salesforce.com"], ["HubSpot", "hubspot.com"],
+    ["Atlassian", "atlassian.com"], ["Shopify", "shopify.com"],
+    ["Zoom", "zoom.us"], ["Dropbox", "dropbox.com"], ["Canva", "canva.com"],
+    ["Notion", "notion.so"], ["Slack", "slack.com"], ["Twilio", "twilio.com"],
+    ["Zendesk", "zendesk.com"], ["DocuSign", "docusign.com"], ["Okta", "okta.com"],
+    ["Snowflake", "snowflake.com"], ["Datadog", "datadoghq.com"], ["Asana", "asana.com"],
+    ["Monday.com", "monday.com"], ["Intercom", "intercom.com"], ["Klaviyo", "klaviyo.com"],
+    ["Mailchimp", "mailchimp.com"], ["Braze", "braze.com"], ["Iterable", "iterable.com"],
+    ["Hootsuite", "hootsuite.com"], ["Sprout Social", "sproutsocial.com"],
+    ["Figma", "figma.com"], ["Airtable", "airtable.com"], ["Stripe", "stripe.com"],
+    ["Square", "squareup.com"], ["Intuit", "intuit.com"], ["DoorDash", "doordash.com"],
+    ["Airbnb", "airbnb.com"], ["Uber", "uber.com"], ["Lyft", "lyft.com"],
+    ["Peloton", "onepeloton.com"], ["Warby Parker", "warbyparker.com"],
+    ["Allbirds", "allbirds.com"], ["Glossier", "glossier.com"], ["Casper", "casper.com"],
+    ["Wayfair", "wayfair.com"], ["Chewy", "chewy.com"], ["Instacart", "instacart.com"],
+    ["Reddit", "reddit.com"], ["Pinterest", "pinterest.com"], ["Spotify", "spotify.com"],
+    ["Netflix", "netflix.com"], ["Disney", "disney.com"], ["LEGO", "lego.com"],
+    ["Patagonia", "patagonia.com"],
 ];
-const COMPANY_TAILS = [
-    "Analytics", "Logistics", "Biotech", "Robotics", "Software",
-    "Manufacturing", "Health", "Financial", "Media", "Systems",
-    "Foods", "Energy", "Labs", "Dynamics",
-];
+const COMPANY_HEADS = ["Acorn", "Bluebird", "Copper", "Evergreen", "Juniper", "Lighthouse", "Summit"];
+const COMPANY_TAILS = ["Analytics", "Commerce", "Health", "Logistics", "Media", "Software", "Systems"];
 const INDUSTRIES = [
-    "SaaS", "Logistics", "Healthcare", "Manufacturing", "Financial Services",
-    "Media", "Energy", "Retail",
+    "Software", "Retail", "Consumer Goods", "Media", "Financial Services",
+    "Travel & Hospitality", "E-commerce",
 ];
 const OPEN_STAGES = ["discovery", "qualification", "proposal", "negotiation"];
 const DEAL_LABELS = [
-    "Platform Subscription", "Enterprise Rollout", "Pilot Expansion",
-    "Renewal", "Multi-Year Agreement", "Team Upgrade", "Add-On Seats",
+    "Marketing Automation Platform", "Lifecycle Marketing Rollout",
+    "Customer Journey Pilot", "Annual Renewal", "Enterprise Automation Agreement",
+    "Campaign Operations Expansion", "Additional Marketing Seats",
 ];
 /** Deterministic PRNG (mulberry32) so demo data is stable across runs. */
 function mulberry32(seed) {
@@ -39,6 +56,23 @@ function mulberry32(seed) {
 function shiftDate(today, days) {
     const base = Date.parse(`${today}T00:00:00Z`);
     return new Date(base + days * 86_400_000).toISOString().slice(0, 10);
+}
+/** Build a deterministic, checksum-valid Salesforce 18-character record ID. */
+function salesforceId(prefix, sequence) {
+    const token = `8Z${sequence.toString(36).padStart(10, "0")}`;
+    const base = `${prefix}${token}`;
+    const checksumAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+    let checksum = "";
+    for (let chunk = 0; chunk < 3; chunk += 1) {
+        let flags = 0;
+        for (let position = 0; position < 5; position += 1) {
+            const character = base[chunk * 5 + position];
+            if (character >= "A" && character <= "Z")
+                flags |= 1 << position;
+        }
+        checksum += checksumAlphabet[flags];
+    }
+    return `${base}${checksum}`;
 }
 /**
  * Generate a realistic, deliberately messy mid-market CRM snapshot.
@@ -59,24 +93,29 @@ export function generateDemoSnapshot(options = {}) {
     const pick = (items) => items[Math.floor(random() * items.length)];
     const between = (min, max) => min + Math.floor(random() * (max - min + 1));
     const users = FIRST_NAMES.map((firstName, index) => ({
-        id: `user_${String(index + 1).padStart(2, "0")}`,
+        id: salesforceId("005", index + 1),
         provider: "mock",
-        crmId: `${9000 + index}`,
+        crmId: salesforceId("005", index + 1),
         name: `${firstName} ${LAST_NAMES[index]}`,
-        email: `${firstName.toLowerCase()}.${LAST_NAMES[index].toLowerCase()}@example.com`,
+        email: `${firstName.toLowerCase()}.${LAST_NAMES[index].toLowerCase()}@acmesoftware.com`,
         title: index === 0 ? "VP Sales" : index === 1 ? "Sales Manager" : "Account Executive",
         active: index < 10,
     }));
     const activeReps = users.slice(2, 10);
     const accounts = [];
     for (let index = 0; index < accountCount; index += 1) {
-        const name = `${COMPANY_HEADS[index % COMPANY_HEADS.length]} ${pick(COMPANY_TAILS)}`;
+        const featured = DEMO_COMPANIES[index];
+        // Consume the same PRNG draw for featured and overflow records so changing
+        // display names never shifts the deterministic issue injection downstream.
+        const generatedName = `${COMPANY_HEADS[index % COMPANY_HEADS.length]} ${pick(COMPANY_TAILS)} ${index + 1}`;
+        const name = featured?.[0] ?? generatedName;
+        const domain = featured?.[1] ?? `${name.toLowerCase().replace(/[^a-z0-9]/g, "")}.example`;
         accounts.push({
-            id: `acct_${String(index + 1).padStart(3, "0")}`,
+            id: salesforceId("001", index + 1),
             provider: "mock",
-            crmId: `${10_000 + index}`,
+            crmId: salesforceId("001", index + 1),
             name,
-            domain: `${name.toLowerCase().replace(/[^a-z]/g, "")}.com`,
+            domain,
             industry: pick(INDUSTRIES),
             ownerId: random() < 0.85 ? pick(activeReps).id : undefined,
             employeeCount: between(40, 4000),
@@ -93,14 +132,14 @@ export function generateDemoSnapshot(options = {}) {
             const firstName = pick(FIRST_NAMES);
             const lastName = pick(LAST_NAMES);
             contacts.push({
-                id: `contact_${String(contacts.length + 1).padStart(3, "0")}`,
+                id: salesforceId("003", contacts.length + 1),
                 provider: "mock",
-                crmId: `${20_000 + contacts.length}`,
+                crmId: salesforceId("003", contacts.length + 1),
                 accountId: account.id,
                 firstName,
                 lastName,
-                email: `${firstName.toLowerCase()}@${account.domain}`,
-                title: pick(["CTO", "VP Operations", "Head of RevOps", "Director of IT", "CFO"]),
+                email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${account.domain}`,
+                title: pick(["Chief Marketing Officer", "VP Marketing", "Head of Growth", "Director of Lifecycle Marketing", "VP Demand Generation", "Marketing Operations Director"]),
                 ownerId: account.ownerId,
                 lastSyncAt: account.lastSyncAt,
             });
@@ -122,11 +161,11 @@ export function generateDemoSnapshot(options = {}) {
         const daysSinceActivity = isClosed ? between(5, 60) : between(0, 75);
         const lastActivityAt = shiftDate(today, -daysSinceActivity);
         const deal = {
-            id: `deal_${String(index + 1).padStart(3, "0")}`,
+            id: salesforceId("006", index + 1),
             provider: "mock",
-            crmId: `${30_000 + index}`,
+            crmId: salesforceId("006", index + 1),
             accountId: unlinked ? undefined : account.id,
-            ownerId: departedOwner ? `user_departed_${index % 2}` : (account.ownerId ?? pick(activeReps).id),
+            ownerId: departedOwner ? salesforceId("005", 901 + index % 2) : (account.ownerId ?? pick(activeReps).id),
             name: `${account.name} — ${pick(DEAL_LABELS)}`,
             amount: between(8, 480) * 500,
             currency: "USD",
@@ -143,7 +182,7 @@ export function generateDemoSnapshot(options = {}) {
         const activityCount = Math.max(1, 3 - Math.floor(daysSinceActivity / 25));
         for (let activityIndex = 0; activityIndex < activityCount; activityIndex += 1) {
             activities.push({
-                id: `activity_${String(activities.length + 1).padStart(4, "0")}`,
+                id: salesforceId("00T", activities.length + 1),
                 provider: "mock",
                 dealId: deal.id,
                 accountId: deal.accountId,
@@ -151,8 +190,9 @@ export function generateDemoSnapshot(options = {}) {
                 type: pick(["call", "email", "meeting"]),
                 occurredAt: shiftDate(today, -(daysSinceActivity + activityIndex * between(3, 12))),
                 subject: pick([
-                    "Discovery call", "Pricing discussion", "Security review",
-                    "Champion sync", "Procurement follow-up", "Executive alignment",
+                    "Marketing operations discovery", "Campaign workflow review",
+                    "Lifecycle strategy session", "Data integration review",
+                    "Attribution requirements", "Executive marketing alignment",
                 ]),
             });
         }

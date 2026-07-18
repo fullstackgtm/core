@@ -197,6 +197,7 @@ export function createHubspotConnector(options) {
                 identities: [{ provider: "hubspot", externalId: String(company.id) }],
                 name: stringOrFallback(readMapped(props, "accounts", "name", "name"), "Unknown Company"),
                 domain: stringOrUndefined(readMapped(props, "accounts", "domain", "domain")),
+                parentAccountId: stringOrUndefined(readMapped(props, "accounts", "parentAccountId", "hs_parent_company_id")),
                 industry: stringOrUndefined(readMapped(props, "accounts", "industry", "industry")),
                 employeeCount: numberOrUndefined(readMapped(props, "accounts", "employeeCount", "numberofemployees")),
                 annualRevenue: numberOrUndefined(readMapped(props, "accounts", "annualRevenue", "annualrevenue")),
@@ -386,6 +387,23 @@ export function createHubspotConnector(options) {
         };
     }
     async function linkRecord(operation) {
+        if (operation.objectType === "account" && operation.field === "parentAccountId") {
+            const parentId = String(operation.afterValue ?? "");
+            if (!parentId)
+                return { operationId: operation.id, status: "skipped", detail: "A parent link needs a target company id." };
+            // HubSpot-defined association type 14 is child → parent company. The
+            // inverse relationship is maintained by HubSpot; no second write needed.
+            await request(`/crm/v4/objects/companies/${encodeURIComponent(operation.objectId)}/associations/companies/${encodeURIComponent(parentId)}`, {
+                method: "PUT",
+                body: JSON.stringify([{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: 14 }]),
+            });
+            return {
+                operationId: operation.id,
+                status: "applied",
+                detail: `Linked companies/${operation.objectId} to parent company ${parentId}.`,
+                providerData: { parentAccountId: parentId, associationTypeId: 14 },
+            };
+        }
         // Associate a deal or contact with a company (the only link the built-in
         // rules emit — missing-deal-account). afterValue is the target company id.
         const fromPath = OBJECT_PATHS[operation.objectType];
@@ -393,7 +411,7 @@ export function createHubspotConnector(options) {
             return {
                 operationId: operation.id,
                 status: "skipped",
-                detail: "link_record is supported for deals and contacts (to a company).",
+                detail: "link_record is supported for account parent links and for deals or contacts linked to a company.",
             };
         }
         let companyId = String(operation.afterValue ?? "");

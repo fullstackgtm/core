@@ -7,7 +7,8 @@ export { buildBulkUpdatePlan, isFilterableField, parseWhere } from "./bulkUpdate
 export { buildDedupePlan, dedupeKey } from "./dedupe.js";
 export { buildReassignPlans } from "./reassign.js";
 export { buildLeadRoutePlan, } from "./route.js";
-export { accountHierarchyToMarkdown, buildAccountHierarchy, } from "./hierarchy.js";
+export { accountHierarchyToMarkdown, buildAccountHierarchy, buildParentLinkPlan, } from "./hierarchy.js";
+export { accountParentId, accountsShareKnownFamily } from "./accountFamily.js";
 export { buildRelationshipMap, relationshipMapToMarkdown, } from "./relationships.js";
 export { CONFIG_FILE_NAME, loadConfig, mergePolicy, resolveConfiguredRules, rulePackageTrustFromCli, } from "./config.js";
 export { applyPatchPlan } from "./connector.js";

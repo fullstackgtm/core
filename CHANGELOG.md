@@ -7,6 +7,19 @@ The path to 1.0 is planned in [docs/roadmap-to-1.0.md](https://github.com/fullst
 
 ## [Unreleased]
 
+## [0.59.0] — 2026-07-18
+
+### Added
+
+- Account hierarchy links are now first-class CRM data. `hierarchy link`
+  previews and applies parent/child relationships in HubSpot and Salesforce
+  with self-link, cycle, and accidental-reparent protection.
+- Audit, dedupe, resolution, and merge plans understand corporate families, so
+  similarly named subsidiaries can be reviewed without collapsing legitimate
+  parent and child accounts into one record.
+- Demo data and tests include a Berkshire Hathaway-style corporate family to
+  make hierarchy-safe account handling easy to evaluate before touching a CRM.
+
 ## [0.58.0] — 2026-07-14
 
 ### Added

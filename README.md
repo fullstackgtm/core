@@ -100,6 +100,7 @@ fullstackgtm audit --input snapshot.json --json
 fullstackgtm audit --provider hubspot --fail-on warning
 fullstackgtm diff --before old.json --after new.json --fail-on-new-findings
 fullstackgtm health
+fullstackgtm hierarchy report --provider hubspot
 ```
 
 Built-in deterministic rules cover duplicates, orphaned records, missing owners, unlinked or amount-less deals, stale pipeline, past close dates, and related hygiene failures. Stable finding and operation IDs make repeated runs diffable.
@@ -115,8 +116,16 @@ fullstackgtm bulk-update deal --where "stage=closedwon" --where "amount:empty" \
 fullstackgtm dedupe account --key domain --keep richest --save
 fullstackgtm reassign --from 411 --to 902 --except-deal-stage closing --save
 fullstackgtm route --provider hubspot --save
+fullstackgtm hierarchy link --child-account-id <child> --parent-account-id <parent> \
+  --provider hubspot --save
 fullstackgtm backfill stripe --save
 ```
+
+Account identity and corporate hierarchy are separate. Similar names never
+trigger a merge. Accounts with a recorded parent/child or sibling relationship
+are preserved even when they share a domain; `hierarchy link` proposes the
+relationship without merging or deleting either record and refuses implicit
+re-parenting.
 
 Irreversible merges remain low-confidence-capped. Filters and guards are re-evaluated against live state during apply, so a record that stopped matching is skipped rather than clobbered.
 

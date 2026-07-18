@@ -262,6 +262,10 @@ test("cli plan lifecycle: audit --save, plans approve, apply --plan-id gating", 
     assert.match(humanShow.stdout, /Selection\s+1 of \d+ operations? approved/);
     assert.match(humanShow.stdout, /✓ APPROVED/);
     assert.match(humanShow.stdout, /Effect\s+Apply will execute 1 selected operation/);
+    assert.ok(
+      savedPlan.findings.some((finding: { summary: string }) => humanShow.stdout.includes(finding.summary.slice(0, 48))),
+      "operation cards should lead with a human-readable finding summary instead of only a record ID",
+    );
     assert.match(humanShow.stdout, /Details: fullstackgtm plans show .* --verbose/);
     assert.doesNotMatch(humanShow.stdout, /## Evidence/, "default show hides the raw evidence wall");
 

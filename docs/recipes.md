@@ -137,7 +137,8 @@ de-duplicated accounts; measure the lift.
 ```bash
 fullstackgtm health --json                      # per-object-type score + trend (read-only)
 fullstackgtm audit --provider hubspot --save     # → plan id
-fullstackgtm dedupe account --key domain --save  # collapse duplicate accounts (signals key on domain)
+fullstackgtm hierarchy report --provider hubspot # inspect parents, children, and shared-domain families
+fullstackgtm dedupe account --key domain --save  # propose merges; known family members are preserved
 fullstackgtm reassign --assign-unowned --to <ownerId> --save   # no ownerless leads
 # approve + apply each, then run Recipe 2. Re-check `health` after to attribute the lift.
 ```

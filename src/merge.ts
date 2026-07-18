@@ -5,6 +5,7 @@ import type {
   CanonicalUser,
   ProviderIdentity,
 } from "./types.ts";
+import { accountsShareKnownFamily } from "./accountFamily.ts";
 
 /**
  * Entity resolution across systems. GTM data disagrees because the same
@@ -159,15 +160,35 @@ export function mergeSnapshots(snapshots: CanonicalGtmSnapshot[]): {
     },
   );
 
+  // A shared domain inside a recorded corporate family is not identity. Block
+  // that domain from cross-system collapsing before any records are combined.
+  const familyDomains = new Set<string>();
+  for (const snapshot of snapshots) {
+    const byDomain = new Map<string, CanonicalAccount[]>();
+    for (const account of snapshot.accounts) {
+      const domain = normalizeDomain(account.domain);
+      if (domain) byDomain.set(domain, [...(byDomain.get(domain) ?? []), account]);
+    }
+    for (const [domain, accounts] of byDomain) {
+      if (accounts.length > 1 && accountsShareKnownFamily(accounts)) familyDomains.add(domain);
+    }
+  }
+
   const accounts = mergeCollection(
     "account",
-    snapshots.map((snapshot) => ({ provider: snapshot.provider, records: snapshot.accounts })),
+    snapshots.map((snapshot) => ({
+      provider: snapshot.provider,
+      records: snapshot.accounts.map((account) => ({
+        ...account,
+        parentAccountId: account.parentAccountId ? namespaced(snapshot.provider, account.parentAccountId) : undefined,
+      })),
+    })),
     // Auto-merge accounts ONLY on a shared normalized domain. Name is a weak,
     // collision-prone key (every "Acme Inc"); name-only collisions become
     // review suggestions below instead of silent merges.
     (account) => {
       const domain = normalizeDomain(account.domain);
-      return domain ? [{ key: domain, matchedBy: "domain" as const }] : [];
+      return domain && !familyDomains.has(domain) ? [{ key: domain, matchedBy: "domain" as const }] : [];
     },
   );
 
@@ -196,6 +217,10 @@ export function mergeSnapshots(snapshots: CanonicalGtmSnapshot[]): {
 
   const remapRef = (provider: string, id?: string) =>
     id === undefined ? undefined : idRemap.get(`${provider}:${id}`) ?? namespaced(provider, id);
+
+  for (const account of accounts) {
+    if (account.parentAccountId) account.parentAccountId = idRemap.get(account.parentAccountId) ?? account.parentAccountId;
+  }
 
   const deals = snapshots.flatMap((snapshot) =>
     snapshot.deals.map((deal) => ({

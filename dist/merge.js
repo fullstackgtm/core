@@ -1,3 +1,4 @@
+import { accountsShareKnownFamily } from "./accountFamily.js";
 const CONFLICT_IGNORED_FIELDS = new Set([
     "id", "provider", "crmId", "identities", "raw", "lastSyncAt", "lastActivityAt", "ownerId", "accountId", "provenance",
 ]);
@@ -86,13 +87,34 @@ export function mergeSnapshots(snapshots) {
         const email = normalizeEmail(user.email);
         return email ? [{ key: email, matchedBy: "email" }] : [];
     });
-    const accounts = mergeCollection("account", snapshots.map((snapshot) => ({ provider: snapshot.provider, records: snapshot.accounts })), 
+    // A shared domain inside a recorded corporate family is not identity. Block
+    // that domain from cross-system collapsing before any records are combined.
+    const familyDomains = new Set();
+    for (const snapshot of snapshots) {
+        const byDomain = new Map();
+        for (const account of snapshot.accounts) {
+            const domain = normalizeDomain(account.domain);
+            if (domain)
+                byDomain.set(domain, [...(byDomain.get(domain) ?? []), account]);
+        }
+        for (const [domain, accounts] of byDomain) {
+            if (accounts.length > 1 && accountsShareKnownFamily(accounts))
+                familyDomains.add(domain);
+        }
+    }
+    const accounts = mergeCollection("account", snapshots.map((snapshot) => ({
+        provider: snapshot.provider,
+        records: snapshot.accounts.map((account) => ({
+            ...account,
+            parentAccountId: account.parentAccountId ? namespaced(snapshot.provider, account.parentAccountId) : undefined,
+        })),
+    })), 
     // Auto-merge accounts ONLY on a shared normalized domain. Name is a weak,
     // collision-prone key (every "Acme Inc"); name-only collisions become
     // review suggestions below instead of silent merges.
     (account) => {
         const domain = normalizeDomain(account.domain);
-        return domain ? [{ key: domain, matchedBy: "domain" }] : [];
+        return domain && !familyDomains.has(domain) ? [{ key: domain, matchedBy: "domain" }] : [];
     });
     const suggestions = [];
     const byName = new Map();
@@ -113,6 +135,10 @@ export function mergeSnapshots(snapshots) {
         return email ? [{ key: email, matchedBy: "email" }] : [];
     });
     const remapRef = (provider, id) => id === undefined ? undefined : idRemap.get(`${provider}:${id}`) ?? namespaced(provider, id);
+    for (const account of accounts) {
+        if (account.parentAccountId)
+            account.parentAccountId = idRemap.get(account.parentAccountId) ?? account.parentAccountId;
+    }
     const deals = snapshots.flatMap((snapshot) => snapshot.deals.map((deal) => ({
         ...deal,
         id: namespaced(snapshot.provider, deal.id),

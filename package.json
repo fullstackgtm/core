@@ -1,6 +1,6 @@
 {
   "name": "fullstackgtm",
-  "version": "0.58.0",
+  "version": "0.59.0",
   "description": "Open-source CRM control plane and safety toolbox for AI agents: deterministic audits, reviewable patch plans, approval-gated write-back, conflict detection, and entity resolution for HubSpot and Salesforce.",
   "license": "Apache-2.0",
   "author": "Full Stack GTM LLC <ryan@fullstackgtm.com> (https://fullstackgtm.com)",

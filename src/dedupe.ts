@@ -19,8 +19,10 @@
  *                      order)
  */
 import { normalizeDomain } from "./merge.ts";
+import { accountsShareKnownFamily } from "./accountFamily.ts";
 import { stableHash } from "./rules.ts";
 import type {
+  CanonicalAccount,
   CanonicalGtmSnapshot,
   GtmObjectType,
   PatchOperation,
@@ -138,8 +140,13 @@ export function buildDedupePlan(
 
   const operations: PatchOperation[] = [];
   let duplicateRecordCount = 0;
+  const protectedGroups: string[] = [];
   for (const [key, members] of groups) {
     duplicateRecordCount += members.length;
+    if (options.objectType === "account" && accountsShareKnownFamily(members as unknown as CanonicalAccount[])) {
+      protectedGroups.push(key);
+      continue;
+    }
     // deterministic survivor: richest data first (ties to lowest id), or
     // simply the lowest id when keeping the oldest
     const survivor = [...members].sort((a, b) => {
@@ -197,8 +204,11 @@ export function buildDedupePlan(
     createdAt: snapshot.generatedAt,
     status: operations.length > 0 ? "needs_approval" : "draft",
     dryRun: true,
-    summary: `${groups.size} duplicate group(s) across ${duplicateRecordCount} ${COLLECTIONS[options.objectType]} (key: ${options.key}, keep: ${keep}); ${operations.length} proposed dry-run merge_records operation(s). Merges are IRREVERSIBLE — review each survivor before approving.`,
+    summary: `${groups.size} candidate group(s) across ${duplicateRecordCount} ${COLLECTIONS[options.objectType]} (key: ${options.key}, keep: ${keep}); ${operations.length} proposed dry-run merge_records operation(s)${protectedGroups.length ? `; ${protectedGroups.length} known corporate-family group(s) preserved` : ""}. Merges are IRREVERSIBLE — review each survivor before approving.`,
     findings: [],
+    ...(protectedGroups.length ? {
+      openQuestions: protectedGroups.map((key) => `Accounts sharing ${options.key} "${key}" have a known parent/child or sibling relationship and were not proposed for merge.`),
+    } : {}),
     operations,
   };
 }
